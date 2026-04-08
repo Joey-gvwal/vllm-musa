@@ -5,7 +5,7 @@
 from vllm.platforms import current_platform
 from vllm.v1.attention.backends.fa_utils import logger
 
-if current_platform.is_out_of_tree():
+if current_platform.is_musa():
     from flash_attn import (  # noqa: F401
         flash_attn_varlen_func,
         flash_attn_with_kvcache,
@@ -29,7 +29,7 @@ def flash_attn_supports_fp8() -> bool:
 
 
 def flash_attn_supports_sinks() -> bool:
-    return True
+    return False
 
 
 def flash_attn_supports_mla():

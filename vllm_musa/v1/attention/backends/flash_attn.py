@@ -193,9 +193,7 @@ class MusaFlashAttentionBackend(AttentionBackend):
         use_sparse: bool,
         device_capability: DeviceCapability,
     ) -> str | None:
-        if has_sink and device_capability < DeviceCapability(9, 0):
-            return "sink not supported on compute capability < 9.0"
-        return None
+        return "sink not supported on Musa platform"
 
 
 @dataclass
