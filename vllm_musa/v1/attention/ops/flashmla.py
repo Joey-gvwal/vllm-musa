@@ -12,7 +12,7 @@ try:
     from mate.flashmla import flash_mla_with_kvcache, get_mla_metadata
 except ImportError as e:
     raise ImportError(
-        "Musa platform requires MATE to be installed. Please install mate first."
+        "MUSA platform requires MATE to be installed. Please install mate first."
     ) from e
 
 

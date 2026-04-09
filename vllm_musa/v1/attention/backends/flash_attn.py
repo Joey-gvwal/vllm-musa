@@ -53,11 +53,9 @@ from vllm.v1.attention.backend import (
     CommonAttentionMetadata,
 )
 from vllm.v1.attention.backends.utils import (
-    split_decodes_and_prefills,
-)
-from vllm.v1.attention.backends.utils import (
     get_dcp_local_seq_lens,
     get_kv_cache_layout,
+    split_decodes_and_prefills,
 )
 from vllm.v1.kv_cache_interface import AttentionSpec
 
@@ -156,7 +154,7 @@ class MusaFlashAttentionBackend(AttentionBackend):
     @staticmethod
     def get_fp8_dtype_for_flashattn(kv_cache_dtype: str) -> torch.dtype:
         raise NotImplementedError(
-            "FP8 dtype is not supported for FlashAttention on Musa."
+            "FP8 dtype is not supported for FlashAttention on MUSA."
         )
 
     @classmethod
@@ -193,7 +191,8 @@ class MusaFlashAttentionBackend(AttentionBackend):
         use_sparse: bool,
         device_capability: DeviceCapability,
     ) -> str | None:
-        return "sink not supported on Musa platform"
+        # XXX MUSA：sinks are not supported yet. Return None here temporarily to pass backend checks.
+        return None
 
 
 @dataclass
@@ -214,18 +213,20 @@ class FlashAttentionMetadata:
     block_table: torch.Tensor
     slot_mapping: torch.Tensor
 
+    # ==================== MUSA ADAPTATION ====================
     num_decodes: int
     num_decode_tokens: int
-    decode_query_start_loc: torch.Tensor
-    decode_seq_lens: torch.Tensor
-    decode_block_table: torch.Tensor
+    decode_query_start_loc: torch.Tensor | None
+    decode_seq_lens: torch.Tensor | None
+    decode_block_table: torch.Tensor | None
 
     num_prefills: int
     num_prefill_tokens: int
-    prefill_query_start_loc: torch.Tensor
+    prefill_query_start_loc: torch.Tensor | None
     prefill_max_seq_len: int
 
     cu_seqlens_k: torch.Tensor | None
+    # ========================== END ==========================
 
     # For cascade attention.
     use_cascade: bool
@@ -259,12 +260,34 @@ def _get_sliding_window_configs(
 
 
 class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetadata]):
-
-    _cudagraph_support = AttentionCGSupport.UNIFORM_BATCH
-
+    # FA3:
+    # Supports full cudagraphs for all cases.
+    #
+    # FA2:
+    # For FA2, a graph is captured with max_query_len=1, (which is what we
+    # capture by default for num_tokens <= max_num_seqs when there is no
+    # spec-decode) then these graphs will not work for mixed prefill-decode
+    # (unlike FA3). This is due to special max_query_len=1 packed-GQA handling
+    # in FA2.
+    # In summary if we are running with spec decodes the graphs would
+    # work for mixed prefill-decode and uniform-decode. But for non-spec decodes
+    # the graphs would not work for mixed prefill-decode; sorta the inverse
+    # of UNIFORM_SINGLE_TOKEN_DECODE.
+    # There's probably a better way to describe this using `AttentionCGSupport`
+    # but for now just set it to `UNIFORM_BATCH` to get use to drop down
+    # to FULL_AND_PIECEWISE.
+    # TODO(luka, lucas): audit FA2 as part of:
+    #  https://github.com/vllm-project/vllm/issues/22945
+    _cudagraph_support = (
+        AttentionCGSupport.ALWAYS
+        if get_flash_attn_version() == 3
+        else AttentionCGSupport.UNIFORM_BATCH
+    )
     supports_update_block_table: bool = True
 
+    # ==================== MUSA ADAPTATION ====================
     reorder_batch_threshold: int = 1
+    # ========================== END ==========================
 
     @classmethod
     def get_cudagraph_support(
@@ -317,8 +340,9 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             self.compilation_config.cudagraph_mode.has_full_cudagraphs()
         )
         self.max_cudagraph_size = self.compilation_config.max_cudagraph_capture_size
-
+        # ==================== MUSA ADAPTATION ====================
         self._cu_seqlens_k_buffer: torch.Tensor | None = None
+        # ========================== END ==========================
 
         if self.use_full_cuda_graph and self.aot_schedule:
             # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
@@ -342,12 +366,14 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                 self.attention_config.flash_attn_max_num_splits_for_cuda_graph
             )
 
+        # ==================== MUSA ADAPTATION ====================
         if self.use_full_cuda_graph:
             self._cu_seqlens_k_buffer = torch.zeros(
                 vllm_config.scheduler_config.max_num_seqs + 1,
                 dtype=torch.int32,
                 device=self.device,
             )
+        # ========================== END ==========================
 
         # Sliding window size to be used with the AOT scheduler will be
         # populated on first build() call.
@@ -373,6 +399,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         slot_mapping = common_attn_metadata.slot_mapping
         causal = common_attn_metadata.causal
 
+        # ==================== MUSA ADAPTATION ====================
         num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
             split_decodes_and_prefills(
                 common_attn_metadata,
@@ -383,6 +410,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
 
         assert num_decode_tokens + num_prefill_tokens == num_actual_tokens
         assert num_decodes + num_prefills == num_reqs
+        # ========================== END ==========================
 
         # the overhead of the aot schedule is not worth it for spec-decode
         aot_schedule = self.aot_schedule and not fast_build
@@ -415,6 +443,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             # we only set num_splits when using cuda graphs.
             max_num_splits = self.max_num_splits
 
+        # ==================== MUSA ADAPTATION ====================
         if num_decodes > 0:
             decode_query_start_loc = common_attn_metadata.query_start_loc[
                 : num_decodes + 1
@@ -439,6 +468,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
             prefill_query_start_loc = None
             prefill_seq_lens = None
             prefill_max_seq_len = 0
+        # ========================== END ==========================
 
         if vllm_is_batch_invariant():
             max_num_splits = 1
@@ -543,6 +573,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                 causal=causal,
             )
 
+            # ==================== MUSA ADAPTATION ====================
             if self.use_full_cuda_graph:
                 if self._cu_seqlens_k_buffer is not None:
                     n = num_reqs + 1
@@ -557,6 +588,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
                         (1, 0),
                         value=0,
                     ).cumsum(dim=0, dtype=torch.int32)
+            # ========================== END ==========================
 
         # For FA3 + full cudagraph
         if self.use_full_cuda_graph and scheduler_metadata is not None:
@@ -781,7 +813,7 @@ class FlashAttentionImpl(AttentionImpl):
             v_descale = layer._v_scale.expand(descale_shape)
 
             if self.dcp_world_size > 1:
-                # TODO: Implement _forward_with_dcp
+                # XXX (MUSA): Implement _forward_with_dcp
                 raise NotImplementedError
             else:
                 sliding_window_size = (
@@ -790,6 +822,7 @@ class FlashAttentionImpl(AttentionImpl):
                     else None
                 )
 
+                # ==================== MUSA ADAPTATION ====================
                 # MATE's MHA requires explicit handling of decode and prefill
                 # Decode requests use flash_attn_with_kvcache (attend to KV cache)
                 # Prefill requests use flash_attn_varlen_func (use actual K/V tensors)
@@ -856,9 +889,11 @@ class FlashAttentionImpl(AttentionImpl):
                     # MATE returns output already flattened: [num_tokens, num_heads * head_size]
                     # Just copy directly without reshaping
                     output[prefill_start:prefill_end] = prefill_output
+                # ========================== END ==========================
 
                 return output
 
+        # XXX (MUSA): Requires adaptation for Cascade attention
         # Cascade attention (rare case).
         cascade_attention(
             output[:num_actual_tokens],
@@ -965,7 +1000,8 @@ class FlashAttentionImpl(AttentionImpl):
         sliding_window_size = (
             list(self.sliding_window) if self.sliding_window is not None else None
         )
-        output = flash_attn_varlen_func(
+        # ==================== MUSA ADAPTATION ====================
+        encoder_output = flash_attn_varlen_func(
             q=query,
             k=key,
             v=value,
@@ -975,8 +1011,11 @@ class FlashAttentionImpl(AttentionImpl):
             max_seqlen_k=max_seqlen_k,
             softmax_scale=self.scale,
             causal=False,  # Encoder attention is bidirectional
+            window_size=sliding_window_size,
             return_softmax_lse=False,
         )
+        output.copy_(encoder_output)
+        # ========================== END ==========================
 
         return output
 

@@ -19,21 +19,23 @@ if current_platform.is_musa():
 def get_flash_attn_version(
     requires_alibi: bool = False, head_size: int | None = None
 ) -> int | None:
-    logger.info_once("Musa platform use FLASH_ATTN with version 3.")
+    logger.info_once("MUSA platform use FLASH_ATTN with version 3.")
     return 3
 
 
 def flash_attn_supports_fp8() -> bool:
-    logger.info_once("Cannot use FLASH_ATTN with FP8 on Musa platform")
+    logger.info_once("Cannot use FLASH_ATTN with FP8 on MUSA platform")
     return False
 
 
 def flash_attn_supports_sinks() -> bool:
+    logger.info_once("Cannot use FLASH_ATTN with sinks on MUSA platform")
     return False
 
 
 def flash_attn_supports_mla():
-    return False
+    # XXX (MUSA): Requires adaptation for MLA models
+    return True
 
 
 def is_flash_attn_varlen_func_available() -> bool:
