@@ -65,7 +65,7 @@ from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_b
 
 
 @register_backend(AttentionBackendEnum.FLASH_ATTN)
-class MusaFlashAttentionBackend(AttentionBackend):
+class MUSAFlashAttentionBackend(AttentionBackend):
     accept_output_buffer: bool = True
     supported_dtypes: ClassVar[list[torch.dtype]] = [torch.float16, torch.bfloat16]
 
@@ -478,7 +478,7 @@ class FlashAttentionMetadataBuilder(AttentionMetadataBuilder[FlashAttentionMetad
         ):
             cache_dtype = self.cache_config.cache_dtype
             if cache_dtype.startswith("fp8"):
-                qkv_dtype = MusaFlashAttentionBackend.get_fp8_dtype_for_flashattn(
+                qkv_dtype = MUSAFlashAttentionBackend.get_fp8_dtype_for_flashattn(
                     cache_dtype
                 )
             else:
@@ -792,7 +792,7 @@ class FlashAttentionImpl(AttentionImpl):
 
         if self.kv_cache_dtype.startswith("fp8"):
             # queries are quantized in the attention layer
-            dtype = MusaFlashAttentionBackend.get_fp8_dtype_for_flashattn(
+            dtype = MUSAFlashAttentionBackend.get_fp8_dtype_for_flashattn(
                 self.kv_cache_dtype
             )
             key_cache = key_cache.view(dtype)

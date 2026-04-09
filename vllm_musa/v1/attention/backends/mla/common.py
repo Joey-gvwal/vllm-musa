@@ -54,7 +54,7 @@ try:
     is_vllm_fa = False
 except ImportError as e:
     raise ImportError(
-        "Musa platform requires MATE to be installed. Please install mate first."
+        "MUSA platform requires MATE to be installed. Please install mate first."
     ) from e
 
 

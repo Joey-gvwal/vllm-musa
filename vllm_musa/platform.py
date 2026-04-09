@@ -72,11 +72,11 @@ def register_attention_backends() -> None:
     # Pre-register all attention backends
     register_backend(
         AttentionBackendEnum.FLASHMLA,
-        class_path="vllm_musa.v1.attention.backends.mla.flashmla.MusaFlashMLABackend",
+        class_path="vllm_musa.v1.attention.backends.mla.flashmla.MUSAFlashMLABackend",
     )
     register_backend(
         AttentionBackendEnum.FLASH_ATTN,
-        class_path="vllm_musa.v1.attention.backends.flash_attn.MusaFlashAttentionBackend",
+        class_path="vllm_musa.v1.attention.backends.flash_attn.MUSAFlashAttentionBackend",
     )
 
 

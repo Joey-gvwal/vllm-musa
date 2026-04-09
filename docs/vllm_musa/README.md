@@ -61,7 +61,8 @@ Registers a Mooncake-based KV connector (`mooncake_connector.py`) for disaggrega
 
 ### `v1/` – Attention Backends & Ops
 
-- `v1/attention/backends/mla/` – FlashMLA attention backend (`MusaFlashMLABackend`) with MLA-specific metadata and common utilities.
+- `v1/attention/backends/mla/` – FlashMLA attention backend (`MUSAFlashMLABackend`) with MLA-specific metadata and common utilities.
+- `v1/attention/backends/flash_attn.py` - FlashAttn attention backend (`MUSAFlashAttentionBackend`) with FLASH_ATTN functions.
 - `v1/attention/ops/flashmla.py` – Low-level FlashMLA forward ops and capability detection.
 
 ### `_custom_ops.py` – Python Wrappers for C++ Ops
