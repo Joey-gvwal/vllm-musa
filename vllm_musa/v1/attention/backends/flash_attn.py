@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from vllm.model_executor.layers.attention import Attention
+from vllm.platforms import current_platform
 from vllm.v1.attention.backend import (
     AttentionBackend,
     AttentionImpl,
@@ -191,7 +192,11 @@ class MUSAFlashAttentionBackend(AttentionBackend):
         use_sparse: bool,
         device_capability: DeviceCapability,
     ) -> str | None:
-        # XXX MUSA：sinks are not supported yet. Return None here temporarily to pass backend checks.
+        if has_sink:
+            if current_platform.is_musa():
+                return None
+            if device_capability < DeviceCapability(9, 0):
+                return "sink not supported on compute capability < 9.0"
         return None
 
 

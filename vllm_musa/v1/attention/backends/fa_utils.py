@@ -29,8 +29,7 @@ def flash_attn_supports_fp8() -> bool:
 
 
 def flash_attn_supports_sinks() -> bool:
-    logger.info_once("Cannot use FLASH_ATTN with sinks on MUSA platform")
-    return False
+    return True
 
 
 def flash_attn_supports_mla():
