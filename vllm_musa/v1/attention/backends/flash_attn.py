@@ -192,11 +192,12 @@ class MUSAFlashAttentionBackend(AttentionBackend):
         use_sparse: bool,
         device_capability: DeviceCapability,
     ) -> str | None:
-        if has_sink:
-            if current_platform.is_musa():
-                return None
-            if device_capability < DeviceCapability(9, 0):
-                return "sink not supported on compute capability < 9.0"
+        # ==================== MUSA ADAPTATION ====================
+        if has_sink and current_platform.is_musa():
+            return None
+        # ========================== END ==========================
+        if has_sink and device_capability < DeviceCapability(9, 0):
+            return "sink not supported on compute capability < 9.0"
         return None
 
 
