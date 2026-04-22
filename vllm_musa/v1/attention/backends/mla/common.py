@@ -6,6 +6,7 @@ from abc import abstractmethod
 from typing import Generic, TypeVar
 
 import torch
+import vllm.envs as envs
 from tqdm import tqdm
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.config import get_current_vllm_config
@@ -25,7 +26,6 @@ from vllm.model_executor.layers.attention.mla_attention import (
     use_flashinfer_prefill,
     use_trtllm_ragged_deepseek_prefill,
 )
-from vllm.model_executor.layers.batch_invariant import vllm_is_batch_invariant
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
     LinearBase,
@@ -219,7 +219,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             # ROCm leverages the upstream flash_attn, which takes a parameter
             # called "return_attn_probs" instead of return_softmax_lse
             kwargs["return_attn_probs"] = return_softmax_lse
-        if vllm_is_batch_invariant():
+        if envs.VLLM_BATCH_INVARIANT:
             kwargs["num_splits"] = 1
 
         attn_out = self.flash_attn_varlen_func(

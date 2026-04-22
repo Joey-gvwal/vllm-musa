@@ -1,9 +1,7 @@
 import math
 
 import torch
-from vllm.model_executor.layers.batch_invariant import (
-    vllm_is_batch_invariant,
-)
+from vllm import envs as envs
 from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
     fused_topk,
     fused_topk_bias,
@@ -157,7 +155,7 @@ def grouped_topk(
         )  # [n, n_group]
 
     # For batch invariance, use sorted=True to ensure deterministic expert selection
-    use_sorted = vllm_is_batch_invariant()
+    use_sorted = envs.VLLM_BATCH_INVARIANT
     group_idx = torch.topk(group_scores, k=topk_group, dim=-1, sorted=use_sorted)[
         1
     ]  # [n, top_k_group]

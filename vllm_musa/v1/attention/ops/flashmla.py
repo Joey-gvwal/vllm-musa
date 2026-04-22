@@ -63,7 +63,7 @@ else:
     get_mla_metadata = _raise_flashmla_unavailable  # type: ignore[assignment]
 
 
-class FlashMLASchedMeta:  # type: ignore[no-redef]
+class FlashMLASchedMeta:
     def __init__(self, tile_scheduler_metadata: torch.Tensor, num_splits: torch.Tensor):
         self.tile_scheduler_metadata = tile_scheduler_metadata
         self.num_splits = num_splits

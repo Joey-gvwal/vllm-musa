@@ -1,13 +1,63 @@
 import torch
+from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe import (
+    TritonExperts,
     UnquantizedFusedMoEMethod,
     fused_experts,
 )
+from vllm.model_executor.layers.fused_moe.fused_batched_moe import BatchedTritonExperts
+from vllm.model_executor.layers.fused_moe.modular_kernel import (
+    FusedMoEActivationFormat,
+    FusedMoEExpertsModular,
+    FusedMoEPrepareAndFinalizeModular,
+)
+
+logger = init_logger(__name__)
 from vllm.utils.torch_utils import is_torch_equal_or_newer
 
 
 @UnquantizedFusedMoEMethod.register_oot
 class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
+    is_monolithic = False
+
+    def maybe_make_prepare_finalize(
+        self,
+        routing_tables: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+    ) -> FusedMoEPrepareAndFinalizeModular | None:
+        from vllm.model_executor.layers.fused_moe.all2all_utils import (
+            maybe_make_prepare_finalize,
+        )
+
+        pf = maybe_make_prepare_finalize(
+            self.moe, self.moe_quant_config, routing_tables
+        )
+        assert pf is None or isinstance(pf, FusedMoEPrepareAndFinalizeModular)
+        return pf
+
+    def select_gemm_impl(
+        self,
+        prepare_finalize: FusedMoEPrepareAndFinalizeModular,
+        layer: torch.nn.Module,
+    ) -> FusedMoEExpertsModular:
+        assert self.moe_quant_config is not None
+        if (
+            prepare_finalize.activation_format
+            == FusedMoEActivationFormat.BatchedExperts
+        ):
+            logger.debug("BatchedTritonExperts %s", self.moe)
+            return BatchedTritonExperts(
+                moe_config=self.moe,
+                quant_config=self.moe_quant_config,
+                max_num_tokens=self.moe.max_num_tokens,
+                num_dispatchers=prepare_finalize.num_dispatchers(),
+            )
+        else:
+            logger.debug("TritonExperts %s", self.moe)
+            return TritonExperts(
+                moe_config=self.moe,
+                quant_config=self.moe_quant_config,
+            )
+
     def forward_oot(
         self,
         layer: "FusedMoE",  # type: ignore[name-defined] # noqa: F821

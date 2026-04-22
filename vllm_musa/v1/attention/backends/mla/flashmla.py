@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 import torch
+import vllm.envs as envs
 from vllm.config import VllmConfig
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
@@ -15,9 +16,6 @@ from vllm.model_executor.layers.attention.mla_attention import (
     MLACommonMetadata,
     MLACommonMetadataBuilder,
     QueryLenSupport,
-)
-from vllm.model_executor.layers.batch_invariant import (
-    vllm_is_batch_invariant,
 )
 from vllm.platforms.interface import DeviceCapability
 from vllm.utils.platform_utils import num_compute_units
@@ -281,7 +279,7 @@ class FlashMLAImpl(MLACommonImpl[FlashMLAMetadata]):
             attn_metadata.decode.scheduler_metadata.tile_scheduler_metadata
         )
         num_splits = attn_metadata.decode.scheduler_metadata.num_splits
-        if vllm_is_batch_invariant():
+        if envs.VLLM_BATCH_INVARIANT:
             device = q.device
             dtype = torch.int32
 

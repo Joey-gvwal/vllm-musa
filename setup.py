@@ -114,7 +114,7 @@ class _RepoInfo:
 _VLLM_REPO = _RepoInfo(
     name="vllm",
     git_repository="https://github.com/vllm-project/vllm.git",
-    git_tag="v0.18.0",
+    git_tag="v0.20.0",
     git_shallow=False,
 )
 
@@ -133,13 +133,10 @@ VLLM_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/cuda_utils_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/cumem_allocator.cpp"),
     str(_VLLM_REPO.source_dir / "csrc/layernorm_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/permute_cols.cu"),
     str(_VLLM_REPO.source_dir / "csrc/pos_encoding_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/sampler.cu"),
     str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/per_token_group_quant.cu"),
     str(_VLLM_REPO.source_dir / "csrc/cuda_view.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/int8/per_token_group_quant.cu"),
     str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/int8/scaled_quant.cu"),
     str(_VLLM_REPO.source_dir / "csrc/mamba/mamba_ssm/selective_scan_fwd.cu"),
     str(_VLLM_REPO.source_dir / "csrc/quantization/gptq/q_gemm.cu"),
@@ -156,14 +153,15 @@ VLLM_CSRC_SOURCES = [
     ),
     str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/common.cu"),
     str(_VLLM_REPO.source_dir / "csrc/custom_all_reduce.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/sparse/cutlass/sparse_scaled_mm_entry.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/cutlass/scaled_mm_entry.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/fp4/nvfp4_scaled_mm_entry.cu"),
     str(_VLLM_REPO.source_dir / "csrc/quantization/awq/gemm_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/fp4/nvfp4_quant_entry.cu"),
     str(_VLLM_REPO.source_dir / "csrc/attention/vertical_slash_index.cu"),
     str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"),
     str(_VLLM_REPO.source_dir / "csrc/topk.cu"),
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"
+    ),
+    str(_VLLM_REPO.source_dir / "csrc/minimax_reduce_rms_kernel.cu"),
 ]
 
 VLLM_MUSA_CSRC_SOURCES = [
@@ -196,21 +194,79 @@ CSRC_FILE_OVERRIDES = [
 # Format: {file_path: [{old_text: new_text}, ...]}
 # Special case: empty old_text ("") means prepend new_text to file.
 CSRC_TEXT_PATCHES = {
+    str(_VLLM_REPO.source_dir / "csrc/topk.cu"): [
+        {"#ifndef USE_ROCM": "#ifndef USE_MUSA"}
+    ],
     str(_VLLM_REPO.source_dir / "csrc/moe/torch_bindings.cpp"): [
         {"#ifndef USE_ROCM": "#ifndef USE_MUSA"}
     ],
     str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"): [
-        {"": '#include "torch_musa/csrc/aten/musa/MUSAContext.h"'}
+        {"": '#include "torch_musa/csrc/aten/musa/MUSAContext.h"'},
     ],
     str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh"): [
         {
-            '#include "../../../../attention/attention_dtypes.h"': '#include "../../../../attention_musa/attention_dtypes.h"'
-        }
+            '#include "../../../../attention/attention_dtypes.h"': '#include "../../../../../csrc_musa/attention_musa/attention_dtypes.h"'
+        },
+        {
+            '#include "../../../../../csrc/attention_musa/attention_dtypes.h"': '#include "../../../../../csrc_musa/attention_musa/attention_dtypes.h"'
+        },
     ],
-    str(_VLLM_REPO.source_dir / "csrc/quantization/fp4/nvfp4_utils.cuh"): [
+    str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"): [
+        {
+            '#include "attention_dtypes.h"': '#include "attention_musa/attention_dtypes.h"'
+        },
+        {
+            '#include "attention_utils.cuh"': '#include "attention_musa/attention_utils.cuh"'
+        },
+        {
+            '#include "../quantization/w8a8/fp8/common.cuh"': '#include "quantization/w8a8/fp8/common.cuh"'
+        },
+    ],
+    str(
+        _VLLM_REPO.source_dir / "csrc/libtorch_stable/quantization/fp4/nvfp4_utils.cuh"
+    ): [
         {
             '#include "../../cuda_vec_utils.cuh"': '#include "../../../csrc_musa/cuda_vec_utils.cuh"'
         }
+    ],
+    str(
+        _VLLM_REPO.source_dir / "csrc/libtorch_stable/quantization/vectorization.cuh"
+    ): [
+        {
+            "#include <torch/headeronly/util/Float8_e4m3fnuz.h>": "#include <c10/util/Float8_e4m3fnuz.h>"
+        },
+        {
+            "#include <torch/headeronly/util/Float8_e4m3fn.h>": "#include <c10/util/Float8_e4m3fn.h>"
+        },
+    ],
+    str(_VLLM_REPO.source_dir / "csrc/cuda_vec_utils.cuh"): [
+        {
+            "#include <torch/headeronly/util/BFloat16.h>": "#include <c10/util/BFloat16.h>"
+        },
+        {"#include <torch/headeronly/util/Half.h>": "#include <c10/util/Half.h>"},
+    ],
+    str(_VLLM_REPO.source_dir / "csrc/cuda_compat.h"): [
+        {
+            "cudaFuncSetAttribute(FUNC, cudaFuncAttributeMaxDynamicSharedMemorySize, VAL)": "musaFuncSetAttribute(FUNC, musaFuncAttributeMaxDynamicSharedMemorySize, VAL)"
+        }
+    ],
+    str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/common.cuh"): [
+        {'#include "../../utils.cuh"': '#include "quantization/utils.cuh"'},
+    ],
+    str(
+        _VLLM_REPO.source_dir / "csrc/quantization/fused_kernels/quant_conversions.cuh"
+    ): [
+        {
+            '#include "../w8a8/fp8/common.cuh"': '#include "quantization/w8a8/fp8/common.cuh"'
+        },
+    ],
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"
+    ): [
+        {
+            '#include "../w8a8/fp8/common.cuh"': '#include "quantization/w8a8/fp8/common.cuh"'
+        },
     ],
     str(_VLLM_REPO.source_dir / "csrc/moe/moe_align_sum_kernels.cu"): [
         {'#include "../dispatch_utils.h"': '#include "dispatch_utils.h"'},
@@ -218,29 +274,25 @@ CSRC_TEXT_PATCHES = {
     ],
     str(_VLLM_REPO.source_dir / "csrc/attention/attention_kernels.cuh"): [
         {
+            '#include "attention_dtypes.h"': '#include "attention_musa/attention_dtypes.h"'
+        },
+        {
+            '#include "attention_utils.cuh"': '#include "attention_musa/attention_utils.cuh"'
+        },
+        {
             '#include "../quantization/w8a8/fp8/nvidia/quant_utils.cuh"': '#include "../quantization_musa/w8a8/fp8/nvidia/quant_utils.cuh"'
-        }
+        },
     ],
     str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v1.cu"): [
-        {'#include "../cuda_compat.h"': '#include "cuda_compat.h"'}
+        {'#include "../cuda_compat.h"': '#include "cuda_compat.h"'},
+        {'#include "attention_musa/cuda_compat.h"': '#include "cuda_compat.h"'},
     ],
     str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v2.cu"): [
-        {'#include "../cuda_compat.h"': '#include "cuda_compat.h"'}
+        {'#include "../cuda_compat.h"': '#include "cuda_compat.h"'},
+        {'#include "attention_musa/cuda_compat.h"': '#include "cuda_compat.h"'},
     ],
     str(_VLLM_REPO.source_dir / "csrc/type_convert.cuh"): [
         {"defined(USE_ROCM)": "defined(USE_MUSA)"}
-    ],
-    str(_VLLM_REPO.source_dir / "csrc/sparse/cutlass/sparse_scaled_mm_entry.cu"): [
-        {'#include "cutlass_extensions/common.hpp"': ""},
-        {"get_sm_version_num()": "31"},
-    ],
-    str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/cutlass/scaled_mm_entry.cu"): [
-        {'#include "cutlass_extensions/common.hpp"': ""},
-        {"get_sm_version_num()": "31"},
-    ],
-    str(_VLLM_REPO.source_dir / "csrc/quantization/fp4/nvfp4_scaled_mm_entry.cu"): [
-        {'#include "cutlass_extensions/common.hpp"': ""},
-        {"get_sm_version_num()": "31"},
     ],
     str(_VLLM_REPO.source_dir / "vllm/_custom_ops.py"): [
         {
@@ -405,7 +457,7 @@ class _CustomBuildExt(BuildExtension):
                     "pip",
                     "install",
                     "-r",
-                    str(source_dir / "requirements" / "build.txt"),
+                    str(source_dir / "requirements" / "build" / "cuda.txt"),
                 ],
                 "shell": False,
                 "env": None,
@@ -516,7 +568,7 @@ setup(
     # Force these dependencies even with --no-build-isolation
     # (pyproject.toml dependencies aren't processed with --no-build-isolation)
     install_requires=[
-        "torchada>=0.1.49",
+        "torchada>=0.1.52",
         "mthreads-ml-py>=2.2.11",
         "numpy<2",
         "openai>=2.24.0",

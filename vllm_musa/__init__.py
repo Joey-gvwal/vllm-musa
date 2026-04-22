@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 # any torch.device("cuda:X") calls in vLLM. This is critical for MUSA
 # to work correctly - it patches torch.cuda to redirect to MUSA.
 try:
+    # isort: off
     import torchada  # noqa: F401
-    # XXX(MUSA): Remove once #JIRA MTAI-2652 fixed
     import torch
-    torch.accelerator = torch.musa
 
+    # isort: on
     _torchada_available = True
 except ImportError:
     _torchada_available = False
