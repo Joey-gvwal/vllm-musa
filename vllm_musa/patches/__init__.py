@@ -8,8 +8,6 @@ to ensure compatibility with the MUSA Triton version.
 """
 
 import importlib.util
-import re
-import sys
 from pathlib import Path
 
 from vllm.logger import init_logger
@@ -111,13 +109,12 @@ def apply_patches():
                     patched_source = patched_source.replace(old, new)
                     applied_count += 1
 
-            # Write back the patched source
+            # Write back the patched source. Do not evict an already-imported
+            # module from sys.modules: some vLLM modules register torch custom
+            # ops at import time, and re-importing them would register the same
+            # schema twice in the current process.
             with open(spec.origin, "w") as f:
                 f.write(patched_source)
-
-            # Remove from cache to force reload
-            if module_name in sys.modules:
-                del sys.modules[module_name]
 
             logger.info(f"Applied {applied_count} patch(es) to {module_name}")
 
