@@ -4,6 +4,7 @@
 import functools
 
 import torch
+from vllm import _custom_ops as ops
 from vllm.model_executor.layers.fused_moe.config import _get_config_dtype_str
 from vllm.model_executor.layers.fused_moe.fused_moe import (
     _get_config_quant_dtype,
@@ -25,7 +26,6 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl
 
-from vllm import _custom_ops as ops
 from vllm_musa import _custom_ops as musa_ops
 
 

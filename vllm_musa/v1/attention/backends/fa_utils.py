@@ -38,4 +38,4 @@ def flash_attn_supports_mla():
 
 
 def is_flash_attn_varlen_func_available() -> bool:
-    return True
+    return "flash_attn_varlen_func" in globals()

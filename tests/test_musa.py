@@ -122,6 +122,58 @@ class TestMUSAPlatformBase:
         result = MUSAPlatformBase.get_static_graph_wrapper_cls()
         assert result == "vllm.compilation.cuda_graph.CUDAGraphWrapper"
 
+    def test_register_attention_backends_overrides_turboquant(self):
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        from vllm_musa.platform import register_attention_backends
+
+        AttentionBackendEnum.TURBOQUANT.clear_override()
+        register_attention_backends()
+
+        assert (
+            AttentionBackendEnum.TURBOQUANT.get_path()
+            == "vllm_musa.v1.attention.backends.turboquant.MUSATurboQuantAttentionBackend"
+        )
+
+    def test_get_valid_backends_includes_turboquant_for_non_mla(self):
+        from vllm.platforms.interface import DeviceCapability
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        from vllm_musa.platform import _get_backend_priorities
+
+        priorities = _get_backend_priorities(
+            use_mla=False,
+            device_capability=DeviceCapability(3, 1),
+        )
+
+        assert AttentionBackendEnum.TURBOQUANT in priorities
+        assert AttentionBackendEnum.TURBOQUANT not in _get_backend_priorities(
+            use_mla=True,
+            device_capability=DeviceCapability(3, 1),
+        )
+
+    def test_turboquant_rejects_k8v4_on_musa(self):
+        import torch
+        from vllm.platforms.interface import DeviceCapability
+
+        from vllm_musa.v1.attention.backends.turboquant import (
+            MUSATurboQuantAttentionBackend,
+        )
+
+        reason = MUSATurboQuantAttentionBackend.supports_combination(
+            head_size=128,
+            dtype=torch.float16,
+            kv_cache_dtype="turboquant_k8v4",
+            block_size=16,
+            use_mla=False,
+            has_sink=False,
+            use_sparse=False,
+            device_capability=DeviceCapability(3, 1),
+        )
+
+        assert reason is not None
+        assert "Triton float8 conversions" in reason
+
 
 class TestNonMtmlMUSAPlatform:
     """Tests for NonMtmlMUSAPlatform class."""
