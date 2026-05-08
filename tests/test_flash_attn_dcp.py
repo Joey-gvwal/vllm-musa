@@ -25,6 +25,8 @@ class _FakeDCPGroup:
 def test_forward_with_dcp_runs_context_suffix_and_merge(monkeypatch):
     calls = []
 
+    merged_lses = {}
+
     def fake_merge_attn_states(
         output,
         prefix_output,
@@ -34,6 +36,8 @@ def test_forward_with_dcp_runs_context_suffix_and_merge(monkeypatch):
     ):
         assert prefix_output.shape == suffix_output.shape == output.shape
         assert prefix_lse.shape == suffix_lse.shape == (2, 3)
+        merged_lses["prefix"] = prefix_lse.clone()
+        merged_lses["suffix"] = suffix_lse.clone()
         output.copy_(prefix_output + suffix_output)
 
     def fake_flash_attn_varlen_func(**kwargs):
@@ -42,12 +46,16 @@ def test_forward_with_dcp_runs_context_suffix_and_merge(monkeypatch):
         out = torch.ones(
             q.shape[0], q.shape[1], q.shape[2], dtype=q.dtype, device=q.device
         )
-        lse = torch.ones(q.shape[1], q.shape[0], dtype=q.dtype, device=q.device)
+        lse = torch.arange(q.shape[1] * q.shape[0], dtype=q.dtype, device=q.device)
+        lse = lse.view(q.shape[1], q.shape[0])
         return out, lse
 
     def fake_dcp_combine(context_out, context_lse, group, return_lse=False):
         assert return_lse is True
         assert group.world_size == 2
+        assert context_lse.shape == (3, 4)
+        expected_context_lse = torch.arange(12, dtype=context_lse.dtype).view(4, 3)
+        assert torch.equal(context_lse, expected_context_lse.transpose(0, 1))
         return context_out[:, :2, :].contiguous(), context_lse[:, :2].contiguous()
 
     monkeypatch.setattr(flash_attn_module, "get_dcp_group", lambda: _FakeDCPGroup())
@@ -127,4 +135,8 @@ def test_forward_with_dcp_runs_context_suffix_and_merge(monkeypatch):
     assert calls[0]["max_seqlen_k"] == metadata.max_dcp_context_kv_len
     assert calls[1]["causal"] is True
     assert calls[1]["cu_seqlens_k"] is metadata.query_start_loc
+    expected_prefix_lse = torch.arange(12, dtype=output.dtype).view(4, 3)[:2]
+    expected_suffix_lse = torch.arange(6, dtype=output.dtype).view(2, 3)
+    assert torch.equal(merged_lses["prefix"], expected_prefix_lse)
+    assert torch.equal(merged_lses["suffix"], expected_suffix_lse)
     assert torch.all(output == 2)

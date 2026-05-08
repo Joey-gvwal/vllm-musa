@@ -964,38 +964,6 @@ class FlashAttentionImpl(AttentionImpl):
             return attn_output
         return attn_output.view(num_tokens, num_heads, head_size)
 
-    @staticmethod
-    def _lse_to_batch_major(
-        lse: torch.Tensor,
-        num_tokens: int,
-        num_heads: int,
-    ) -> torch.Tensor:
-        if lse.shape == (num_tokens, num_heads):
-            return lse.contiguous()
-        if lse.shape == (num_heads, num_tokens):
-            return lse.transpose(0, 1).contiguous()
-        raise ValueError(
-            f"Unexpected FlashAttention LSE shape {tuple(lse.shape)}; "
-            f"expected ({num_heads}, {num_tokens}) or "
-            f"({num_tokens}, {num_heads})."
-        )
-
-    @staticmethod
-    def _lse_to_head_major(
-        lse: torch.Tensor,
-        num_tokens: int,
-        num_heads: int,
-    ) -> torch.Tensor:
-        if lse.shape == (num_heads, num_tokens):
-            return lse.contiguous()
-        if lse.shape == (num_tokens, num_heads):
-            return lse.transpose(0, 1).contiguous()
-        raise ValueError(
-            f"Unexpected FlashAttention LSE shape {tuple(lse.shape)}; "
-            f"expected ({num_heads}, {num_tokens}) or "
-            f"({num_tokens}, {num_heads})."
-        )
-
     def _forward_with_dcp(
         self,
         query: torch.Tensor,
@@ -1060,22 +1028,14 @@ class FlashAttentionImpl(AttentionImpl):
             self.num_heads * self.dcp_world_size,
             self.head_size,
         )
-        context_lse = self._lse_to_batch_major(
-            context_lse,
-            num_tokens,
-            self.num_heads * self.dcp_world_size,
-        )
+        context_lse = context_lse.transpose(0, 1).contiguous()
         context_attn_out, context_lse = self.dcp_combine(
             context_attn_out,
             context_lse,
             get_dcp_group(),
             return_lse=True,
         )
-        context_lse = self._lse_to_head_major(
-            context_lse,
-            num_tokens,
-            self.num_heads,
-        )
+        context_lse = context_lse.transpose(0, 1).contiguous()
 
         query_attn_out, query_lse = flash_attn_varlen_func(
             q=query,
@@ -1102,7 +1062,7 @@ class FlashAttentionImpl(AttentionImpl):
             self.num_heads,
             self.head_size,
         )
-        query_lse = self._lse_to_head_major(query_lse, num_tokens, self.num_heads)
+        query_lse = query_lse.contiguous()
         output_view = output.view(num_tokens, self.num_heads, self.head_size)
         merge_attn_states(
             output_view,
