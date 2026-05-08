@@ -986,6 +986,10 @@ class FlashAttentionImpl(AttentionImpl):
             raise NotImplementedError(
                 "MUSA FlashAttention DCP does not support attention sinks."
             )
+        if self.alibi_slopes is not None:
+            raise NotImplementedError(
+                "MUSA FlashAttention DCP does not support ALiBi."
+            )
 
         num_tokens = query.shape[0]
         cu_seqlens_q = attn_metadata.query_start_loc
@@ -1011,7 +1015,6 @@ class FlashAttentionImpl(AttentionImpl):
             max_seqlen_k=attn_metadata.max_dcp_context_kv_len,
             softmax_scale=self.scale,
             causal=False,
-            alibi_slopes=self.alibi_slopes,
             window_size=sliding_window_size,
             block_table=attn_metadata.block_table,
             softcap=self.logits_soft_cap,
@@ -1047,7 +1050,6 @@ class FlashAttentionImpl(AttentionImpl):
             max_seqlen_k=max_seqlen_q,
             softmax_scale=self.scale,
             causal=attn_metadata.causal,
-            alibi_slopes=self.alibi_slopes,
             window_size=sliding_window_size,
             softcap=self.logits_soft_cap,
             return_softmax_lse=True,
