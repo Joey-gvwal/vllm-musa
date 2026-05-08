@@ -40,9 +40,11 @@ if is_flash_attn_varlen_func_available():
 from vllm.config import (
     VllmConfig,
     get_current_vllm_config,
+    get_current_vllm_config_or_none,
     get_layers_from_vllm_config,
 )
 from vllm.config.cache import CacheDType
+from vllm.distributed.parallel_state import get_dcp_group
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
 from vllm.utils.math_utils import cdiv, round_up
@@ -56,6 +58,7 @@ from vllm.v1.attention.backends.utils import (
     get_kv_cache_layout,
     split_decodes_and_prefills,
 )
+from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
 from vllm.v1.kv_cache_interface import AttentionSpec
 
 logger = init_logger(__name__)
@@ -725,6 +728,18 @@ class FlashAttentionImpl(AttentionImpl):
 
         self.supports_quant_query_input = False
 
+        vllm_config = get_current_vllm_config_or_none()
+        parallel_config = (
+            vllm_config.parallel_config if vllm_config is not None else None
+        )
+        dcp_size = getattr(parallel_config, "decode_context_parallel_size", 1)
+        dcp_comm_backend = getattr(parallel_config, "dcp_comm_backend", "ag_rs")
+        if dcp_size > 1 and dcp_comm_backend == "a2a":
+            raise NotImplementedError(
+                "MUSA FlashAttention DCP supports only dcp_comm_backend='ag_rs'."
+            )
+        self.dcp_combine = cp_lse_ag_out_rs
+
     def forward(
         self,
         layer: torch.nn.Module,
@@ -778,7 +793,17 @@ class FlashAttentionImpl(AttentionImpl):
         # performance to make sure it does not introduce any overhead.
 
         num_actual_tokens = attn_metadata.num_actual_tokens
-
+        if attn_metadata.use_cascade:
+            logger.warning(
+                "[cascade-debug] forward entering cascade path: "
+                "common_prefix_len=%s num_actual_tokens=%s max_query_len=%s "
+                "max_seq_len=%s num_reqs=%s",
+                attn_metadata.common_prefix_len,
+                attn_metadata.num_actual_tokens,
+                attn_metadata.max_query_len,
+                attn_metadata.max_seq_len,
+                attn_metadata.query_start_loc.numel() - 1,
+            )
         # Handle encoder attention differently - no KV cache needed
         if attn_type in (AttentionType.ENCODER_ONLY, AttentionType.ENCODER):
             # For encoder attention,
@@ -818,8 +843,19 @@ class FlashAttentionImpl(AttentionImpl):
             v_descale = layer._v_scale.expand(descale_shape)
 
             if self.dcp_world_size > 1:
-                # XXX (MUSA): Implement _forward_with_dcp
-                raise NotImplementedError
+                self._forward_with_dcp(
+                    query[:num_actual_tokens],
+                    key[:num_actual_tokens],
+                    value[:num_actual_tokens],
+                    key_cache,
+                    value_cache,
+                    output[:num_actual_tokens],
+                    attn_metadata,
+                    q_descale=q_descale,
+                    k_descale=k_descale,
+                    v_descale=v_descale,
+                )
+                return output
             else:
                 sliding_window_size = (
                     list(self.sliding_window)
@@ -856,6 +892,7 @@ class FlashAttentionImpl(AttentionImpl):
                         k_descale=layer._k_scale.expand(decode_descale_shape),
                         v_descale=layer._v_scale.expand(decode_descale_shape),
                         num_splits=attn_metadata.max_num_splits,
+                        s_aux=self.sinks,
                     )
                     # MATE returns output already flattened: [num_tokens, num_heads * head_size]
                     # Just copy directly without reshaping
@@ -890,6 +927,7 @@ class FlashAttentionImpl(AttentionImpl):
                         k_descale=layer._k_scale.expand(prefill_descale_shape),
                         v_descale=layer._v_scale.expand(prefill_descale_shape),
                         num_splits=attn_metadata.max_num_splits,
+                        s_aux=self.sinks,
                     )
                     # MATE returns output already flattened: [num_tokens, num_heads * head_size]
                     # Just copy directly without reshaping
@@ -925,6 +963,166 @@ class FlashAttentionImpl(AttentionImpl):
             k_descale=layer._k_scale,
             v_descale=layer._v_scale,
             s_aux=self.sinks,
+        )
+        return output
+
+    @staticmethod
+    def _view_attn_output(
+        attn_output: torch.Tensor,
+        num_tokens: int,
+        num_heads: int,
+        head_size: int,
+    ) -> torch.Tensor:
+        if attn_output.dim() == 3:
+            return attn_output
+        return attn_output.view(num_tokens, num_heads, head_size)
+
+    @staticmethod
+    def _lse_to_batch_major(
+        lse: torch.Tensor,
+        num_tokens: int,
+        num_heads: int,
+    ) -> torch.Tensor:
+        if lse.shape == (num_tokens, num_heads):
+            return lse.contiguous()
+        if lse.shape == (num_heads, num_tokens):
+            return lse.transpose(0, 1).contiguous()
+        raise ValueError(
+            f"Unexpected FlashAttention LSE shape {tuple(lse.shape)}; "
+            f"expected ({num_heads}, {num_tokens}) or "
+            f"({num_tokens}, {num_heads})."
+        )
+
+    @staticmethod
+    def _lse_to_head_major(
+        lse: torch.Tensor,
+        num_tokens: int,
+        num_heads: int,
+    ) -> torch.Tensor:
+        if lse.shape == (num_heads, num_tokens):
+            return lse.contiguous()
+        if lse.shape == (num_tokens, num_heads):
+            return lse.transpose(0, 1).contiguous()
+        raise ValueError(
+            f"Unexpected FlashAttention LSE shape {tuple(lse.shape)}; "
+            f"expected ({num_heads}, {num_tokens}) or "
+            f"({num_tokens}, {num_heads})."
+        )
+
+    def _forward_with_dcp(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_cache: torch.Tensor,
+        value_cache: torch.Tensor,
+        output: torch.Tensor,
+        attn_metadata: FlashAttentionMetadata,
+        q_descale: torch.Tensor | None = None,
+        k_descale: torch.Tensor | None = None,
+        v_descale: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        assert (
+            self.vllm_flash_attn_version is not None
+        ), "FlashAttention version not detected."
+        assert attn_metadata.dcp_context_kv_lens is not None
+        assert attn_metadata.max_dcp_context_kv_len is not None
+        if self.sinks is not None:
+            raise NotImplementedError(
+                "MUSA FlashAttention DCP does not support attention sinks."
+            )
+
+        num_tokens = query.shape[0]
+        cu_seqlens_q = attn_metadata.query_start_loc
+        max_seqlen_q = attn_metadata.max_query_len
+        sliding_window_size = (
+            list(self.sliding_window) if self.sliding_window is not None else None
+        )
+
+        query = query.view(num_tokens, self.num_heads, self.head_size).contiguous()
+        key = key.view(num_tokens, self.num_kv_heads, self.head_size).to(query.dtype)
+        value = value.view(num_tokens, self.num_kv_heads, self.head_size).to(
+            query.dtype
+        )
+
+        query_across_dcp = get_dcp_group().all_gather(query, dim=1)
+        context_attn_out, context_lse = flash_attn_varlen_func(
+            q=query_across_dcp,
+            k=key_cache,
+            v=value_cache,
+            cu_seqlens_q=cu_seqlens_q,
+            max_seqlen_q=max_seqlen_q,
+            seqused_k=attn_metadata.dcp_context_kv_lens,
+            max_seqlen_k=attn_metadata.max_dcp_context_kv_len,
+            softmax_scale=self.scale,
+            causal=False,
+            alibi_slopes=self.alibi_slopes,
+            window_size=sliding_window_size,
+            block_table=attn_metadata.block_table,
+            softcap=self.logits_soft_cap,
+            return_softmax_lse=True,
+            scheduler_metadata=attn_metadata.scheduler_metadata,
+            q_descale=q_descale,
+            k_descale=k_descale,
+            v_descale=v_descale,
+            num_splits=attn_metadata.max_num_splits,
+        )
+        context_attn_out = self._view_attn_output(
+            context_attn_out,
+            num_tokens,
+            self.num_heads * self.dcp_world_size,
+            self.head_size,
+        )
+        context_lse = self._lse_to_batch_major(
+            context_lse,
+            num_tokens,
+            self.num_heads * self.dcp_world_size,
+        )
+        context_attn_out, context_lse = self.dcp_combine(
+            context_attn_out,
+            context_lse,
+            get_dcp_group(),
+            return_lse=True,
+        )
+        context_lse = self._lse_to_head_major(
+            context_lse,
+            num_tokens,
+            self.num_heads,
+        )
+
+        query_attn_out, query_lse = flash_attn_varlen_func(
+            q=query,
+            k=key,
+            v=value,
+            cu_seqlens_q=cu_seqlens_q,
+            max_seqlen_q=max_seqlen_q,
+            cu_seqlens_k=cu_seqlens_q,
+            max_seqlen_k=max_seqlen_q,
+            softmax_scale=self.scale,
+            causal=attn_metadata.causal,
+            alibi_slopes=self.alibi_slopes,
+            window_size=sliding_window_size,
+            softcap=self.logits_soft_cap,
+            return_softmax_lse=True,
+            q_descale=q_descale,
+            k_descale=k_descale,
+            v_descale=v_descale,
+            num_splits=attn_metadata.max_num_splits,
+        )
+        query_attn_out = self._view_attn_output(
+            query_attn_out,
+            num_tokens,
+            self.num_heads,
+            self.head_size,
+        )
+        query_lse = self._lse_to_head_major(query_lse, num_tokens, self.num_heads)
+        output_view = output.view(num_tokens, self.num_heads, self.head_size)
+        merge_attn_states(
+            output_view,
+            context_attn_out,
+            context_lse,
+            query_attn_out,
+            query_lse,
         )
         return output
 
@@ -1135,6 +1333,15 @@ def cascade_attention(
         -1,
         -1,
     ), "Cascade attention does not support sliding window."
+
+    logger.warning(
+        "[cascade-debug] cascade_attention called: common_prefix_len=%s "
+        "num_tokens=%s max_query_len=%s max_kv_len=%s",
+        common_prefix_len,
+        query.shape[0],
+        max_query_len,
+        max_kv_len,
+    )
 
     num_tokens = query.shape[0]
     block_size = key_cache.shape[-3]
