@@ -793,17 +793,6 @@ class FlashAttentionImpl(AttentionImpl):
         # performance to make sure it does not introduce any overhead.
 
         num_actual_tokens = attn_metadata.num_actual_tokens
-        if attn_metadata.use_cascade:
-            logger.warning(
-                "[cascade-debug] forward entering cascade path: "
-                "common_prefix_len=%s num_actual_tokens=%s max_query_len=%s "
-                "max_seq_len=%s num_reqs=%s",
-                attn_metadata.common_prefix_len,
-                attn_metadata.num_actual_tokens,
-                attn_metadata.max_query_len,
-                attn_metadata.max_seq_len,
-                attn_metadata.query_start_loc.numel() - 1,
-            )
         # Handle encoder attention differently - no KV cache needed
         if attn_type in (AttentionType.ENCODER_ONLY, AttentionType.ENCODER):
             # For encoder attention,
@@ -892,7 +881,6 @@ class FlashAttentionImpl(AttentionImpl):
                         k_descale=layer._k_scale.expand(decode_descale_shape),
                         v_descale=layer._v_scale.expand(decode_descale_shape),
                         num_splits=attn_metadata.max_num_splits,
-                        s_aux=self.sinks,
                     )
                     # MATE returns output already flattened: [num_tokens, num_heads * head_size]
                     # Just copy directly without reshaping
@@ -927,7 +915,6 @@ class FlashAttentionImpl(AttentionImpl):
                         k_descale=layer._k_scale.expand(prefill_descale_shape),
                         v_descale=layer._v_scale.expand(prefill_descale_shape),
                         num_splits=attn_metadata.max_num_splits,
-                        s_aux=self.sinks,
                     )
                     # MATE returns output already flattened: [num_tokens, num_heads * head_size]
                     # Just copy directly without reshaping
@@ -1333,15 +1320,6 @@ def cascade_attention(
         -1,
         -1,
     ), "Cascade attention does not support sliding window."
-
-    logger.warning(
-        "[cascade-debug] cascade_attention called: common_prefix_len=%s "
-        "num_tokens=%s max_query_len=%s max_kv_len=%s",
-        common_prefix_len,
-        query.shape[0],
-        max_query_len,
-        max_kv_len,
-    )
 
     num_tokens = query.shape[0]
     block_size = key_cache.shape[-3]
