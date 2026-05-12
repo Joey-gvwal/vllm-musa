@@ -39,9 +39,11 @@ if is_flash_attn_varlen_func_available():
 from vllm.config import (
     VllmConfig,
     get_current_vllm_config,
+    get_current_vllm_config_or_none,
     get_layers_from_vllm_config,
 )
 from vllm.config.cache import CacheDType
+from vllm.distributed.parallel_state import get_dcp_group
 from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability
 from vllm.utils.math_utils import cdiv, round_up
@@ -55,11 +57,72 @@ from vllm.v1.attention.backends.utils import (
     get_kv_cache_layout,
     split_decodes_and_prefills,
 )
+from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
+from vllm.v1.attention.ops.dcp_alltoall import dcp_a2a_lse_reduce
 from vllm.v1.kv_cache_interface import AttentionSpec
 
 logger = init_logger(__name__)
 
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
+
+
+def _torch_reduce_scatter_dim(
+    input_: torch.Tensor,
+    group,
+    dim: int,
+) -> torch.Tensor:
+    world_size = group.world_size
+    if world_size == 1:
+        return input_
+    if dim < 0:
+        dim += input_.dim()
+    if input_.shape[dim] % world_size != 0:
+        raise RuntimeError(
+            "DCP reduce-scatter dimension must be divisible by world size, "
+            f"got shape={tuple(input_.shape)}, dim={dim}, world_size={world_size}."
+        )
+
+    chunks = [chunk.contiguous() for chunk in input_.chunk(world_size, dim=dim)]
+    output = torch.empty_like(chunks[group.rank_in_group])
+    torch.distributed.reduce_scatter(
+        output,
+        chunks,
+        group=getattr(group, "device_group", group),
+    )
+    return output
+
+
+class _DCPGroupWithTorchReduceScatter:
+    def __init__(self, group) -> None:
+        self._group = group
+        self.world_size = group.world_size
+        self.rank_in_group = group.rank_in_group
+
+    def all_gather(self, tensor: torch.Tensor, dim: int = 0) -> torch.Tensor:
+        return self._group.all_gather(tensor, dim=dim)
+
+    def reduce_scatter(self, tensor: torch.Tensor, dim: int = 0) -> torch.Tensor:
+        return _torch_reduce_scatter_dim(tensor, self._group, dim)
+
+
+def _musa_cp_lse_ag_out_rs(
+    cp_attn_out: torch.Tensor,
+    cp_attn_lse: torch.Tensor,
+    cp_group,
+    ctx=None,
+    return_lse: bool = False,
+    is_lse_base_on_e=True,
+):
+
+    safe_group = _DCPGroupWithTorchReduceScatter(cp_group)
+    return cp_lse_ag_out_rs(
+        cp_attn_out,
+        cp_attn_lse,
+        safe_group,
+        ctx=ctx,
+        return_lse=return_lse,
+        is_lse_base_on_e=is_lse_base_on_e,
+    )
 
 
 @register_backend(AttentionBackendEnum.FLASH_ATTN)
@@ -724,6 +787,16 @@ class FlashAttentionImpl(AttentionImpl):
 
         self.supports_quant_query_input = False
 
+        vllm_config = get_current_vllm_config_or_none()
+        dcp_a2a = (
+            vllm_config is not None
+            and vllm_config.parallel_config.decode_context_parallel_size > 1
+            and vllm_config.parallel_config.dcp_comm_backend == "a2a"
+        )
+        # ==================== MUSA ADAPTATION ====================
+        self.dcp_combine = dcp_a2a_lse_reduce if dcp_a2a else _musa_cp_lse_ag_out_rs
+        # ========================== END ==========================
+
     def forward(
         self,
         layer: torch.nn.Module,
@@ -817,8 +890,19 @@ class FlashAttentionImpl(AttentionImpl):
             v_descale = layer._v_scale.expand(descale_shape)
 
             if self.dcp_world_size > 1:
-                # XXX (MUSA): Implement _forward_with_dcp
-                raise NotImplementedError
+                self._forward_with_dcp(
+                    query[:num_actual_tokens],
+                    key[:num_actual_tokens],
+                    value[:num_actual_tokens],
+                    key_cache,
+                    value_cache,
+                    output[:num_actual_tokens],
+                    attn_metadata,
+                    q_descale=q_descale,
+                    k_descale=k_descale,
+                    v_descale=v_descale,
+                )
+                return output
             else:
                 sliding_window_size = (
                     list(self.sliding_window)
@@ -889,6 +973,196 @@ class FlashAttentionImpl(AttentionImpl):
             k_descale=layer._k_scale,
             v_descale=layer._v_scale,
             s_aux=self.sinks,
+        )
+        return output
+
+    @staticmethod
+    def _view_attn_output(
+        attn_output: torch.Tensor,
+        num_tokens: int,
+        num_heads: int,
+        head_size: int,
+    ) -> torch.Tensor:
+        if attn_output.dim() == 3 and attn_output.shape == (
+            num_tokens,
+            num_heads,
+            head_size,
+        ):
+            return attn_output
+        if attn_output.dim() == 4 and attn_output.shape[1] == 1:
+            return attn_output.squeeze(1)
+        return attn_output.view(num_tokens, num_heads, head_size)
+
+    @staticmethod
+    def _lse_to_tokens_heads(
+        lse: torch.Tensor,
+        num_tokens: int,
+        num_heads: int,
+    ) -> torch.Tensor:
+        if lse.shape == (num_heads, num_tokens):
+            return lse.transpose(0, 1).contiguous()
+        if lse.shape == (num_tokens, num_heads):
+            return lse.contiguous()
+        if lse.dim() == 3 and lse.shape[-1] == 1:
+            return FlashAttentionImpl._lse_to_tokens_heads(
+                lse.squeeze(-1), num_tokens, num_heads
+            )
+        raise RuntimeError(
+            "Unexpected FlashAttention LSE shape "
+            f"{tuple(lse.shape)} for tokens={num_tokens}, heads={num_heads}."
+        )
+
+    @staticmethod
+    def _lse_to_heads_tokens(
+        lse: torch.Tensor,
+        num_tokens: int,
+        num_heads: int,
+    ) -> torch.Tensor:
+        if lse.shape == (num_heads, num_tokens):
+            return lse.contiguous()
+        if lse.shape == (num_tokens, num_heads):
+            return lse.transpose(0, 1).contiguous()
+        if lse.dim() == 3 and lse.shape[-1] == 1:
+            return FlashAttentionImpl._lse_to_heads_tokens(
+                lse.squeeze(-1), num_tokens, num_heads
+            )
+        raise RuntimeError(
+            "Unexpected FlashAttention LSE shape "
+            f"{tuple(lse.shape)} for tokens={num_tokens}, heads={num_heads}."
+        )
+
+    def _forward_with_dcp(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_cache: torch.Tensor,
+        value_cache: torch.Tensor,
+        output: torch.Tensor,
+        attn_metadata: FlashAttentionMetadata,
+        q_descale: torch.Tensor | None = None,
+        k_descale: torch.Tensor | None = None,
+        v_descale: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        # ==================== MUSA ADAPTATION ====================
+        assert (
+            self.vllm_flash_attn_version is not None
+        ), "FlashAttention version not detected."
+        if attn_metadata.dcp_context_kv_lens is None:
+            raise RuntimeError("DCP metadata is missing dcp_context_kv_lens.")
+        if attn_metadata.max_dcp_context_kv_len is None:
+            raise RuntimeError("DCP metadata is missing max_dcp_context_kv_len.")
+        if self.sinks is not None:
+            raise NotImplementedError(
+                "MUSA FlashAttention DCP does not support attention sinks."
+            )
+        if self.alibi_slopes is not None:
+            raise NotImplementedError("MUSA FlashAttention DCP does not support ALiBi.")
+        if not is_quantized_kv_cache(self.kv_cache_dtype):
+            q_descale = None
+            k_descale = None
+            v_descale = None
+        # ========================== END ==========================
+
+        num_tokens = query.shape[0]
+        cu_seqlens_q = attn_metadata.query_start_loc
+        max_seqlen_q = attn_metadata.max_query_len
+        sliding_window_size = (
+            list(self.sliding_window) if self.sliding_window is not None else None
+        )
+
+        query = query.view(num_tokens, self.num_heads, self.head_size).contiguous()
+        key = key.view(num_tokens, self.num_kv_heads, self.head_size).to(query.dtype)
+        value = value.view(num_tokens, self.num_kv_heads, self.head_size).to(
+            query.dtype
+        )
+
+        dcp_group = get_dcp_group()
+        query_across_dcp = dcp_group.all_gather(query, dim=1)
+        context_attn_out, context_lse = flash_attn_varlen_func(
+            q=query_across_dcp,
+            k=key_cache,
+            v=value_cache,
+            cu_seqlens_q=cu_seqlens_q,
+            max_seqlen_q=max_seqlen_q,
+            seqused_k=attn_metadata.dcp_context_kv_lens,
+            max_seqlen_k=attn_metadata.max_dcp_context_kv_len,
+            softmax_scale=self.scale,
+            causal=False,
+            window_size=sliding_window_size,
+            block_table=attn_metadata.block_table,
+            softcap=self.logits_soft_cap,
+            return_softmax_lse=True,
+            scheduler_metadata=attn_metadata.scheduler_metadata,
+            q_descale=q_descale,
+            k_descale=k_descale,
+            v_descale=v_descale,
+            num_splits=attn_metadata.max_num_splits,
+        )
+        # ==================== MUSA ADAPTATION ====================
+        context_attn_out = self._view_attn_output(
+            context_attn_out,
+            num_tokens,
+            self.num_heads * self.dcp_world_size,
+            self.head_size,
+        )
+        context_lse = self._lse_to_tokens_heads(
+            context_lse,
+            num_tokens,
+            self.num_heads * self.dcp_world_size,
+        )
+        context_attn_out, context_lse = self.dcp_combine(
+            context_attn_out,
+            context_lse,
+            dcp_group,
+            return_lse=True,
+        )
+        context_lse = self._lse_to_heads_tokens(
+            context_lse,
+            num_tokens,
+            self.num_heads,
+        )
+        # ========================== END ==========================
+
+        query_attn_out, query_lse = flash_attn_varlen_func(
+            q=query,
+            k=key,
+            v=value,
+            cu_seqlens_q=cu_seqlens_q,
+            max_seqlen_q=max_seqlen_q,
+            cu_seqlens_k=cu_seqlens_q,
+            max_seqlen_k=max_seqlen_q,
+            softmax_scale=self.scale,
+            causal=attn_metadata.causal,
+            window_size=sliding_window_size,
+            softcap=self.logits_soft_cap,
+            return_softmax_lse=True,
+            q_descale=q_descale,
+            k_descale=k_descale,
+            v_descale=v_descale,
+            num_splits=attn_metadata.max_num_splits,
+        )
+        # ==================== MUSA ADAPTATION ====================
+        query_attn_out = self._view_attn_output(
+            query_attn_out,
+            num_tokens,
+            self.num_heads,
+            self.head_size,
+        )
+        query_lse = self._lse_to_heads_tokens(
+            query_lse,
+            num_tokens,
+            self.num_heads,
+        )
+
+        output_view = output.view(num_tokens, self.num_heads, self.head_size)
+        # ========================== END ==========================
+        merge_attn_states(
+            output_view,
+            context_attn_out,
+            context_lse,
+            query_attn_out,
+            query_lse,
         )
         return output
 
