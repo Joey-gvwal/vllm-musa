@@ -115,6 +115,13 @@ def _musa_deepseek_v4_store_sparse_kv(
         torch.div(kv_slot_idx, kv_cache_block_size, rounding_mode="floor").item()
     )
     pos_in_block = int(kv_slot_idx.remainder(kv_cache_block_size).item())
+    if (
+        block_idx < 0
+        or block_idx >= kv_cache.shape[0]
+        or pos_in_block < 0
+        or pos_in_block >= kv_cache_block_size
+    ):
+        return
     cache_block = kv_cache[block_idx].view(torch.uint8).flatten()
     token_base = pos_in_block * token_stride
     scale_base = kv_cache_block_size * token_stride + pos_in_block * scale_dim
@@ -163,6 +170,13 @@ def _musa_deepseek_v4_store_indexer_fp8(
         torch.div(kv_slot_idx, kv_cache_block_size, rounding_mode="floor").item()
     )
     pos_in_block = int(kv_slot_idx.remainder(kv_cache_block_size).item())
+    if (
+        block_idx < 0
+        or block_idx >= kv_cache.shape[0]
+        or pos_in_block < 0
+        or pos_in_block >= kv_cache_block_size
+    ):
+        return
     cache_block = kv_cache[block_idx].view(torch.uint8).flatten()
     token_base = pos_in_block * head_dim
     scale_base = kv_cache_block_size * head_dim + pos_in_block * scale_dim
@@ -199,6 +213,13 @@ def _musa_deepseek_v4_store_indexer_mxfp4(
         torch.div(kv_slot_idx, kv_cache_block_size, rounding_mode="floor").item()
     )
     pos_in_block = int(kv_slot_idx.remainder(kv_cache_block_size).item())
+    if (
+        block_idx < 0
+        or block_idx >= kv_cache.shape[0]
+        or pos_in_block < 0
+        or pos_in_block >= kv_cache_block_size
+    ):
+        return
     cache_block = kv_cache[block_idx].view(torch.uint8).flatten()
     token_base = pos_in_block * token_stride
     scale_base = kv_cache_block_size * token_stride + pos_in_block * scale_dim
@@ -254,8 +275,9 @@ def _musa_deepseek_v4_compressor_forward(
     kv_width = kv.shape[-1]
 
     valid_slots = slot_mapping[:num_actual]
-    valid_mask = valid_slots >= 0
-    if torch.any(valid_mask):
+    state_cache_capacity = state_cache.shape[0] * block_size
+    valid_mask = (valid_slots >= 0) & (valid_slots < state_cache_capacity)
+    if bool(torch.any(valid_mask).item()):
         valid_indices = torch.nonzero(valid_mask, as_tuple=False).flatten()
         slots = valid_slots[valid_indices].to(torch.long)
         block_idx = torch.div(slots, block_size, rounding_mode="floor")
@@ -297,6 +319,8 @@ def _musa_deepseek_v4_compressor_forward(
                 continue
             block_number = block_table[req_idx, block_index].to(torch.long)
             if block_number < 0:
+                continue
+            if int(block_number.item()) >= state_cache.shape[0]:
                 continue
             block_offset = pos % block_size
             head_offset = module.head_dim if offset_idx >= module.compress_ratio else 0
