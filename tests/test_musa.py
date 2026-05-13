@@ -3,6 +3,7 @@
 """Tests for the MUSA Platform implementation."""
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -179,6 +180,18 @@ class TestMUSAPlatformBase:
         )
 
         assert priorities == [AttentionBackendEnum.FLASHMLA_SPARSE]
+
+    def test_deepseek_v4_sparse_mla_uses_upstream_block_size(self):
+        from vllm_musa.platform import _get_sparse_mla_block_size
+
+        assert (
+            _get_sparse_mla_block_size(SimpleNamespace(model_type="deepseek_v4"))
+            == 256
+        )
+        assert (
+            _get_sparse_mla_block_size(SimpleNamespace(model_type="deepseek_v3"))
+            == 64
+        )
 
     def test_turboquant_rejects_k8v4_on_musa(self):
         import torch

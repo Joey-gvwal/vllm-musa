@@ -35,6 +35,12 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 
+def _get_sparse_mla_block_size(hf_config) -> int:
+    if getattr(hf_config, "model_type", None) == "deepseek_v4":
+        return 256
+    return 64
+
+
 @cache
 def _get_backend_priorities(
     use_mla: bool,
@@ -242,10 +248,14 @@ class MUSAPlatformBase(Platform):
                 if not use_flashmla_sparse:
                     use_flashmla_sparse = True
 
-                if use_flashmla_sparse and cache_config.block_size != 64:
-                    cache_config.block_size = 64
+                sparse_block_size = _get_sparse_mla_block_size(
+                    vllm_config.model_config.hf_config
+                )
+                if use_flashmla_sparse and cache_config.block_size != sparse_block_size:
+                    cache_config.block_size = sparse_block_size
                     logger.info(
-                        "Forcing kv cache block size to 64 for FlashMLASparse backend."
+                        "Forcing kv cache block size to %s for FlashMLASparse backend.",
+                        sparse_block_size,
                     )
 
         scheduler_config = vllm_config.scheduler_config
