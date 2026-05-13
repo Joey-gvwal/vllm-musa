@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import inspect
+import math
+import os
 
 import torch
 from vllm.logger import init_logger
@@ -19,6 +21,9 @@ except ImportError as e:
 _mate_flash_mla_with_kvcache = _mate_flashmla.flash_mla_with_kvcache
 get_mla_metadata = _mate_flashmla.get_mla_metadata
 _flash_mla_sparse_fwd = getattr(_mate_flashmla, "flash_mla_sparse_fwd", None)
+_ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK = (
+    os.getenv("VLLM_MUSA_ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK", "0") == "1"
+)
 _DEEPSEEK_V4_SPARSE_KVCACHE_KWARGS = {
     "topk_length",
     "attn_sink",
@@ -48,6 +53,73 @@ def _supports_deepseek_v4_sparse_kvcache_kwargs() -> bool:
     if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
         return True
     return _DEEPSEEK_V4_SPARSE_KVCACHE_KWARGS.issubset(signature.parameters)
+
+
+def _torch_flash_mla_sparse_fwd(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    indices: torch.Tensor,
+    sm_scale: float,
+    d_v: int = 512,
+    attn_sink: torch.Tensor | None = None,
+    topk_length: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if kwargs:
+        raise TypeError(
+            "Torch sparse FlashMLA fallback does not support kwargs: "
+            f"{', '.join(sorted(kwargs))}"
+        )
+    if kv.shape[1] != 1 or indices.shape[1] != 1:
+        raise RuntimeError(
+            "Torch sparse FlashMLA fallback only supports MQA sparse MLA "
+            f"with kv.shape[1] == indices.shape[1] == 1, got kv={kv.shape}, "
+            f"indices={indices.shape}."
+        )
+
+    num_tokens, num_heads, _ = q.shape
+    num_kv_tokens = kv.shape[0]
+    topk = indices.shape[-1]
+    idx = indices[:, 0, :].to(torch.long)
+    valid = (idx >= 0) & (idx < num_kv_tokens)
+    if topk_length is not None:
+        topk_range = torch.arange(topk, device=indices.device)
+        valid &= topk_range.unsqueeze(0) < topk_length.to(torch.long).unsqueeze(1)
+
+    gathered = kv[:, 0, :].to(torch.float32).index_select(
+        0, idx.masked_fill(~valid, 0).reshape(-1)
+    )
+    gathered = gathered.view(num_tokens, topk, kv.shape[-1])
+
+    # FlashMLA sparse reports base-2 max/lse values. Compute in fp32 for an
+    # exact diagnostic fallback; production support still requires a MUSA kernel.
+    score_log2 = (
+        torch.einsum("thd,tkd->thk", q.to(torch.float32), gathered)
+        * sm_scale
+        * math.log2(math.e)
+    )
+    score_log2 = score_log2.masked_fill(~valid.unsqueeze(1), -float("inf"))
+    logits_for_lse = score_log2
+    if attn_sink is not None:
+        sink = attn_sink[:num_heads].to(torch.float32).view(1, num_heads, 1)
+        sink = sink * math.log2(math.e)
+        logits_for_lse = torch.cat(
+            (logits_for_lse, sink.expand(num_tokens, -1, -1)), dim=-1
+        )
+
+    max_logits = torch.max(logits_for_lse, dim=-1).values
+    lse = torch.logsumexp(logits_for_lse * math.log(2), dim=-1) * math.log2(math.e)
+    lonely_mask = torch.isneginf(max_logits)
+    lse = lse.masked_fill(lonely_mask, float("inf"))
+    weights = torch.exp2(score_log2 - lse.unsqueeze(-1))
+    weights = weights.masked_fill(~valid.unsqueeze(1), 0.0)
+    result = torch.einsum("thk,tkd->thd", weights, gathered[:, :, :d_v])
+    result = result.masked_fill(lonely_mask.unsqueeze(-1), 0.0).to(q.dtype)
+    if out is not None:
+        out.copy_(result)
+        result = out
+    return result, max_logits, lse
 
 
 def flash_mla_with_kvcache(
@@ -167,6 +239,8 @@ class FlashMLASchedMeta:
 
 if _flash_mla_sparse_fwd is not None:
     flash_mla_sparse_fwd = _flash_mla_sparse_fwd
+elif _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK:
+    flash_mla_sparse_fwd = _torch_flash_mla_sparse_fwd
 else:
     flash_mla_sparse_fwd = _raise_flashmla_sparse_unavailable
 
