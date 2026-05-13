@@ -29,6 +29,37 @@ from vllm.triton_utils import tl
 from vllm_musa import _custom_ops as musa_ops
 
 
+def _dequant_mxfp4_musa(
+    x: torch.Tensor, scale: torch.Tensor | None, float_dtype: torch.dtype
+) -> torch.Tensor:
+    if not current_platform.is_musa():
+        return dequant_mxfp4(x, scale, float_dtype)
+    if scale is None:
+        raise ValueError("MXFP4 dequantization requires block scales")
+
+    values = torch.tensor(
+        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0],
+        dtype=torch.float32,
+        device=x.device,
+    )
+    unpacked = torch.empty(
+        (*x.shape[:-1], x.shape[-1] * 2), dtype=torch.uint8, device=x.device
+    )
+    unpacked[..., 0::2] = x & 0x0F
+    unpacked[..., 1::2] = (x >> 4) & 0x0F
+
+    sign = torch.where((unpacked & 0x08) != 0, -1.0, 1.0)
+    magnitude = values[(unpacked & 0x07).long()]
+    out = sign * magnitude
+
+    block_size = 32
+    out = out.reshape(*out.shape[:-1], -1, block_size)
+    scale_factor = torch.exp2(scale.to(torch.float32) - 127.0).unsqueeze(-1)
+    out = out * scale_factor
+    out = out.reshape(*out.shape[:-2], -1)
+    return out.to(float_dtype)
+
+
 def _supports_quant_scheme(
     weight_key,
     activation_key,
@@ -90,6 +121,7 @@ def fused_experts_impl(
         assert hidden_states.size(1) // 2 == w1.size(2), "Hidden size mismatch"
     elif ocp_mx_scheme is not None:
         if ocp_mx_scheme in {
+            "w_mxfp4",
             "w_mxfp4_a_mxfp4",
             "w_mxfp4_a_mxfp6_e3m2",
             "w_mxfp4_a_mxfp6_e2m3",
@@ -186,14 +218,15 @@ def fused_experts_impl(
         # and for which we have a native OCP mx fused MOE kernel,
         # this dequantization step should not be done.
         if ocp_mx_scheme in {
+            OCP_MX_Scheme.w_mxfp4,
             OCP_MX_Scheme.w_mxfp4_a_mxfp4,
             OCP_MX_Scheme.w_mxfp4_a_mxfp6_e3m2,
             OCP_MX_Scheme.w_mxfp4_a_mxfp6_e2m3,
         }:
             # Weight has to be dequantized for mxfp4 emulation.
-            w1 = dequant_mxfp4(w1, w1_scale, hidden_states.dtype)
+            w1 = _dequant_mxfp4_musa(w1, w1_scale, hidden_states.dtype)
             w1_scale = None
-            w2 = dequant_mxfp4(w2, w2_scale, hidden_states.dtype)
+            w2 = _dequant_mxfp4_musa(w2, w2_scale, hidden_states.dtype)
             w2_scale = None
         elif ocp_mx_scheme == OCP_MX_Scheme.w_mxfp6_e3m2_a_mxfp6_e3m2:
             w1 = dequant_mxfp6(
