@@ -5,6 +5,23 @@ import pytest
 import torch
 
 
+def test_mxfp4_scale_to_float_handles_e8m0_dtype():
+    e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
+    if e8m0_dtype is None:
+        pytest.skip("torch.float8_e8m0fnu is unavailable")
+
+    from vllm_musa.model_executor.layers.fused_moe.fused_moe import (
+        _musa_mxfp4_scale_to_float,
+    )
+
+    scale_bytes = torch.tensor([120, 121, 127, 128], dtype=torch.uint8)
+    scales = scale_bytes.view(e8m0_dtype)
+
+    expected = (scale_bytes.to(torch.int32) << 23).view(torch.float32)
+    torch.testing.assert_close(_musa_mxfp4_scale_to_float(scales), expected)
+    torch.testing.assert_close(_musa_mxfp4_scale_to_float(scale_bytes), expected)
+
+
 def test_deepgemm_post_process_upcasts_e8m0_scales_when_disabled():
     e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
     if e8m0_dtype is None:

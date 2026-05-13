@@ -128,10 +128,19 @@ def _dequant_mxfp4_musa(
 
     block_size = 32
     out = out.reshape(*out.shape[:-1], -1, block_size)
-    scale_factor = torch.exp2(scale.to(torch.float32) - 127.0).unsqueeze(-1)
+    scale_factor = _musa_mxfp4_scale_to_float(scale).unsqueeze(-1)
     out = out * scale_factor
     out = out.reshape(*out.shape[:-2], -1)
     return out.to(float_dtype)
+
+
+def _musa_mxfp4_scale_to_float(scale: torch.Tensor) -> torch.Tensor:
+    e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
+    if e8m0_dtype is not None and scale.dtype == e8m0_dtype:
+        return scale.to(torch.float32)
+    if scale.dtype == torch.uint8:
+        return torch.exp2(scale.to(torch.float32) - 127.0)
+    return scale.to(torch.float32)
 
 
 def _supports_quant_scheme(
