@@ -40,9 +40,15 @@ def _get_backend_priorities(
     use_mla: bool,
     device_capability: DeviceCapability,
     num_heads: int | None = None,
+    use_sparse: bool = False,
+    kv_cache_dtype: str | None = None,
 ) -> list[AttentionBackendEnum]:
     """Get backend priorities with lazy import to avoid circular dependency."""
     if use_mla:
+        if use_sparse:
+            return [
+                AttentionBackendEnum.FLASHMLA_SPARSE,
+            ]
         return [
             AttentionBackendEnum.FLASHMLA,
             AttentionBackendEnum.TRITON_MLA,
@@ -75,6 +81,13 @@ def register_attention_backends() -> None:
     register_backend(
         AttentionBackendEnum.FLASHMLA,
         class_path="vllm_musa.v1.attention.backends.mla.flashmla.MUSAFlashMLABackend",
+    )
+    register_backend(
+        AttentionBackendEnum.FLASHMLA_SPARSE,
+        class_path=(
+            "vllm_musa.v1.attention.backends.mla.flashmla_sparse."
+            "MUSAFlashMLASparseBackend"
+        ),
     )
     register_backend(
         AttentionBackendEnum.FLASH_ATTN,
@@ -200,11 +213,16 @@ class MUSAPlatformBase(Platform):
             use_flashmla = False
             use_flashmla_sparse = False
 
-            from vllm_musa.v1.attention.ops.flashmla import is_flashmla_dense_supported
+            from vllm_musa.v1.attention.ops.flashmla import (
+                is_flashmla_dense_supported,
+                is_flashmla_sparse_supported,
+            )
 
             if vllm_config.attention_config.backend is None:
-                # Default case: use FlashMLA if supported
-                if is_flashmla_dense_supported()[0]:
+                # Default case: prefer sparse FlashMLA for sparse MLA models.
+                if use_sparse and is_flashmla_sparse_supported()[0]:
+                    use_flashmla_sparse = True
+                elif is_flashmla_dense_supported()[0]:
                     use_flashmla = True
             else:
                 # Forced case
@@ -269,6 +287,8 @@ class MUSAPlatformBase(Platform):
             attn_selector_config.use_mla,
             device_capability,
             num_heads,
+            attn_selector_config.use_sparse,
+            attn_selector_config.kv_cache_dtype,
         )
         for priority, backend in enumerate(backend_priorities):
             try:

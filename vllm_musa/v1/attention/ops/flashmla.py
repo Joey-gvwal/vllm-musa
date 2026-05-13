@@ -7,17 +7,30 @@ from vllm.platforms import current_platform
 
 logger = init_logger(__name__)
 
-# ==================== MUSA ADAPTATION ====================
 try:
-    from mate.flashmla import flash_mla_with_kvcache, get_mla_metadata
+    import mate.flashmla as _mate_flashmla
 except ImportError as e:
     raise ImportError(
         "MUSA platform requires MATE to be installed. Please install mate first."
     ) from e
 
+flash_mla_with_kvcache = _mate_flashmla.flash_mla_with_kvcache
+get_mla_metadata = _mate_flashmla.get_mla_metadata
+_flash_mla_sparse_fwd = getattr(_mate_flashmla, "flash_mla_sparse_fwd", None)
+
 
 # vllm.v1.Attention.ops.flashmla will be registered and used earlier than this patch, but it will not affect
 def _is_flashmla_available() -> tuple[bool, str | None]:
+    return True, None
+
+
+def _is_flashmla_sparse_available() -> tuple[bool, str | None]:
+    if _flash_mla_sparse_fwd is None:
+        return (
+            False,
+            "MATE does not expose flash_mla_sparse_fwd; DeepSeek-V4 sparse "
+            "FlashMLA requires a MUSA sparse FlashMLA implementation.",
+        )
     return True, None
 
 
@@ -41,6 +54,9 @@ def is_flashmla_sparse_supported() -> tuple[bool, str | None]:
     is_available, maybe_reason = _is_flashmla_available()
     if not is_available:
         return False, maybe_reason
+    is_sparse_available, sparse_reason = _is_flashmla_sparse_available()
+    if not is_sparse_available:
+        return False, sparse_reason
     # MUSA devices use compute capability 3
     device_capability = current_platform.get_device_capability()
     if device_capability is None or device_capability[0] != 3:
@@ -56,17 +72,21 @@ def _raise_flashmla_unavailable(*_args, **_kwargs):
     raise RuntimeError(reason or "FlashMLA is not available")
 
 
-if _is_flashmla_available()[0]:
-    from mate.flashmla import flash_mla_with_kvcache, get_mla_metadata
-else:
-    flash_mla_with_kvcache = _raise_flashmla_unavailable  # type: ignore[assignment]
-    get_mla_metadata = _raise_flashmla_unavailable  # type: ignore[assignment]
+def _raise_flashmla_sparse_unavailable(*_args, **_kwargs):
+    _, reason = _is_flashmla_sparse_available()
+    raise RuntimeError(reason or "FlashMLA sparse is not available")
 
 
 class FlashMLASchedMeta:
     def __init__(self, tile_scheduler_metadata: torch.Tensor, num_splits: torch.Tensor):
         self.tile_scheduler_metadata = tile_scheduler_metadata
         self.num_splits = num_splits
+
+
+if _flash_mla_sparse_fwd is not None:
+    flash_mla_sparse_fwd = _flash_mla_sparse_fwd
+else:
+    flash_mla_sparse_fwd = _raise_flashmla_sparse_unavailable
 
 
 def get_mla_metadata_dense_fp8(

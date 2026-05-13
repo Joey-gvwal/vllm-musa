@@ -17,6 +17,7 @@ import logging
 __all__ = [
     "MUSAPlatform",
     "musa_platform_plugin",
+    "register",
     "register_custom_ops",
     "collect_env",
 ]
@@ -124,6 +125,11 @@ def register_custom_ops() -> None:
     _register_ops()
     _register_modules()
     logger.info("MUSA patches and custom ops registered")
+
+
+def register() -> str | None:
+    """Compatibility platform entry point used by older vLLM plugin metadata."""
+    return musa_platform_plugin()
 
 
 ########### console scripts ###########

@@ -135,6 +135,19 @@ class TestMUSAPlatformBase:
             == "vllm_musa.v1.attention.backends.turboquant.MUSATurboQuantAttentionBackend"
         )
 
+    def test_register_attention_backends_overrides_flashmla_sparse(self):
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        from vllm_musa.platform import register_attention_backends
+
+        AttentionBackendEnum.FLASHMLA_SPARSE.clear_override()
+        register_attention_backends()
+
+        assert AttentionBackendEnum.FLASHMLA_SPARSE.get_path() == (
+            "vllm_musa.v1.attention.backends.mla.flashmla_sparse."
+            "MUSAFlashMLASparseBackend"
+        )
+
     def test_get_valid_backends_includes_turboquant_for_non_mla(self):
         from vllm.platforms.interface import DeviceCapability
         from vllm.v1.attention.backends.registry import AttentionBackendEnum
@@ -151,6 +164,21 @@ class TestMUSAPlatformBase:
             use_mla=True,
             device_capability=DeviceCapability(3, 1),
         )
+
+    def test_sparse_mla_prioritizes_flashmla_sparse(self):
+        from vllm.platforms.interface import DeviceCapability
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        from vllm_musa.platform import _get_backend_priorities
+
+        priorities = _get_backend_priorities(
+            use_mla=True,
+            device_capability=DeviceCapability(3, 1),
+            use_sparse=True,
+            kv_cache_dtype="fp8_ds_mla",
+        )
+
+        assert priorities == [AttentionBackendEnum.FLASHMLA_SPARSE]
 
     def test_turboquant_rejects_k8v4_on_musa(self):
         import torch
@@ -385,3 +413,10 @@ class TestModuleExports:
         from vllm_musa import musa_platform_plugin
 
         assert callable(musa_platform_plugin)
+
+    def test_register_compatibility_entrypoint_exists(self):
+        """Test old vLLM plugin metadata can load vllm_musa:register."""
+        from vllm_musa import register, register_custom_ops
+
+        assert callable(register)
+        assert callable(register_custom_ops)
