@@ -22,6 +22,50 @@ def test_mxfp4_scale_to_float_handles_e8m0_dtype():
     torch.testing.assert_close(_musa_mxfp4_scale_to_float(scale_bytes), expected)
 
 
+def test_mxfp4_moe_fallback_dequants_selected_experts_only(monkeypatch):
+    from vllm.model_executor.layers.quantization.utils.ocp_mx_utils import (
+        OCP_MX_Scheme,
+    )
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    monkeypatch.setattr(fused_moe.current_platform, "is_musa", lambda: True)
+    calls = []
+    original_dequant = fused_moe._dequant_mxfp4_musa
+
+    def wrapped_dequant(x, scale, float_dtype):
+        calls.append(tuple(x.shape))
+        return original_dequant(x, scale, float_dtype)
+
+    monkeypatch.setattr(fused_moe, "_dequant_mxfp4_musa", wrapped_dequant)
+
+    hidden_states = torch.zeros((2, 32), dtype=torch.float32)
+    topk_weights = torch.ones((2, 1), dtype=torch.float32)
+    topk_ids = torch.full((2, 1), 1, dtype=torch.int64)
+    w1 = torch.full((3, 64, 16), 0x22, dtype=torch.uint8)
+    w2 = torch.full((3, 32, 16), 0x22, dtype=torch.uint8)
+    w1_scale = torch.full((3, 64, 1), 127, dtype=torch.uint8)
+    w2_scale = torch.full((3, 32, 1), 127, dtype=torch.uint8)
+
+    out = fused_moe._musa_torch_fused_moe_fallback(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        activation="silu",
+        apply_router_weight_on_input=False,
+        expert_map=None,
+        w1_bias=None,
+        w2_bias=None,
+        ocp_mx_scheme=OCP_MX_Scheme.w_mxfp4,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+    )
+
+    assert out.shape == hidden_states.shape
+    assert calls == [(64, 16), (32, 16)]
+
+
 def test_deepgemm_post_process_upcasts_e8m0_scales_when_disabled():
     e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
     if e8m0_dtype is None:

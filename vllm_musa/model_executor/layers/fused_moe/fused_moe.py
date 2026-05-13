@@ -30,6 +30,17 @@ from vllm.triton_utils import tl
 
 from vllm_musa import _custom_ops as musa_ops
 
+_MXFP4_SCHEMES = {
+    OCP_MX_Scheme.w_mxfp4,
+    OCP_MX_Scheme.w_mxfp4_a_mxfp4,
+    OCP_MX_Scheme.w_mxfp4_a_mxfp6_e3m2,
+    OCP_MX_Scheme.w_mxfp4_a_mxfp6_e2m3,
+}
+
+
+def _is_mxfp4_scheme(ocp_mx_scheme: str | None) -> bool:
+    return ocp_mx_scheme in _MXFP4_SCHEMES
+
 
 def _musa_torch_fused_moe_fallback(
     hidden_states: torch.Tensor,
@@ -42,6 +53,9 @@ def _musa_torch_fused_moe_fallback(
     expert_map: torch.Tensor | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    ocp_mx_scheme: str | None = None,
+    w1_scale: torch.Tensor | None = None,
+    w2_scale: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if activation != "silu":
         raise NotImplementedError(
@@ -81,15 +95,29 @@ def _musa_torch_fused_moe_fallback(
         if apply_router_weight_on_input:
             x = x * router_weight
 
-        gate_up = x.matmul(w1[local_expert_id].to(torch.float32).transpose(0, 1))
+        if _is_mxfp4_scheme(ocp_mx_scheme):
+            w1_local = _dequant_mxfp4_musa(
+                w1[local_expert_id], w1_scale[local_expert_id], torch.float32
+            )
+        else:
+            w1_local = w1[local_expert_id].to(torch.float32)
+        gate_up = x.matmul(w1_local.transpose(0, 1))
+        del w1_local
+
         if w1_bias is not None:
             gate_up = gate_up + w1_bias[local_expert_id].to(torch.float32)
         gate, up = gate_up.chunk(2, dim=-1)
         intermediate = F.silu(gate) * up
 
-        expert_out = intermediate.matmul(
-            w2[local_expert_id].to(torch.float32).transpose(0, 1)
-        )
+        if _is_mxfp4_scheme(ocp_mx_scheme):
+            w2_local = _dequant_mxfp4_musa(
+                w2[local_expert_id], w2_scale[local_expert_id], torch.float32
+            )
+        else:
+            w2_local = w2[local_expert_id].to(torch.float32)
+        expert_out = intermediate.matmul(w2_local.transpose(0, 1))
+        del w2_local
+
         if w2_bias is not None:
             expert_out = expert_out + w2_bias[local_expert_id].to(torch.float32)
         if not apply_router_weight_on_input:
@@ -297,21 +325,26 @@ def fused_experts_impl(
     else:
         out_hidden_states = torch.empty_like(hidden_states)
 
+    musa_gemv = getattr(
+        getattr(torch.ops, "_C_musa_ops", None), "musa_fused_gemv_moe", None
+    )
+    use_musa_torch_moe_fallback = (
+        current_platform.is_musa()
+        and os.getenv("VLLM_MUSA_ENABLE_MXFP4_MOE_FALLBACK", "0") == "1"
+        and musa_gemv is None
+    )
+
     if ocp_mx_scheme is not None:
         # TODO: On platforms for which `current_platform.supports_mx()` is True
         # and for which we have a native OCP mx fused MOE kernel,
         # this dequantization step should not be done.
-        if ocp_mx_scheme in {
-            OCP_MX_Scheme.w_mxfp4,
-            OCP_MX_Scheme.w_mxfp4_a_mxfp4,
-            OCP_MX_Scheme.w_mxfp4_a_mxfp6_e3m2,
-            OCP_MX_Scheme.w_mxfp4_a_mxfp6_e2m3,
-        }:
-            # Weight has to be dequantized for mxfp4 emulation.
-            w1 = _dequant_mxfp4_musa(w1, w1_scale, hidden_states.dtype)
-            w1_scale = None
-            w2 = _dequant_mxfp4_musa(w2, w2_scale, hidden_states.dtype)
-            w2_scale = None
+        if _is_mxfp4_scheme(ocp_mx_scheme):
+            if not use_musa_torch_moe_fallback:
+                # Weight has to be dequantized for mxfp4 emulation.
+                w1 = _dequant_mxfp4_musa(w1, w1_scale, hidden_states.dtype)
+                w1_scale = None
+                w2 = _dequant_mxfp4_musa(w2, w2_scale, hidden_states.dtype)
+                w2_scale = None
         elif ocp_mx_scheme == OCP_MX_Scheme.w_mxfp6_e3m2_a_mxfp6_e3m2:
             w1 = dequant_mxfp6(
                 w1, w1_scale, quant_dtype="fp6_e3m2", float_dtype=hidden_states.dtype
@@ -333,14 +366,7 @@ def fused_experts_impl(
         else:
             raise NotImplementedError(f"Unsupported ocp_mx_scheme={ocp_mx_scheme}")
 
-    musa_gemv = getattr(
-        getattr(torch.ops, "_C_musa_ops", None), "musa_fused_gemv_moe", None
-    )
-    if (
-        current_platform.is_musa()
-        and os.getenv("VLLM_MUSA_ENABLE_MXFP4_MOE_FALLBACK", "0") == "1"
-        and musa_gemv is None
-    ):
+    if use_musa_torch_moe_fallback:
         return _musa_torch_fused_moe_fallback(
             hidden_states=hidden_states,
             w1=w1,
@@ -352,6 +378,9 @@ def fused_experts_impl(
             expert_map=expert_map,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            ocp_mx_scheme=ocp_mx_scheme,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
         )
 
     # ==================== MUSA ADAPTATION ====================
