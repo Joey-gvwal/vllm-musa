@@ -32,6 +32,23 @@ PATCHES = [
     (
         """import torch
 
+from vllm.platforms import current_platform
+from vllm.triton_utils import tl, triton
+""",
+        """import os
+
+import torch
+
+from vllm.logger import init_logger
+from vllm.platforms import current_platform
+from vllm.triton_utils import tl, triton
+
+logger = init_logger(__name__)
+""",
+    ),
+    (
+        """import torch
+
 from vllm.triton_utils import tl, triton
 """,
         """import os
