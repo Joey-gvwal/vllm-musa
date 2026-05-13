@@ -19,7 +19,7 @@ except ImportError as e:
     ) from e
 
 _mate_flash_mla_with_kvcache = _mate_flashmla.flash_mla_with_kvcache
-get_mla_metadata = _mate_flashmla.get_mla_metadata
+_mate_get_mla_metadata = _mate_flashmla.get_mla_metadata
 _flash_mla_sparse_fwd = getattr(_mate_flashmla, "flash_mla_sparse_fwd", None)
 _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK = (
     os.getenv("VLLM_MUSA_ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK", "0") == "1"
@@ -597,6 +597,12 @@ class FlashMLASchedMeta:
     def __init__(self, tile_scheduler_metadata: torch.Tensor, num_splits: torch.Tensor):
         self.tile_scheduler_metadata = tile_scheduler_metadata
         self.num_splits = num_splits
+
+
+def get_mla_metadata(*args, **kwargs):
+    if not args and not kwargs:
+        return (FlashMLASchedMeta(None, None),)
+    return _mate_get_mla_metadata(*args, **kwargs)
 
 
 if _flash_mla_sparse_fwd is not None:
