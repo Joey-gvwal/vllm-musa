@@ -395,6 +395,47 @@ class DeepseekCompressor(nn.Module):
         num_tokens, _ = x.shape
 """,
     ),
+    (
+        """        if (
+            current_platform.is_musa()
+            or getattr(torch.version, "musa", None) is not None
+            or x.device.type == "musa"
+        ):
+            raise NotImplementedError(
+                "DeepSeek-V4 compressor/cache updates are not implemented for "
+                "MUSA yet. A MUSA implementation of the fused compress, "
+                "RMSNorm/RoPE, FP8/MXFP4 quantization, and KV-cache insert "
+                "path is required before model execution can proceed."
+            )
+        num_tokens, _ = x.shape
+""",
+        """        if (
+            _musa_deepseek_v4_is_musa_tensor(x)
+            and os.getenv(
+                "VLLM_MUSA_ENABLE_TORCH_DEEPSEEK_V4_COMPRESSOR_FALLBACK",
+                "0",
+            )
+            == "1"
+        ):
+            logger.warning_once(
+                "Using opt-in MUSA torch DeepSeek-V4 compressor/cache "
+                "fallback. This emulates fused compress, RMSNorm/RoPE, and "
+                "FP8/MXFP4 cache insert in torch; it is diagnostic, not a "
+                "production backend."
+            )
+            return _musa_deepseek_v4_compressor_forward(
+                self, x, positions, rotary_emb
+            )
+        if _musa_deepseek_v4_is_musa_tensor(x):
+            raise NotImplementedError(
+                "DeepSeek-V4 compressor/cache updates are not implemented for "
+                "MUSA yet. A MUSA implementation of the fused compress, "
+                "RMSNorm/RoPE, FP8/MXFP4 quantization, and KV-cache insert "
+                "path is required before model execution can proceed."
+            )
+        num_tokens, _ = x.shape
+""",
+    ),
 ]
 
 RELOAD_AFTER_PATCH = True
