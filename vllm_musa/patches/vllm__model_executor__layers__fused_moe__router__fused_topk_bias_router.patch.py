@@ -84,3 +84,5 @@ from collections.abc import Callable
 """,
     ),
 ]
+
+RELOAD_AFTER_PATCH = "__TARGET_MODULE__"
