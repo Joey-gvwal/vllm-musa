@@ -84,6 +84,7 @@ def _apply_vllm_patches() -> None:
     global _patches_applied
     if _patches_applied:
         return
+    _patches_applied = True
 
     try:
         from .patches import apply_patches
@@ -91,8 +92,6 @@ def _apply_vllm_patches() -> None:
         apply_patches()
     except Exception as e:
         logger.error(f"Failed to apply vLLM patches: {e}")
-
-    _patches_applied = True
 
 
 def _register_patches() -> None:
