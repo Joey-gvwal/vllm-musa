@@ -446,6 +446,27 @@ def flash_mla_with_kvcache(
         or kwargs
     )
     if has_deepseek_v4_sparse_kwargs:
+        if _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK and _flash_mla_sparse_fwd is None:
+            return _torch_flash_mla_with_kvcache_sparse_fallback(
+                q=q,
+                k_cache=k_cache,
+                block_table=block_table,
+                cache_seqlens=cache_seqlens,
+                head_dim_v=head_dim_v,
+                tile_scheduler_metadata=tile_scheduler_metadata,
+                num_splits=num_splits,
+                softmax_scale=softmax_scale,
+                causal=causal,
+                is_fp8_kvcache=is_fp8_kvcache,
+                indices=indices,
+                topk_length=topk_length,
+                attn_sink=attn_sink,
+                extra_k_cache=extra_k_cache,
+                extra_indices_in_kvcache=extra_indices_in_kvcache,
+                extra_topk_length=extra_topk_length,
+                out=out,
+                **kwargs,
+            )
         if _supports_deepseek_v4_sparse_kvcache_kwargs():
             return _mate_flash_mla_with_kvcache(
                 q=q,
