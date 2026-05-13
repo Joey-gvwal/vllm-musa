@@ -38,6 +38,18 @@ from vllm_musa.v1.attention.backends.mla.flashmla_sparse import (
 """,
     ),
     (
+        """from vllm.v1.attention.ops.flashmla import (
+    flash_mla_sparse_fwd,
+    flash_mla_with_kvcache,
+)
+""",
+        """from vllm_musa.v1.attention.ops.flashmla import (
+    flash_mla_sparse_fwd,
+    flash_mla_with_kvcache,
+)
+""",
+    ),
+    (
         'assert cap is not None, "DeepseekV4 attention requires a CUDA device"',
         'assert cap is not None, "DeepseekV4 attention requires a MUSA device"',
     ),
