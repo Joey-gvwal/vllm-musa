@@ -6,6 +6,31 @@ Patch DeepSeek-V4 model CUDA-only runtime gates for MUSA.
 
 PATCHES = [
     (
+        """    @classmethod
+    def get_name(cls) -> QuantizationMethods:
+        return "deepseek_v4_fp8"
+
+    @classmethod
+    def override_quantization_method(
+""",
+        """    @classmethod
+    def get_name(cls) -> QuantizationMethods:
+        return "deepseek_v4_fp8"
+
+    @classmethod
+    def get_min_capability(cls) -> int:
+        if (
+            current_platform.is_musa()
+            or getattr(torch.version, "musa", None) is not None
+        ):
+            return 31
+        return super().get_min_capability()
+
+    @classmethod
+    def override_quantization_method(
+""",
+    ),
+    (
         """    def _check_runtime_supported(self) -> None:
         if not torch.cuda.is_available():
             raise NotImplementedError("DeepSeek V4 MegaMoE requires CUDA.")
