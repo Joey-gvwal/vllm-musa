@@ -129,7 +129,10 @@ def register_custom_ops() -> None:
 
 def register() -> str | None:
     """Compatibility platform entry point used by older vLLM plugin metadata."""
-    return musa_platform_plugin()
+    platform = musa_platform_plugin()
+    if platform is not None:
+        _apply_vllm_patches()
+    return platform
 
 
 ########### console scripts ###########
