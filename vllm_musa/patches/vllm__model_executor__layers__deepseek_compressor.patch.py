@@ -35,3 +35,5 @@ PATCHES = [
 """,
     ),
 ]
+
+RELOAD_AFTER_PATCH = True

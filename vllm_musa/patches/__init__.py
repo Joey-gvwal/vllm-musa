@@ -8,6 +8,7 @@ to ensure compatibility with the MUSA Triton version.
 """
 
 import importlib.util
+import sys
 from pathlib import Path
 
 from vllm.logger import init_logger
@@ -34,22 +35,31 @@ def _get_patch_files():
     return patch_files
 
 
-def _load_patch_config(patch_file: Path) -> list[tuple[str, str]]:
+def _load_patch_config(patch_file: Path) -> tuple[list[tuple[str, str]], list[str]]:
     """Load patch configuration from a patch file.
 
     Patch files should define a PATCHES list of (old_str, new_str) tuples.
     """
     spec = importlib.util.spec_from_file_location("patch_config", patch_file)
     if spec is None or spec.loader is None:
-        return []
+        return [], []
 
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-        return getattr(module, "PATCHES", [])
+        reload_after_patch = getattr(module, "RELOAD_AFTER_PATCH", False)
+        if reload_after_patch is True:
+            reload_targets = ["__TARGET_MODULE__"]
+        elif isinstance(reload_after_patch, str):
+            reload_targets = [reload_after_patch]
+        elif reload_after_patch:
+            reload_targets = list(reload_after_patch)
+        else:
+            reload_targets = []
+        return getattr(module, "PATCHES", []), reload_targets
     except Exception as e:
         logger.warning(f"Failed to load patch config from {patch_file}: {e}")
-        return []
+        return [], []
 
 
 def apply_patches():
@@ -91,7 +101,7 @@ def apply_patches():
                 continue
 
             # Load patches from patch file
-            patches = _load_patch_config(patch_file)
+            patches, reload_targets = _load_patch_config(patch_file)
             if not patches:
                 continue
 
@@ -117,6 +127,14 @@ def apply_patches():
                 f.write(patched_source)
 
             logger.info(f"Applied {applied_count} patch(es) to {module_name}")
+            for reload_target in reload_targets:
+                if reload_target == "__TARGET_MODULE__":
+                    reload_target = module_name
+                loaded_module = sys.modules.get(reload_target)
+                if loaded_module is None:
+                    continue
+                importlib.reload(loaded_module)
+                logger.info(f"Reloaded patched module {reload_target}")
 
         except Exception as e:
             # More detailed error handling for circular imports

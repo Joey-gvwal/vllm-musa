@@ -31,3 +31,8 @@ from vllm.triton_utils import tl, triton
 """,
     ),
 ]
+
+RELOAD_AFTER_PATCH = [
+    "__TARGET_MODULE__",
+    "vllm.v1.attention.ops.deepseek_v4_ops",
+]

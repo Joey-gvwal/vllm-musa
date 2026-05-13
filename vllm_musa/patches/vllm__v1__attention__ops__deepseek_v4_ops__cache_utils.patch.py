@@ -72,3 +72,8 @@ def _raise_musa_deepseek_v4_cache_unsupported(op_name: str) -> None:
 """,
     ),
 ]
+
+RELOAD_AFTER_PATCH = [
+    "__TARGET_MODULE__",
+    "vllm.v1.attention.ops.deepseek_v4_ops",
+]
