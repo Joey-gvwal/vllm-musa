@@ -57,11 +57,14 @@ def _musa_torch_fused_moe_fallback(
     w1_scale: torch.Tensor | None = None,
     w2_scale: torch.Tensor | None = None,
     swiglu_limit: float | None = None,
+    swiglu_alpha: float | None = None,
+    swiglu_beta: float | None = None,
 ) -> torch.Tensor:
-    activation_value = getattr(activation, "value", activation)
-    if activation_value != "silu":
+    activation_value = str(getattr(activation, "value", activation)).lower()
+    activation_value = activation_value.rsplit(".", 1)[-1]
+    if activation_value not in ("silu", "swigluoai"):
         raise NotImplementedError(
-            "MUSA torch fused-MoE fallback only supports silu/SwiGLU "
+            "MUSA torch fused-MoE fallback only supports silu/SWIGLUOAI "
             f"activation, got {activation!r}"
         )
 
@@ -109,11 +112,21 @@ def _musa_torch_fused_moe_fallback(
 
         if w1_bias is not None:
             gate_up = gate_up + w1_bias[local_expert_id].to(torch.float32)
-        gate, up = gate_up.chunk(2, dim=-1)
-        if swiglu_limit is not None and swiglu_limit > 0:
-            gate = torch.clamp(gate, max=swiglu_limit)
-            up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
-        intermediate = F.silu(gate) * up
+        if activation_value == "swigluoai":
+            gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+            limit = 7.0 if swiglu_limit is None else swiglu_limit
+            if limit > 0:
+                gate = torch.clamp(gate, max=limit)
+                up = torch.clamp(up, min=-limit, max=limit)
+            alpha = 1.702 if swiglu_alpha is None else swiglu_alpha
+            beta = 1.0 if swiglu_beta is None else swiglu_beta
+            intermediate = (up + beta) * (gate * torch.sigmoid(gate * alpha))
+        else:
+            gate, up = gate_up.chunk(2, dim=-1)
+            if swiglu_limit is not None and swiglu_limit > 0:
+                gate = torch.clamp(gate, max=swiglu_limit)
+                up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
+            intermediate = F.silu(gate) * up
 
         if _is_mxfp4_scheme(ocp_mx_scheme):
             w2_local = _dequant_mxfp4_musa(

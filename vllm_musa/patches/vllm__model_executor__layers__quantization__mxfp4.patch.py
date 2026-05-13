@@ -145,6 +145,8 @@ PATCHES = [
                 w2_bias=quant_config.w2_bias,
                 ocp_mx_scheme=quant_config.ocp_mx_scheme,
                 swiglu_limit=quant_config.gemm1_clamp_limit,
+                swiglu_alpha=quant_config.gemm1_alpha,
+                swiglu_beta=quant_config.gemm1_beta,
             )
 
         assert not self.is_monolithic
@@ -194,6 +196,20 @@ PATCHES = [
                 w2_bias=quant_config.w2_bias,
                 ocp_mx_scheme=quant_config.ocp_mx_scheme,
                 swiglu_limit=quant_config.gemm1_clamp_limit,
+                swiglu_alpha=quant_config.gemm1_alpha,
+                swiglu_beta=quant_config.gemm1_beta,
+            )
+""",
+    ),
+    (
+        """                ocp_mx_scheme=quant_config.ocp_mx_scheme,
+                swiglu_limit=quant_config.gemm1_clamp_limit,
+            )
+""",
+        """                ocp_mx_scheme=quant_config.ocp_mx_scheme,
+                swiglu_limit=quant_config.gemm1_clamp_limit,
+                swiglu_alpha=quant_config.gemm1_alpha,
+                swiglu_beta=quant_config.gemm1_beta,
             )
 """,
     ),

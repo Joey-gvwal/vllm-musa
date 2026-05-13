@@ -98,6 +98,41 @@ def test_mxfp4_moe_fallback_applies_swiglu_limit():
     torch.testing.assert_close(out, expected)
 
 
+def test_mxfp4_moe_fallback_supports_swigluoai_activation():
+    from vllm.model_executor.layers.fused_moe.activation import MoEActivation
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    hidden_states = torch.tensor([[1.0, 0.0]], dtype=torch.float32)
+    topk_weights = torch.ones((1, 1), dtype=torch.float32)
+    topk_ids = torch.zeros((1, 1), dtype=torch.int64)
+    w1 = torch.tensor(
+        [[[20.0, 0.0], [5.0, 0.0], [-20.0, 0.0], [-5.0, 0.0]]],
+        dtype=torch.float32,
+    )
+    w2 = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]], dtype=torch.float32)
+
+    out = fused_moe._musa_torch_fused_moe_fallback(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        activation=MoEActivation.SWIGLUOAI,
+        apply_router_weight_on_input=False,
+        expert_map=None,
+        w1_bias=None,
+        w2_bias=None,
+        swiglu_limit=10.0,
+        swiglu_alpha=1.702,
+        swiglu_beta=1.0,
+    )
+
+    gate = torch.tensor([[10.0, -20.0]], dtype=torch.float32)
+    up = torch.tensor([[5.0, -5.0]], dtype=torch.float32)
+    expected = (up + 1.0) * (gate * torch.sigmoid(gate * 1.702))
+    torch.testing.assert_close(out, expected)
+
+
 def test_deepgemm_post_process_upcasts_e8m0_scales_when_disabled():
     e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
     if e8m0_dtype is None:
