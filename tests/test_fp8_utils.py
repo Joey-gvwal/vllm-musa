@@ -182,3 +182,43 @@ def test_deepgemm_post_process_keeps_e8m0_scales_when_enabled():
 
     assert out_weight is weight
     assert out_scales is scales
+
+
+def test_run_deepgemm_makes_noncontiguous_input_contiguous(monkeypatch):
+    from vllm_musa.model_executor.kernels.linear.scaled_mm import deep_gemm
+
+    base = torch.arange(32, dtype=torch.bfloat16).reshape(8, 4)
+    input_ = base[::2, :]
+    assert not input_.is_contiguous()
+    assert input_.stride(-1) == 1
+
+    seen = {}
+
+    def fake_quant(x, **kwargs):
+        seen["is_contiguous"] = x.is_contiguous()
+        seen["shape"] = tuple(x.shape)
+        return (
+            torch.empty_like(x, dtype=torch.uint8),
+            torch.empty((x.shape[0], 1), dtype=torch.float32),
+        )
+
+    def fake_gemm_nt(input_pair, weight_pair, output, **kwargs):
+        del input_pair, weight_pair, kwargs
+        output.zero_()
+
+    monkeypatch.setattr(deep_gemm, "per_token_group_quant_fp8", fake_quant)
+    monkeypatch.setattr(deep_gemm, "fp8_gemm_nt", fake_gemm_nt)
+
+    weight = torch.empty((3, 4), dtype=torch.uint8)
+    weight_scale = torch.empty((3, 1), dtype=torch.float32)
+    output = deep_gemm.run_deepgemm(
+        input_,
+        weight,
+        weight_scale,
+        group_size=4,
+        use_deep_gemm_e8m0=False,
+    )
+
+    assert seen == {"is_contiguous": True, "shape": (4, 4)}
+    assert output.shape == (4, 3)
+    assert output.dtype == torch.bfloat16
