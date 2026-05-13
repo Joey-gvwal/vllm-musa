@@ -3,7 +3,7 @@
 
 import torch
 import torch.nn.functional as F
-from vllm.model_executor.layers.activation import SiluAndMul
+from vllm.model_executor.layers.activation import SiluAndMul, SiluAndMulWithClamp
 
 from vllm_musa.utils.environ import envs
 
@@ -17,3 +17,9 @@ class MusaSiluAndMul(SiluAndMul):
         # ==================== MUSA ADAPTATION ====================
         return F.swish_glu(x)
         # ========================== END ==========================
+
+
+@SiluAndMulWithClamp.register_oot
+class MusaSiluAndMulWithClamp(SiluAndMulWithClamp):
+    def forward_oot(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward_native(x)
