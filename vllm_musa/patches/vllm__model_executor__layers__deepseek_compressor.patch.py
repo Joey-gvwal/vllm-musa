@@ -93,8 +93,10 @@ def _musa_deepseek_v4_compressor_gemm(
     x: torch.Tensor,
     weight: torch.Tensor,
 ) -> torch.Tensor:
+    x_bf16 = x.to(torch.bfloat16).to(torch.float32)
+    weight_bf16 = weight.to(torch.bfloat16).to(torch.float32)
     return torch.nn.functional.linear(
-        x.to(torch.float32), weight.to(torch.float32)
+        x_bf16, weight_bf16
     )
 
 
