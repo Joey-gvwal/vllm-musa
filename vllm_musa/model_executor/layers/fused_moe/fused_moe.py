@@ -2,8 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import functools
+import os
 
 import torch
+import torch.nn.functional as F
 from vllm import _custom_ops as ops
 from vllm.model_executor.layers.fused_moe.config import _get_config_dtype_str
 from vllm.model_executor.layers.fused_moe.fused_moe import (
@@ -27,6 +29,78 @@ from vllm.platforms import current_platform
 from vllm.triton_utils import tl
 
 from vllm_musa import _custom_ops as musa_ops
+
+
+def _musa_torch_fused_moe_fallback(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    expert_map: torch.Tensor | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> torch.Tensor:
+    if activation != "silu":
+        raise NotImplementedError(
+            "MUSA torch fused-MoE fallback only supports silu/SwiGLU activation"
+        )
+
+    num_tokens, hidden_size = hidden_states.shape
+    top_k = topk_ids.shape[1]
+    out_size = w2.shape[1]
+    flat_hidden = (
+        hidden_states[:, None, :]
+        .expand(num_tokens, top_k, hidden_size)
+        .reshape(num_tokens * top_k, hidden_size)
+    )
+    flat_ids = topk_ids.reshape(-1)
+    flat_weights = topk_weights.reshape(-1).to(torch.float32)
+    flat_out = torch.zeros(
+        (num_tokens * top_k, out_size), device=hidden_states.device, dtype=torch.float32
+    )
+
+    for global_expert_id in torch.unique(flat_ids).to(torch.long).tolist():
+        if global_expert_id < 0:
+            continue
+        local_expert_id = global_expert_id
+        if expert_map is not None:
+            if global_expert_id >= expert_map.numel():
+                continue
+            local_expert_id = int(expert_map[global_expert_id].item())
+            if local_expert_id < 0:
+                continue
+        if local_expert_id >= w1.shape[0]:
+            continue
+
+        mask = flat_ids == global_expert_id
+        x = flat_hidden[mask].to(torch.float32)
+        router_weight = flat_weights[mask].unsqueeze(-1)
+        if apply_router_weight_on_input:
+            x = x * router_weight
+
+        gate_up = x.matmul(w1[local_expert_id].to(torch.float32).transpose(0, 1))
+        if w1_bias is not None:
+            gate_up = gate_up + w1_bias[local_expert_id].to(torch.float32)
+        gate, up = gate_up.chunk(2, dim=-1)
+        intermediate = F.silu(gate) * up
+
+        expert_out = intermediate.matmul(
+            w2[local_expert_id].to(torch.float32).transpose(0, 1)
+        )
+        if w2_bias is not None:
+            expert_out = expert_out + w2_bias[local_expert_id].to(torch.float32)
+        if not apply_router_weight_on_input:
+            expert_out = expert_out * router_weight
+        flat_out[mask] = expert_out
+
+    return (
+        flat_out.view(num_tokens, top_k, out_size)
+        .sum(dim=1)
+        .to(hidden_states.dtype)
+    )
 
 
 def _dequant_mxfp4_musa(
@@ -248,6 +322,27 @@ def fused_experts_impl(
             w2_scale = None
         else:
             raise NotImplementedError(f"Unsupported ocp_mx_scheme={ocp_mx_scheme}")
+
+    musa_gemv = getattr(
+        getattr(torch.ops, "_C_musa_ops", None), "musa_fused_gemv_moe", None
+    )
+    if (
+        current_platform.is_musa()
+        and os.getenv("VLLM_MUSA_ENABLE_MXFP4_MOE_FALLBACK", "0") == "1"
+        and musa_gemv is None
+    ):
+        return _musa_torch_fused_moe_fallback(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            expert_map=expert_map,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+        )
 
     # ==================== MUSA ADAPTATION ====================
     # Due to the implementation of 0.20.0 relying on per_token_group_quant,
