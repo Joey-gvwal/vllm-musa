@@ -70,6 +70,7 @@ def apply_patches():
     global _patches_applied
     if _patches_applied:
         return
+    _patches_applied = True
 
     patch_files = _get_patch_files()
 
@@ -145,5 +146,3 @@ def apply_patches():
                 )
             else:
                 logger.warning(f"Failed to apply patches to {module_name}: {e}")
-
-    _patches_applied = True
