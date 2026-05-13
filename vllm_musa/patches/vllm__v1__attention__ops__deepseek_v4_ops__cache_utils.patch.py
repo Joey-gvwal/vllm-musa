@@ -188,15 +188,9 @@ def _musa_combine_topk_swa_indices_fallback(
             pos = start_pos + token_idx - query_start
             topk_len = min((pos + 1) // int(compress_ratio), int(topk))
             swa_len = min(pos + 1, int(window_size))
-            valid_topk_count = 0
             if topk_len > 0:
                 topk_values = topk_indices[token_idx, :topk_len].to(torch.int32)
-                valid_topk = topk_values >= 0
-                valid_topk_count = int(valid_topk.sum().item())
-                if valid_topk_count > 0:
-                    combined_indices[token_idx, :valid_topk_count] = (
-                        topk_values[valid_topk] + req_offset
-                    )
+                combined_indices[token_idx, :topk_len] = topk_values + req_offset
             if swa_len > 0:
                 swa_values = (
                     torch.arange(swa_len, device=topk_indices.device, dtype=torch.int32)
@@ -209,9 +203,9 @@ def _musa_combine_topk_swa_indices_fallback(
                 )
                 combined_indices[
                     token_idx,
-                    valid_topk_count : valid_topk_count + swa_len,
+                    topk_len : topk_len + swa_len,
                 ] = swa_values
-            combined_lens[token_idx] = valid_topk_count + swa_len
+            combined_lens[token_idx] = topk_len + swa_len
     return combined_indices, combined_lens
 """,
     ),

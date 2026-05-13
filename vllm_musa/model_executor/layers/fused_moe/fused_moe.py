@@ -56,10 +56,13 @@ def _musa_torch_fused_moe_fallback(
     ocp_mx_scheme: str | None = None,
     w1_scale: torch.Tensor | None = None,
     w2_scale: torch.Tensor | None = None,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor:
-    if activation != "silu":
+    activation_value = getattr(activation, "value", activation)
+    if activation_value != "silu":
         raise NotImplementedError(
-            "MUSA torch fused-MoE fallback only supports silu/SwiGLU activation"
+            "MUSA torch fused-MoE fallback only supports silu/SwiGLU "
+            f"activation, got {activation!r}"
         )
 
     num_tokens, hidden_size = hidden_states.shape
@@ -107,6 +110,9 @@ def _musa_torch_fused_moe_fallback(
         if w1_bias is not None:
             gate_up = gate_up + w1_bias[local_expert_id].to(torch.float32)
         gate, up = gate_up.chunk(2, dim=-1)
+        if swiglu_limit is not None and swiglu_limit > 0:
+            gate = torch.clamp(gate, max=swiglu_limit)
+            up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
         intermediate = F.silu(gate) * up
 
         if _is_mxfp4_scheme(ocp_mx_scheme):
@@ -381,6 +387,7 @@ def fused_experts_impl(
             ocp_mx_scheme=ocp_mx_scheme,
             w1_scale=w1_scale,
             w2_scale=w2_scale,
+            swiglu_limit=None,
         )
 
     # ==================== MUSA ADAPTATION ====================

@@ -52,7 +52,7 @@ def test_mxfp4_moe_fallback_dequants_selected_experts_only(monkeypatch):
         w2=w2,
         topk_weights=topk_weights,
         topk_ids=topk_ids,
-        activation="silu",
+        activation=type("FakeSiluActivation", (), {"value": "silu"})(),
         apply_router_weight_on_input=False,
         expert_map=None,
         w1_bias=None,
@@ -64,6 +64,38 @@ def test_mxfp4_moe_fallback_dequants_selected_experts_only(monkeypatch):
 
     assert out.shape == hidden_states.shape
     assert calls == [(64, 16), (32, 16)]
+
+
+def test_mxfp4_moe_fallback_applies_swiglu_limit():
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    hidden_states = torch.tensor([[1.0, 0.0]], dtype=torch.float32)
+    topk_weights = torch.ones((1, 1), dtype=torch.float32)
+    topk_ids = torch.zeros((1, 1), dtype=torch.int64)
+    w1 = torch.tensor(
+        [[[20.0, 0.0], [5.0, 0.0], [20.0, 0.0], [-20.0, 0.0]]],
+        dtype=torch.float32,
+    )
+    w2 = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]], dtype=torch.float32)
+
+    out = fused_moe._musa_torch_fused_moe_fallback(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        activation="silu",
+        apply_router_weight_on_input=False,
+        expert_map=None,
+        w1_bias=None,
+        w2_bias=None,
+        swiglu_limit=10.0,
+    )
+
+    gate = torch.tensor([[10.0, 5.0]], dtype=torch.float32)
+    up = torch.tensor([[10.0, -10.0]], dtype=torch.float32)
+    expected = torch.nn.functional.silu(gate) * up
+    torch.testing.assert_close(out, expected)
 
 
 def test_deepgemm_post_process_upcasts_e8m0_scales_when_disabled():
