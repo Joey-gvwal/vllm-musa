@@ -82,7 +82,8 @@ def _musa_torch_fused_moe_fallback(
         (num_tokens * top_k, out_size), device=hidden_states.device, dtype=torch.float32
     )
 
-    for global_expert_id in torch.unique(flat_ids).to(torch.long).tolist():
+    unique_expert_ids = sorted({int(expert_id) for expert_id in flat_ids.cpu().tolist()})
+    for global_expert_id in unique_expert_ids:
         if global_expert_id < 0:
             continue
         local_expert_id = global_expert_id
