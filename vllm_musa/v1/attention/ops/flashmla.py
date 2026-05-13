@@ -14,9 +14,64 @@ except ImportError as e:
         "MUSA platform requires MATE to be installed. Please install mate first."
     ) from e
 
-flash_mla_with_kvcache = _mate_flashmla.flash_mla_with_kvcache
+_mate_flash_mla_with_kvcache = _mate_flashmla.flash_mla_with_kvcache
 get_mla_metadata = _mate_flashmla.get_mla_metadata
 _flash_mla_sparse_fwd = getattr(_mate_flashmla, "flash_mla_sparse_fwd", None)
+
+
+def _raise_deepseek_v4_sparse_flashmla_unavailable() -> None:
+    raise RuntimeError(
+        "DeepSeek-V4 sparse FlashMLA on MUSA requires a provider that supports "
+        "`flash_mla_sparse_fwd` and the sparse `flash_mla_with_kvcache` kwargs "
+        "used by upstream vLLM (`topk_length`, `attn_sink`, extra cache/index "
+        "arguments, and `out`). The installed MATE FlashMLA exposes only the "
+        "dense/standard sparse kvcache interface."
+    )
+
+
+def flash_mla_with_kvcache(
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    block_table: torch.Tensor | None,
+    cache_seqlens: torch.Tensor | None,
+    head_dim_v: int,
+    tile_scheduler_metadata: torch.Tensor,
+    num_splits: torch.Tensor | None = None,
+    softmax_scale: float | None = None,
+    causal: bool = False,
+    is_fp8_kvcache: bool = False,
+    indices: torch.Tensor | None = None,
+    topk_length: torch.Tensor | None = None,
+    attn_sink: torch.Tensor | None = None,
+    extra_k_cache: torch.Tensor | None = None,
+    extra_indices_in_kvcache: torch.Tensor | None = None,
+    extra_topk_length: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if (
+        topk_length is not None
+        or attn_sink is not None
+        or extra_k_cache is not None
+        or extra_indices_in_kvcache is not None
+        or extra_topk_length is not None
+        or out is not None
+        or kwargs
+    ):
+        _raise_deepseek_v4_sparse_flashmla_unavailable()
+    return _mate_flash_mla_with_kvcache(
+        q=q,
+        k_cache=k_cache,
+        block_table=block_table,
+        cache_seqlens=cache_seqlens,
+        head_dim_v=head_dim_v,
+        tile_scheduler_metadata=tile_scheduler_metadata,
+        num_splits=num_splits,
+        softmax_scale=softmax_scale,
+        causal=causal,
+        is_fp8_kvcache=is_fp8_kvcache,
+        indices=indices,
+    )
 
 
 # vllm.v1.Attention.ops.flashmla will be registered and used earlier than this patch, but it will not affect
