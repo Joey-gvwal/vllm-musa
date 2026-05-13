@@ -130,8 +130,11 @@ def _musa_fused_deepseek_v4_qnorm_rope_kv_insert_fallback(
     q_float = q.to(torch.float32)
     variance = q_float.pow(2).mean(dim=-1, keepdim=True)
     q_float = q_float * torch.rsqrt(variance + eps)
-    q.copy_(_musa_deepseek_v4_apply_gptj_rope(q_float, positions, cos_sin_cache).to(q.dtype))
-    kv_rope = _musa_deepseek_v4_apply_gptj_rope(kv, positions, cos_sin_cache)
+    q_rope = _musa_deepseek_v4_apply_gptj_rope(q_float, positions, cos_sin_cache)
+    q.copy_(q_rope.to(q.dtype))
+    kv_rope = _musa_deepseek_v4_apply_gptj_rope(kv, positions, cos_sin_cache).to(
+        kv.dtype
+    )
     _musa_deepseek_v4_quant_insert(kv_rope, k_cache_2d, slot_mapping, block_size)
 """,
     ),
