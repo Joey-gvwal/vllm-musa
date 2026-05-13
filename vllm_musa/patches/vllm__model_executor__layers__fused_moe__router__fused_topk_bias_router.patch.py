@@ -15,6 +15,15 @@ from collections.abc import Callable
 """,
     ),
     (
+        """import vllm._custom_ops as ops
+import vllm.envs as envs
+""",
+        """import vllm._custom_ops as ops
+import vllm.envs as envs
+from vllm.platforms import current_platform
+""",
+    ),
+    (
         """    ops.topk_hash_softplus_sqrt(
         topk_weights,
         topk_indices,
@@ -31,7 +40,8 @@ from collections.abc import Callable
 """,
         """    if (
         (
-            gating_output.device.type == "musa"
+            current_platform.is_musa()
+            or gating_output.device.type == "musa"
             or getattr(torch.version, "musa", None) is not None
         )
         and os.getenv(
