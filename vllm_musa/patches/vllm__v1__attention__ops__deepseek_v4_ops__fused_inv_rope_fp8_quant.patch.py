@@ -145,6 +145,7 @@ logger = init_logger(__name__)
         return fp8_buf.transpose(0, 1), scale_buf.transpose(0, 1)
     from vllm.utils.deep_gemm import get_tma_aligned_size
 
+    # Shape setup for the native Triton path.
     num_tokens, num_heads, head_dim = o.shape
 """,
     ),
