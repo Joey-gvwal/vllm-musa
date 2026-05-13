@@ -397,6 +397,31 @@ def _musa_fill_exact_sparse_indexer_indices(
                 )
 """,
     ),
+    (
+        """        elif (
+            current_platform.is_musa()
+            and os.getenv(
+                "VLLM_MUSA_ENABLE_TORCH_SPARSE_ATTN_INDEXER_FALLBACK",
+                "0",
+            )
+            == "1"
+        ):
+            logger.warning_once(
+                "Using opt-in MUSA DeepSeek-V4 sparse-attention indexer "
+                "fallback. It selects a bounded recent compressed-token "
+                "window instead of learned global sparse picks; this is "
+                "diagnostic, not a production indexer backend."
+            )
+            return _musa_fill_recent_sparse_indexer_indices(
+                hidden_states,
+                self.k_cache.prefix,
+                self.topk_tokens,
+                self.topk_indices_buffer,
+            )
+""",
+        """        # Removed stale MUSA recent-window sparse-indexer branch.
+""",
+    ),
 ]
 
 RELOAD_AFTER_PATCH = True
