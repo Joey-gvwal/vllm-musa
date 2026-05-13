@@ -8,6 +8,13 @@ from vllm.model_executor.layers.layernorm import RMSNorm, fused_add_rms_norm
 from vllm_musa.utils.environ import envs
 
 
+def _vllm_fused_add_rms_norm_available() -> bool:
+    return (
+        getattr(getattr(torch.ops, "_C", None), "fused_add_rms_norm", None)
+        is not None
+    )
+
+
 @RMSNorm.register_oot
 class MusaRMSNorm(RMSNorm):
     def forward_oot(
@@ -24,6 +31,8 @@ class MusaRMSNorm(RMSNorm):
 
         add_residual = residual is not None
         if add_residual:
+            if not _vllm_fused_add_rms_norm_available():
+                return self.forward_native(x, residual)
             return fused_add_rms_norm(
                 x, residual, self.weight.data, self.variance_epsilon
             )
