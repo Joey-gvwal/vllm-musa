@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import inspect
+
 import torch
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
@@ -17,6 +19,14 @@ except ImportError as e:
 _mate_flash_mla_with_kvcache = _mate_flashmla.flash_mla_with_kvcache
 get_mla_metadata = _mate_flashmla.get_mla_metadata
 _flash_mla_sparse_fwd = getattr(_mate_flashmla, "flash_mla_sparse_fwd", None)
+_DEEPSEEK_V4_SPARSE_KVCACHE_KWARGS = {
+    "topk_length",
+    "attn_sink",
+    "extra_k_cache",
+    "extra_indices_in_kvcache",
+    "extra_topk_length",
+    "out",
+}
 
 
 def _raise_deepseek_v4_sparse_flashmla_unavailable() -> None:
@@ -27,6 +37,17 @@ def _raise_deepseek_v4_sparse_flashmla_unavailable() -> None:
         "arguments, and `out`). The installed MATE FlashMLA exposes only the "
         "dense/standard sparse kvcache interface."
     )
+
+
+def _supports_deepseek_v4_sparse_kvcache_kwargs() -> bool:
+    try:
+        signature = inspect.signature(_mate_flash_mla_with_kvcache)
+    except (TypeError, ValueError):
+        return False
+    parameters = signature.parameters.values()
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return True
+    return _DEEPSEEK_V4_SPARSE_KVCACHE_KWARGS.issubset(signature.parameters)
 
 
 def flash_mla_with_kvcache(
@@ -85,6 +106,12 @@ def _is_flashmla_sparse_available() -> tuple[bool, str | None]:
             False,
             "MATE does not expose flash_mla_sparse_fwd; DeepSeek-V4 sparse "
             "FlashMLA requires a MUSA sparse FlashMLA implementation.",
+        )
+    if not _supports_deepseek_v4_sparse_kvcache_kwargs():
+        return (
+            False,
+            "MATE flash_mla_with_kvcache does not support the DeepSeek-V4 "
+            "sparse FlashMLA kwargs required by upstream vLLM.",
         )
     return True, None
 
