@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import os
+
 import torch
+from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     get_fp8_min_max,
 )
 from vllm.platforms import current_platform
 from vllm.utils.deep_gemm import get_tma_aligned_size, is_deep_gemm_e8m0_used
+
+logger = init_logger(__name__)
 
 
 def deepgemm_post_process_fp8_weight_block(
@@ -17,6 +22,28 @@ def deepgemm_post_process_fp8_weight_block(
     bmm_batch_size: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     return wq, ws
+
+
+def _torch_per_token_group_quant_fp8(
+    x: torch.Tensor,
+    x_q: torch.Tensor,
+    x_s: torch.Tensor,
+    group_size: int,
+    eps: float,
+    fp8_min: float,
+    fp8_max: float,
+    use_ue8m0: bool,
+) -> None:
+    groups = x.reshape(-1, group_size).to(torch.float32)
+    scale_raw = torch.clamp(groups.abs().amax(dim=-1) / fp8_max, min=eps)
+    if use_ue8m0:
+        scale = torch.exp2(torch.ceil(torch.log2(scale_raw)))
+    else:
+        scale = scale_raw
+
+    q = (groups / scale.unsqueeze(-1)).clamp(fp8_min, fp8_max).to(x_q.dtype)
+    x_q.copy_(q.reshape_as(x_q))
+    x_s.copy_(scale.reshape_as(x_s))
 
 
 def per_token_group_quant_fp8(
@@ -94,18 +121,50 @@ def per_token_group_quant_fp8(
                 f"Got tensor with {x.dim()} dimensions, shape={x.shape}"
             )
 
-        torch.ops._C_musa_ops.per_token_group_fp8_quant(
-            x,
-            x_q,
-            x_s,
-            group_size,
-            eps,
-            fp8_min,
-            fp8_max,
-            use_ue8m0,
-            column_major_scales,
-            tma_aligned_scales,
+        quant_op = getattr(
+            getattr(torch.ops, "_C_musa_ops", None),
+            "per_token_group_fp8_quant",
+            None,
         )
+        if quant_op is None:
+            if (
+                os.getenv(
+                    "VLLM_MUSA_ENABLE_TORCH_FP8_GROUP_QUANT_FALLBACK", "0"
+                )
+                != "1"
+            ):
+                raise AttributeError(
+                    "'_OpNamespace' '_C_musa_ops' object has no attribute "
+                    "'per_token_group_fp8_quant'"
+                )
+            logger.warning_once(
+                "Using opt-in MUSA torch per-token-group FP8 quant fallback. "
+                "This is diagnostic and not a production replacement for the "
+                "native _C_musa_ops.per_token_group_fp8_quant kernel."
+            )
+            _torch_per_token_group_quant_fp8(
+                x,
+                x_q,
+                x_s,
+                group_size,
+                eps,
+                fp8_min,
+                fp8_max,
+                use_ue8m0,
+            )
+        else:
+            quant_op(
+                x,
+                x_q,
+                x_s,
+                group_size,
+                eps,
+                fp8_min,
+                fp8_max,
+                use_ue8m0,
+                column_major_scales,
+                tma_aligned_scales,
+            )
         return x_q, x_s.contiguous()
 
     # TRITON FALLBACK
