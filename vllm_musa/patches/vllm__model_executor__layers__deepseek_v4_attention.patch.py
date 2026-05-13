@@ -6,6 +6,22 @@ Patch DeepSeek-V4 attention to use MUSA sparse FlashMLA backend shims.
 
 PATCHES = [
     (
+        """from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+""",
+        """import os
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+""",
+    ),
+    (
+        """from vllm.logger import init_logger
+""",
+        """from vllm.logger import init_logger
+from vllm.platforms import current_platform
+""",
+    ),
+    (
         """from vllm.v1.attention.backends.mla.flashmla_sparse import (
     DeepseekV4FlashMLASparseBackend,
     FlashMLASparseBackend,
@@ -136,6 +152,93 @@ def _musa_fused_deepseek_v4_qnorm_rope_kv_insert_fallback(
         kv.dtype
     )
     _musa_deepseek_v4_quant_insert(kv_rope, k_cache_2d, slot_mapping, block_size)
+
+
+def _musa_deepseek_v4_dequant_activation(
+    a: torch.Tensor,
+    a_scale: torch.Tensor,
+) -> torch.Tensor:
+    group_size = 128
+    bsz, groups, hidden = a.shape
+    scale_blocks = hidden // group_size
+    a_blocks = a.to(torch.float32).reshape(bsz, groups, scale_blocks, group_size)
+    return (a_blocks * a_scale.to(torch.float32).unsqueeze(-1)).reshape(
+        bsz, groups, hidden
+    )
+
+
+def _musa_deepseek_v4_dequant_weight(
+    b: torch.Tensor,
+    b_scale: torch.Tensor,
+) -> torch.Tensor:
+    group_size = 128
+    groups, out_dim, in_dim = b.shape
+    out_blocks = out_dim // group_size
+    in_blocks = in_dim // group_size
+    scales = b_scale.to(torch.float32)
+    if scales.dim() == 2:
+        scales = scales.reshape(groups, out_blocks, in_blocks)
+    elif scales.shape == (groups, in_blocks, out_blocks):
+        scales = scales.transpose(-1, -2)
+    assert scales.shape == (groups, out_blocks, in_blocks)
+    b_blocks = b.to(torch.float32).reshape(
+        groups, out_blocks, group_size, in_blocks, group_size
+    )
+    return (b_blocks * scales[:, :, None, :, None]).reshape(groups, out_dim, in_dim)
+
+
+def _musa_deepseek_v4_fp8_einsum_fallback(
+    a: torch.Tensor,
+    a_scale: torch.Tensor,
+    b: torch.Tensor,
+    b_scale: torch.Tensor,
+    out: torch.Tensor,
+    equation: str,
+) -> None:
+    if equation != "bhr,hdr->bhd":
+        raise NotImplementedError(
+            f"MUSA DeepSeek-V4 FP8 einsum fallback does not support {equation!r}"
+        )
+    a_deq = _musa_deepseek_v4_dequant_activation(a, a_scale)
+    b_deq = _musa_deepseek_v4_dequant_weight(b, b_scale)
+    out.copy_(torch.einsum(equation, a_deq, b_deq).to(out.dtype))
+""",
+    ),
+    (
+        """def deepseek_v4_fp8_einsum(
+    a: torch.Tensor,
+    a_scale: torch.Tensor,
+    b: torch.Tensor,
+    b_scale: torch.Tensor,
+    out: torch.Tensor,
+    equation: str,
+    recipe: list[int],
+) -> None:
+    fp8_einsum(equation, (a, a_scale), (b, b_scale), out, recipe=tuple(recipe))
+""",
+        """def deepseek_v4_fp8_einsum(
+    a: torch.Tensor,
+    a_scale: torch.Tensor,
+    b: torch.Tensor,
+    b_scale: torch.Tensor,
+    out: torch.Tensor,
+    equation: str,
+    recipe: list[int],
+) -> None:
+    if (
+        current_platform.is_musa()
+        and os.getenv("VLLM_MUSA_ENABLE_TORCH_FP8_EINSUM_FALLBACK", "0") == "1"
+    ):
+        logger.warning_once(
+            "Using opt-in MUSA torch DeepSeek-V4 FP8 einsum fallback. "
+            "This dequantizes FP8 operands and runs torch.einsum; it is "
+            "diagnostic, not a production DeepGEMM replacement."
+        )
+        _musa_deepseek_v4_fp8_einsum_fallback(
+            a, a_scale, b, b_scale, out, equation
+        )
+        return
+    fp8_einsum(equation, (a, a_scale), (b, b_scale), out, recipe=tuple(recipe))
 """,
     ),
     (
