@@ -170,13 +170,45 @@ def _musa_deepseek_v4_dequant_activation(
 def _musa_deepseek_v4_dequant_weight(
     b: torch.Tensor,
     b_scale: torch.Tensor,
+    groups: int,
 ) -> torch.Tensor:
     group_size = 128
-    groups, out_dim, in_dim = b.shape
+    if b.dim() == 2:
+        flat_out_dim, in_dim = b.shape
+        if flat_out_dim % groups != 0:
+            raise ValueError(
+                "MUSA DeepSeek-V4 FP8 einsum fallback expected 2D weight "
+                f"rows to be divisible by groups={groups}, got {b.shape}"
+            )
+        out_dim = flat_out_dim // groups
+        b = b.reshape(groups, out_dim, in_dim)
+    elif b.dim() == 3:
+        b_groups, out_dim, in_dim = b.shape
+        if b_groups != groups:
+            raise ValueError(
+                "MUSA DeepSeek-V4 FP8 einsum fallback group mismatch: "
+                f"a/groups={groups}, b/groups={b_groups}"
+            )
+    else:
+        raise ValueError(
+            "MUSA DeepSeek-V4 FP8 einsum fallback expects a 2D or 3D "
+            f"weight tensor, got shape={tuple(b.shape)}"
+        )
     out_blocks = out_dim // group_size
     in_blocks = in_dim // group_size
-    scales = b_scale.to(torch.float32)
+    e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
+    if e8m0_dtype is not None and b_scale.dtype == e8m0_dtype:
+        exp_bits = b_scale.view(torch.uint8).to(torch.int32)
+        scales = (exp_bits << 23).view(torch.float32)
+    else:
+        scales = b_scale.to(torch.float32)
     if scales.dim() == 2:
+        if scales.numel() != groups * out_blocks * in_blocks:
+            raise ValueError(
+                "MUSA DeepSeek-V4 FP8 einsum fallback scale element mismatch: "
+                f"scale_shape={tuple(b_scale.shape)}, expected elements="
+                f"{groups * out_blocks * in_blocks}"
+            )
         scales = scales.reshape(groups, out_blocks, in_blocks)
     elif scales.shape == (groups, in_blocks, out_blocks):
         scales = scales.transpose(-1, -2)
@@ -200,7 +232,7 @@ def _musa_deepseek_v4_fp8_einsum_fallback(
             f"MUSA DeepSeek-V4 FP8 einsum fallback does not support {equation!r}"
         )
     a_deq = _musa_deepseek_v4_dequant_activation(a, a_scale)
-    b_deq = _musa_deepseek_v4_dequant_weight(b, b_scale)
+    b_deq = _musa_deepseek_v4_dequant_weight(b, b_scale, a.shape[1])
     out.copy_(torch.einsum(equation, a_deq, b_deq).to(out.dtype))
 """,
     ),
