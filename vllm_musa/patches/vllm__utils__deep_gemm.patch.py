@@ -21,6 +21,41 @@ PATCHES = [
         "mk_align_size = 128",
     ),
     (
+        """        use_e8m0 = (
+            envs.VLLM_USE_DEEP_GEMM_E8M0
+            and is_deep_gemm_supported()
+            and (_fp8_gemm_nt_impl is not None)
+        )
+""",
+        """        use_e8m0 = (
+            envs.VLLM_USE_DEEP_GEMM_E8M0
+            and (
+                not current_platform.is_musa()
+                or envs.is_set("VLLM_USE_DEEP_GEMM_E8M0")
+            )
+            and is_deep_gemm_supported()
+            and (_fp8_gemm_nt_impl is not None)
+        )
+""",
+    ),
+    (
+        """    if envs.VLLM_USE_DEEP_GEMM_E8M0:
+        logger.info_once("DeepGEMM E8M0 enabled on current platform.")
+        return True
+""",
+        """    if current_platform.is_musa() and not envs.is_set("VLLM_USE_DEEP_GEMM_E8M0"):
+        logger.info_once(
+            "DeepGEMM E8M0 disabled by default on MUSA. Set "
+            "VLLM_USE_DEEP_GEMM_E8M0=1 to opt in."
+        )
+        return False
+
+    if envs.VLLM_USE_DEEP_GEMM_E8M0:
+        logger.info_once("DeepGEMM E8M0 enabled on current platform.")
+        return True
+""",
+    ),
+    (
         """    _lazy_init()
     if _tf32_hc_prenorm_gemm_impl is None:
         return _missing()

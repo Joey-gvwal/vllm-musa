@@ -3,6 +3,7 @@
 """Tests for the MUSA Platform implementation."""
 
 import sys
+from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -258,6 +259,39 @@ class TestMUSAPlatformBase:
         assert str(vllm_musa.Path(vllm_musa.__file__).resolve().parent / "include") in (
             include_paths
         )
+
+    def test_config_patch_disables_auto_ue8m0_on_musa(self):
+        from vllm_musa.patches import _load_patch_config
+
+        patch_file = (
+            Path(__file__).parents[1]
+            / "vllm_musa"
+            / "patches"
+            / "vllm__transformers_utils__config.patch.py"
+        )
+        patches, reload_targets = _load_patch_config(patch_file)
+
+        assert reload_targets == []
+        assert len(patches) == 1
+        old, new = patches[0]
+        assert 'os.environ["VLLM_USE_DEEP_GEMM_E8M0"] = "1"' in old
+        assert 'is_musa = getattr(torch.version, "musa", None) is not None' in new
+        assert 'os.environ["VLLM_USE_DEEP_GEMM_E8M0"] = "0"' in new
+
+    def test_deep_gemm_patch_requires_explicit_ue8m0_opt_in_on_musa(self):
+        from vllm_musa.patches import _load_patch_config
+
+        patch_file = (
+            Path(__file__).parents[1]
+            / "vllm_musa"
+            / "patches"
+            / "vllm__utils__deep_gemm.patch.py"
+        )
+        patches, _ = _load_patch_config(patch_file)
+
+        patch_text = "\n".join(new for _, new in patches)
+        assert 'envs.is_set("VLLM_USE_DEEP_GEMM_E8M0")' in patch_text
+        assert "DeepGEMM E8M0 disabled by default on MUSA" in patch_text
 
 
 class TestNonMtmlMUSAPlatform:
