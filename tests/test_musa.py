@@ -238,6 +238,27 @@ class TestMUSAPlatformBase:
             "--offload-arch=mp_42",
         ]
 
+    def test_patch_mate_tvm_ffi_musa_include_extends_jit_path(self, monkeypatch):
+        mate = ModuleType("mate")
+        jit = ModuleType("mate.jit")
+        cpp_ext = ModuleType("mate.jit.cpp_ext")
+        cpp_ext._resolve_include_paths = lambda extra_include_dirs: ["/base/include"]
+        mate.jit = jit
+        jit.cpp_ext = cpp_ext
+        monkeypatch.setitem(sys.modules, "mate", mate)
+        monkeypatch.setitem(sys.modules, "mate.jit", jit)
+        monkeypatch.setitem(sys.modules, "mate.jit.cpp_ext", cpp_ext)
+
+        import vllm_musa
+
+        vllm_musa._patch_mate_tvm_ffi_musa_include()
+        include_paths = cpp_ext._resolve_include_paths(None)
+
+        assert "/base/include" in include_paths
+        assert str(vllm_musa.Path(vllm_musa.__file__).resolve().parent / "include") in (
+            include_paths
+        )
+
 
 class TestNonMtmlMUSAPlatform:
     """Tests for NonMtmlMUSAPlatform class."""

@@ -108,6 +108,35 @@ def _patch_tvm_ffi_musa_extension() -> None:
 
 _patch_tvm_ffi_musa_extension()
 
+
+def _patch_mate_tvm_ffi_musa_include() -> None:
+    """Expose bundled TVM-FFI MUSA compatibility headers to MATE JIT."""
+    try:
+        import mate.jit.cpp_ext as mate_cpp_ext
+    except Exception:
+        return
+
+    if getattr(mate_cpp_ext, "_vllm_musa_include_patched", False):
+        return
+
+    include_dir = Path(__file__).resolve().parent / "include"
+    header = include_dir / "tvm" / "ffi" / "extra" / "musa" / "device_guard.h"
+    if not header.exists():
+        return
+
+    original_resolve_include_paths = mate_cpp_ext._resolve_include_paths
+
+    def _resolve_include_paths(extra_include_dirs):
+        include_paths = original_resolve_include_paths(extra_include_dirs)
+        include_paths.append(str(include_dir))
+        return list(dict.fromkeys(include_paths))
+
+    mate_cpp_ext._resolve_include_paths = _resolve_include_paths
+    mate_cpp_ext._vllm_musa_include_patched = True
+
+
+_patch_mate_tvm_ffi_musa_include()
+
 # Track whether patches have been applied in this process
 _patches_applied = False
 
