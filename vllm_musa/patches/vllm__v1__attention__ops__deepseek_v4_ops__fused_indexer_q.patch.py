@@ -121,9 +121,12 @@ def _musa_fused_indexer_q_rope_quant_fallback(
     torch.Tensor | tuple[torch.Tensor, torch.Tensor],
     torch.Tensor,
 ]:
-    assert positions.ndim == 1
-    assert index_q.ndim == 3
-    assert index_q_cos_sin_cache.ndim == 2
+    if (
+        positions.ndim != 1
+        or index_q.ndim != 3
+        or index_q_cos_sin_cache.ndim != 2
+    ):
+        raise AssertionError("unexpected DeepSeek-V4 indexer Q fallback shape")
     q_rope = _musa_apply_indexer_gptj_rope(
         index_q, positions, index_q_cos_sin_cache
     )
