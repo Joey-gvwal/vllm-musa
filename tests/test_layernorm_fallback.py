@@ -8,8 +8,13 @@ import torch
 def test_musa_rmsnorm_residual_uses_native_when_vllm_fused_op_missing(monkeypatch):
     from vllm_musa.model_executor.layers import layernorm
 
-    norm = layernorm.MusaRMSNorm(hidden_size=2, eps=1e-6)
-    norm.weight.data = torch.tensor([1.25, 0.75])
+    norm = object.__new__(layernorm.MusaRMSNorm)
+    torch.nn.Module.__init__(norm)
+    norm.hidden_size = 2
+    norm.variance_epsilon = 1e-6
+    norm.variance_size_override = None
+    norm.has_weight = True
+    norm.weight = torch.nn.Parameter(torch.tensor([1.25, 0.75]))
     x = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
     residual = torch.tensor([[0.5, -1.0], [1.0, -0.5]], dtype=torch.float32)
 
