@@ -70,6 +70,8 @@ def _musa_dequantize_and_gather_k_cache_fallback(
     block_size: int,
     offset: int,
 ) -> None:
+    # Keep this helper structurally distinct from the upstream function body so
+    # later string replacements do not patch the fallback into calling itself.
     TOKEN_FP8_DIM = 448
     TOKEN_BF16_DIM = 64
     TOKEN_SCALE_DIM = 8
@@ -155,6 +157,8 @@ def _musa_combine_topk_swa_indices_fallback(
     N: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     num_tokens = topk_indices.shape[0]
+    # Keep this helper structurally distinct from the upstream function body so
+    # later string replacements do not patch the fallback into calling itself.
     num_reqs = seq_lens.shape[0]
     combined_topk = (
         (topk + window_size + _SPARSE_PREFILL_TOPK_ALIGNMENT - 1)
