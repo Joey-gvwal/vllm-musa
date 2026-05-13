@@ -103,8 +103,11 @@ def _torch_flash_mla_sparse_fwd(
     # kernel-specific log-base conventions.
     logits = torch.einsum("thd,tkd->thk", q.to(torch.float32), gathered) * sm_scale
     logits = logits.masked_fill(~valid.unsqueeze(1), -float("inf"))
+    no_key_mask = ~valid.any(dim=-1)
     orig_lse = torch.logsumexp(logits, dim=-1)
     max_logits = torch.max(logits, dim=-1).values
+    orig_lse = orig_lse.masked_fill(no_key_mask[:, None], -float("inf"))
+    max_logits = max_logits.masked_fill(no_key_mask[:, None], -float("inf"))
     lse_for_o = orig_lse
     if attn_sink is not None:
         sink = attn_sink[:num_heads].to(torch.float32).view(1, num_heads)
@@ -113,13 +116,12 @@ def _torch_flash_mla_sparse_fwd(
             dim=0,
         )
 
-    no_key_mask = ~valid.any(dim=-1)
     lse_for_o = lse_for_o.masked_fill(torch.isneginf(lse_for_o), float("inf"))
     weights = torch.exp(logits - lse_for_o.unsqueeze(-1))
     weights = weights.masked_fill(~valid.unsqueeze(1), 0.0)
     result = torch.einsum("thk,tkd->thd", weights, gathered[:, :, :d_v])
     result = result.masked_fill(no_key_mask[:, None, None], 0.0).to(q.dtype)
-    lse = orig_lse.masked_fill(torch.isneginf(orig_lse), float("inf"))
+    lse = orig_lse.masked_fill(no_key_mask[:, None], float("inf"))
     if out is not None:
         out.copy_(result)
         result = out
@@ -390,13 +392,14 @@ def _torch_flash_mla_with_kvcache_sparse_fallback(
     value = gathered[:, :, :head_dim_v]
     logits = torch.einsum("qhd,qkd->qhk", q_flat, key) * softmax_scale
     logits = logits.masked_fill(~valid.unsqueeze(1), -float("inf"))
+    no_key_mask = ~valid.any(dim=-1)
     key_lse = torch.logsumexp(logits, dim=-1)
+    key_lse = key_lse.masked_fill(no_key_mask[:, None], -float("inf"))
     lse_for_o = key_lse
     if attn_sink is not None:
         sink = attn_sink[:num_heads].to(torch.float32).view(1, num_heads)
         lse_for_o = torch.logaddexp(key_lse, sink.expand(num_queries, -1))
 
-    no_key_mask = ~valid.any(dim=-1)
     lse_for_o = lse_for_o.masked_fill(torch.isneginf(lse_for_o), float("inf"))
     weights = torch.exp(logits - lse_for_o.unsqueeze(-1))
     weights = weights.masked_fill(~valid.unsqueeze(1), 0.0)
@@ -404,7 +407,7 @@ def _torch_flash_mla_with_kvcache_sparse_fallback(
     result = result.masked_fill(no_key_mask[:, None, None], 0.0)
     result = result.reshape(batch, seq_len, num_heads, head_dim_v).to(q.dtype)
     lse = (
-        key_lse.masked_fill(torch.isneginf(key_lse), float("inf"))
+        key_lse.masked_fill(no_key_mask[:, None], float("inf"))
         .reshape(batch, seq_len, num_heads)
         .permute(0, 2, 1)
         .contiguous()
