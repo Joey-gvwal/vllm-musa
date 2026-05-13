@@ -137,9 +137,10 @@ def _dequant_mxfp4_musa(
 def _musa_mxfp4_scale_to_float(scale: torch.Tensor) -> torch.Tensor:
     e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
     if e8m0_dtype is not None and scale.dtype == e8m0_dtype:
-        return scale.to(torch.float32)
+        scale_bytes = scale.view(torch.uint8)
+        return (scale_bytes.to(torch.int32) << 23).view(torch.float32)
     if scale.dtype == torch.uint8:
-        return torch.exp2(scale.to(torch.float32) - 127.0)
+        return (scale.to(torch.int32) << 23).view(torch.float32)
     return scale.to(torch.float32)
 
 
