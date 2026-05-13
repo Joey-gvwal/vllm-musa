@@ -89,6 +89,15 @@ def _musa_deepseek_v4_e2m1_nibble(x: torch.Tensor) -> torch.Tensor:
     return code | (sign << 3)
 
 
+def _musa_deepseek_v4_compressor_gemm(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+) -> torch.Tensor:
+    return torch.nn.functional.linear(
+        x.to(torch.float32), weight.to(torch.float32)
+    )
+
+
 def _musa_deepseek_v4_store_sparse_kv(
     normed: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -219,7 +228,9 @@ def _musa_deepseek_v4_compressor_forward(
     rotary_emb,
 ) -> None:
     num_tokens, _ = x.shape
-    kv_score = cublas_gemm_bf16_bf16_fp32(x, module.fused_wkv_wgate.weight)
+    kv_score = _musa_deepseek_v4_compressor_gemm(
+        x, module.fused_wkv_wgate.weight
+    )
     kv, score = kv_score.split(
         [module.coff * module.head_dim, module.coff * module.head_dim],
         dim=-1,
