@@ -6,6 +6,95 @@ Patch DeepSeek-V4 model CUDA-only runtime gates for MUSA.
 
 PATCHES = [
     (
+        """import typing
+from collections.abc import Callable, Iterable
+""",
+        """import os
+import typing
+from collections.abc import Callable, Iterable
+""",
+    ),
+    (
+        """from vllm.model_executor.layers.fused_moe.router.fused_topk_bias_router import (
+    fused_topk_bias,
+)
+""",
+        """from vllm.model_executor.layers.fused_moe.router import (
+    fused_topk_bias_router as _musa_fused_topk_bias_router,
+)
+from vllm.model_executor.layers.fused_moe.router.fused_topk_bias_router import (
+    fused_topk_bias,
+)
+""",
+    ),
+    (
+        """from .utils import (
+    AutoWeightsLoader,
+    WeightsMapper,
+    extract_layer_index,
+    make_layers,
+    maybe_prefix,
+)
+""",
+        """from .utils import (
+    AutoWeightsLoader,
+    WeightsMapper,
+    extract_layer_index,
+    make_layers,
+    maybe_prefix,
+)
+
+
+def _musa_deepseek_v4_topk_softplus_sqrt_fallback(
+    topk_weights: torch.Tensor,
+    topk_indices: torch.Tensor,
+    token_expert_indices: torch.Tensor,
+    gating_output: torch.Tensor,
+    renormalize: bool = False,
+    e_score_correction_bias: torch.Tensor | None = None,
+    input_tokens: torch.Tensor | None = None,
+    hash_indices_table: torch.Tensor | None = None,
+    routed_scaling_factor: float = 1.0,
+) -> tuple[torch.Tensor, ...]:
+    scores = F.softplus(gating_output).sqrt()
+    scores_for_choice = scores.view(-1, scores.shape[-1])
+    if e_score_correction_bias is not None:
+        scores_for_choice = scores_for_choice + e_score_correction_bias.unsqueeze(0)
+    if hash_indices_table is not None:
+        if input_tokens is None:
+            raise ValueError(
+                "input_tokens is required when hash_indices_table is provided"
+            )
+        topk_selected = hash_indices_table[input_tokens]
+    else:
+        topk_selected = torch.topk(
+            scores_for_choice,
+            k=topk_indices.shape[1],
+            dim=-1,
+            sorted=_musa_fused_topk_bias_router.envs.VLLM_BATCH_INVARIANT,
+        )[1]
+    selected_weights = scores.gather(1, topk_selected.to(torch.long))
+    if renormalize:
+        selected_weights = selected_weights / selected_weights.sum(
+            dim=-1, keepdim=True
+        )
+    if routed_scaling_factor != 1.0:
+        selected_weights = selected_weights * routed_scaling_factor
+    topk_weights.copy_(selected_weights.to(topk_weights.dtype))
+    topk_indices.copy_(topk_selected.to(topk_indices.dtype))
+    token_expert_indices.copy_(topk_selected.to(token_expert_indices.dtype))
+    return topk_weights, topk_indices
+
+
+if (
+    current_platform.is_musa() or getattr(torch.version, "musa", None) is not None
+) and os.getenv("VLLM_MUSA_ENABLE_TORCH_TOPK_SOFTPLUS_SQRT_FALLBACK", "0") == "1":
+    _musa_fused_topk_bias_router.vllm_topk_softplus_sqrt = (
+        _musa_deepseek_v4_topk_softplus_sqrt_fallback
+    )
+""",
+    ),
+    (
         """    @classmethod
     def get_name(cls) -> QuantizationMethods:
         return "deepseek_v4_fp8"
