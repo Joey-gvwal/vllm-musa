@@ -7,7 +7,10 @@ This module contains patches that modify vLLM source files at runtime
 to ensure compatibility with the MUSA Triton version.
 """
 
+import contextlib
+import fcntl
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +19,17 @@ from vllm.logger import init_logger
 logger = init_logger(__name__)
 
 _patches_applied = False
+
+
+@contextlib.contextmanager
+def _patch_file_lock():
+    lock_path = Path(os.getenv("VLLM_MUSA_PATCH_LOCK", "/tmp/vllm_musa_patches.lock"))
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def _get_patch_files():
@@ -70,7 +84,16 @@ def apply_patches():
     global _patches_applied
     if _patches_applied:
         return
-    _patches_applied = True
+
+    with _patch_file_lock():
+        if _patches_applied:
+            return
+        _patches_applied = True
+        _apply_patches_unlocked()
+
+
+def _apply_patches_unlocked():
+    """Apply patches while holding the cross-process patch lock."""
 
     patch_files = _get_patch_files()
 
@@ -107,7 +130,9 @@ def apply_patches():
                 continue
 
             # Check if any patches are needed
-            needs_patch = any(old in source for old, new in patches)
+            needs_patch = any(
+                old in source and new not in source for old, new in patches
+            )
             if not needs_patch:
                 logger.debug(f"No patches needed for {module_name}")
                 continue
@@ -116,7 +141,7 @@ def apply_patches():
             patched_source = source
             applied_count = 0
             for old, new in patches:
-                if old in patched_source:
+                if old in patched_source and new not in patched_source:
                     patched_source = patched_source.replace(old, new)
                     applied_count += 1
 
