@@ -21,7 +21,11 @@ from vllm.triton_utils import tl, triton
 
     num_tokens, num_heads, head_dim = o.shape
 """,
-        """    if current_platform.is_musa() or o.device.type == "musa":
+        """    if (
+        current_platform.is_musa()
+        or getattr(torch.version, "musa", None) is not None
+        or o.device.type == "musa"
+    ):
         raise NotImplementedError(
             "DeepSeek-V4 fused_inv_rope_fp8_quant is not implemented for "
             "MUSA yet. A MUSA-safe inverse-RoPE, FP8 quantization, and "

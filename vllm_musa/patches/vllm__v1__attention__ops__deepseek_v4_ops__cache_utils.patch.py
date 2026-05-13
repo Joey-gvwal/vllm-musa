@@ -23,6 +23,14 @@ def _raise_musa_deepseek_v4_cache_unsupported(op_name: str) -> None:
         "or sparse prefill index implementation is required before model "
         "execution can proceed."
     )
+
+
+def _is_musa_tensor(tensor: torch.Tensor) -> bool:
+    return (
+        current_platform.is_musa()
+        or getattr(torch.version, "musa", None) is not None
+        or tensor.device.type == "musa"
+    )
 """,
     ),
     (
@@ -30,7 +38,7 @@ def _raise_musa_deepseek_v4_cache_unsupported(op_name: str) -> None:
         f"K must be [num_tokens, 512], got {k.shape}"
     )
 """,
-        """    if current_platform.is_musa() or k.device.type == "musa":
+        """    if _is_musa_tensor(k):
         _raise_musa_deepseek_v4_cache_unsupported("quantize_and_insert_k_cache")
     assert k.dim() == 2 and k.shape[1] == 512, (
         f"K must be [num_tokens, 512], got {k.shape}"
@@ -43,7 +51,7 @@ def _raise_musa_deepseek_v4_cache_unsupported(op_name: str) -> None:
     TOKEN_BF16_DIM = 64
 """,
         """) -> None:
-    if current_platform.is_musa() or out.device.type == "musa":
+    if _is_musa_tensor(out):
         _raise_musa_deepseek_v4_cache_unsupported("dequantize_and_gather_k_cache")
     TOKEN_FP8_DIM = 448
     TOKEN_BF16_DIM = 64
@@ -53,7 +61,7 @@ def _raise_musa_deepseek_v4_cache_unsupported(op_name: str) -> None:
         """    num_tokens = topk_indices.shape[0]
     global_topk_indices = torch.empty_like(topk_indices)
 """,
-        """    if current_platform.is_musa() or topk_indices.device.type == "musa":
+        """    if _is_musa_tensor(topk_indices):
         _raise_musa_deepseek_v4_cache_unsupported(
             "compute_global_topk_indices_and_lens"
         )
@@ -65,7 +73,7 @@ def _raise_musa_deepseek_v4_cache_unsupported(op_name: str) -> None:
         """    num_tokens = topk_indices.shape[0]
     num_reqs = seq_lens.shape[0]
 """,
-        """    if current_platform.is_musa() or topk_indices.device.type == "musa":
+        """    if _is_musa_tensor(topk_indices):
         _raise_musa_deepseek_v4_cache_unsupported("combine_topk_swa_indices")
     num_tokens = topk_indices.shape[0]
     num_reqs = seq_lens.shape[0]

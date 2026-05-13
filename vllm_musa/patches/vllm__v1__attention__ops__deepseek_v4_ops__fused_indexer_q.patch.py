@@ -20,7 +20,11 @@ from vllm.triton_utils import tl, triton
         """    assert positions.ndim == 1
     assert index_q.ndim == 3
 """,
-        """    if current_platform.is_musa() or index_q.device.type == "musa":
+        """    if (
+        current_platform.is_musa()
+        or getattr(torch.version, "musa", None) is not None
+        or index_q.device.type == "musa"
+    ):
         raise NotImplementedError(
             "DeepSeek-V4 fused_indexer_q_rope_quant is not implemented for "
             "MUSA yet. A MUSA-safe sparse indexer Q RoPE/FP8-or-MXFP4 "

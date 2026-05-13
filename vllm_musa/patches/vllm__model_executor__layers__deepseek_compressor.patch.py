@@ -24,7 +24,11 @@ PATCHES = [
         positions: torch.Tensor,
         rotary_emb,
     ) -> None:
-        if current_platform.is_musa() or x.device.type == "musa":
+        if (
+            current_platform.is_musa()
+            or getattr(torch.version, "musa", None) is not None
+            or x.device.type == "musa"
+        ):
             raise NotImplementedError(
                 "DeepSeek-V4 compressor/cache updates are not implemented for "
                 "MUSA yet. A MUSA implementation of the fused compress, "

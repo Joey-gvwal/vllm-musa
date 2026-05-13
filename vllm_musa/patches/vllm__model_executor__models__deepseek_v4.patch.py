@@ -24,7 +24,11 @@ PATCHES = [
 """,
         """    def _check_runtime_supported(self) -> None:
         device = self.w13_weight.device
-        if current_platform.is_musa() or device.type == "musa":
+        if (
+            current_platform.is_musa()
+            or getattr(torch.version, "musa", None) is not None
+            or device.type == "musa"
+        ):
             raise NotImplementedError(
                 "DeepSeek V4 MegaMoE is not implemented for MUSA yet. "
                 "A MUSA fp8_fp4_mega_moe or supported replacement path is "
