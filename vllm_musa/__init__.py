@@ -13,6 +13,8 @@ Usage:
 """
 
 import logging
+import os
+from pathlib import Path
 
 __all__ = [
     "MUSAPlatform",
@@ -37,6 +39,74 @@ try:
     _torchada_available = True
 except ImportError:
     _torchada_available = False
+
+
+def _patch_tvm_ffi_musa_extension() -> None:
+    """Provide MUSA helpers expected by MATE on older TVM-FFI builds."""
+    try:
+        import tvm_ffi.cpp.extension as tvm_ffi_ext
+    except Exception:
+        return
+
+    if not hasattr(tvm_ffi_ext, "_find_musa_home"):
+
+        def _find_musa_home() -> str:
+            for env_name in ("MUSA_HOME", "MUSA_PATH"):
+                musa_home = os.environ.get(env_name)
+                if musa_home:
+                    return musa_home
+
+            for candidate in ("/usr/local/musa", "/opt/musa"):
+                if (Path(candidate) / "bin" / "mcc").exists():
+                    return candidate
+
+            raise RuntimeError(
+                "Could not find MUSA installation. Please set MUSA_HOME."
+            )
+
+        tvm_ffi_ext._find_musa_home = _find_musa_home
+
+    if not hasattr(tvm_ffi_ext, "_get_musa_target"):
+
+        def _normalize_musa_arch(arch: str) -> str:
+            arch = arch.strip()
+            if arch.startswith("mp_"):
+                return arch
+            return f"mp_{arch.replace('.', '')}"
+
+        def _get_musa_target() -> list[str]:
+            arch_list = (
+                os.environ.get("TVM_FFI_MUSA_ARCH_LIST")
+                or os.environ.get("MUSA_ARCH_LIST")
+                or os.environ.get("TORCH_MUSA_ARCH_LIST")
+            )
+            if arch_list:
+                arches = arch_list.replace(",", " ").split()
+            else:
+                arches = []
+                try:
+                    import torch
+
+                    if hasattr(torch, "musa") and torch.musa.is_available():
+                        get_arch_list = getattr(torch.musa, "get_arch_list", None)
+                        if callable(get_arch_list):
+                            arches = list(get_arch_list())
+                        if not arches:
+                            major, minor = torch.musa.get_device_capability()
+                            arches = [f"{major}{minor}"]
+                except Exception:
+                    arches = []
+
+            return [
+                f"--offload-arch={_normalize_musa_arch(str(arch))}"
+                for arch in arches
+                if str(arch).strip()
+            ]
+
+        tvm_ffi_ext._get_musa_target = _get_musa_target
+
+
+_patch_tvm_ffi_musa_extension()
 
 # Track whether patches have been applied in this process
 _patches_applied = False

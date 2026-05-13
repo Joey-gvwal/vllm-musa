@@ -3,6 +3,7 @@
 """Tests for the MUSA Platform implementation."""
 
 import sys
+from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -214,6 +215,28 @@ class TestMUSAPlatformBase:
 
         assert reason is not None
         assert "Triton float8 conversions" in reason
+
+    def test_patch_tvm_ffi_musa_extension_provides_mate_helpers(self, monkeypatch):
+        tvm_ffi = ModuleType("tvm_ffi")
+        cpp = ModuleType("tvm_ffi.cpp")
+        extension = ModuleType("tvm_ffi.cpp.extension")
+        tvm_ffi.cpp = cpp
+        cpp.extension = extension
+        monkeypatch.setitem(sys.modules, "tvm_ffi", tvm_ffi)
+        monkeypatch.setitem(sys.modules, "tvm_ffi.cpp", cpp)
+        monkeypatch.setitem(sys.modules, "tvm_ffi.cpp.extension", extension)
+        monkeypatch.setenv("MUSA_HOME", "/custom/musa")
+        monkeypatch.setenv("TVM_FFI_MUSA_ARCH_LIST", "31 mp_42")
+
+        import vllm_musa
+
+        vllm_musa._patch_tvm_ffi_musa_extension()
+
+        assert extension._find_musa_home() == "/custom/musa"
+        assert extension._get_musa_target() == [
+            "--offload-arch=mp_31",
+            "--offload-arch=mp_42",
+        ]
 
 
 class TestNonMtmlMUSAPlatform:
