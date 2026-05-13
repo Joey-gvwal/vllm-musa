@@ -56,6 +56,16 @@ else:
 """,
     ),
     (
+        """    class _MUSATilelangStub:
+        class PassConfigKey:
+""",
+        """    class _MUSATilelangStub:
+        JITKernel = object
+
+        class PassConfigKey:
+""",
+    ),
+    (
         """    # Validate shapes
     assert residual.dtype == torch.bfloat16
 """,
