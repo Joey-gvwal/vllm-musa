@@ -209,86 +209,6 @@ def _musa_combine_topk_swa_indices_fallback(
     return combined_indices, combined_lens
 
 
-def _musa_combine_topk_swa_indices_vectorized(
-    topk_indices: torch.Tensor,
-    query_start_loc: torch.Tensor,
-    seq_lens: torch.Tensor,
-    gather_lens: torch.Tensor,
-    window_size: int,
-    compress_ratio: int,
-    topk: int,
-    M: int,
-    N: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    num_tokens = topk_indices.shape[0]
-    num_reqs = seq_lens.shape[0]
-    combined_topk = (
-        (topk + window_size + _SPARSE_PREFILL_TOPK_ALIGNMENT - 1)
-        // _SPARSE_PREFILL_TOPK_ALIGNMENT
-        * _SPARSE_PREFILL_TOPK_ALIGNMENT
-    )
-    combined_indices = torch.full(
-        (num_tokens, combined_topk),
-        fill_value=-1,
-        dtype=torch.int32,
-        device=topk_indices.device,
-    )
-    if num_tokens == 0:
-        return combined_indices, torch.zeros(
-            num_tokens, dtype=torch.int32, device=topk_indices.device
-        )
-
-    base = query_start_loc[0]
-    query_starts = (query_start_loc[:-1] - base).to(torch.long)
-    query_ends = (query_start_loc[1:] - base).to(torch.long)
-    query_lens = query_ends - query_starts
-    req_ids = torch.repeat_interleave(
-        torch.arange(num_reqs, device=topk_indices.device, dtype=torch.long),
-        query_lens,
-    )
-    token_offsets = (
-        torch.arange(num_tokens, device=topk_indices.device, dtype=torch.long)
-        - query_starts[req_ids]
-    )
-    seq_lens_per_token = seq_lens.to(torch.long)[req_ids]
-    gather_lens_per_token = gather_lens.to(torch.long)[req_ids]
-    pos = seq_lens_per_token - query_lens[req_ids] + token_offsets
-    gather_start = seq_lens_per_token - gather_lens_per_token
-    topk_lens = torch.clamp((pos + 1) // int(compress_ratio), min=0, max=int(topk))
-    swa_lens = torch.clamp(pos + 1, min=0, max=int(window_size))
-    combined_lens = (topk_lens + swa_lens).to(torch.int32)
-
-    cols = torch.arange(combined_topk, device=topk_indices.device, dtype=torch.long)
-    req_offsets = (
-        torch.arange(num_reqs, device=topk_indices.device, dtype=torch.long) * int(M)
-    )[req_ids]
-
-    topk_mask = cols.unsqueeze(0) < topk_lens.unsqueeze(1)
-    topk_cols = cols.clamp(max=max(int(topk) - 1, 0))
-    topk_values = topk_indices[:, topk_cols].to(torch.long) + req_offsets.unsqueeze(1)
-    combined_indices = torch.where(
-        topk_mask,
-        topk_values.to(torch.int32),
-        combined_indices,
-    )
-
-    swa_cols = cols.unsqueeze(0) - topk_lens.unsqueeze(1)
-    swa_mask = (swa_cols >= 0) & (swa_cols < swa_lens.unsqueeze(1))
-    swa_values = (
-        swa_cols
-        + req_offsets.unsqueeze(1)
-        + int(N)
-        + pos.unsqueeze(1)
-        - swa_lens.unsqueeze(1)
-        + 1
-        - gather_start.unsqueeze(1)
-    )
-    combined_indices = torch.where(
-        swa_mask,
-        swa_values.to(torch.int32),
-        combined_indices,
-    )
-    return combined_indices, combined_lens
 """,
     ),
     (
@@ -348,21 +268,6 @@ def _musa_combine_topk_swa_indices_vectorized(
         """    if _is_musa_tensor(topk_indices):
         if _musa_deepseek_v4_cache_fallback_enabled():
             _musa_warn_cache_fallback_once("combine_topk_swa_indices")
-            impl = os.getenv(
-                "VLLM_MUSA_DEEPSEEK_V4_COMBINE_TOPK_SWA_IMPL", "loop"
-            ).strip().lower()
-            if impl in {"vectorized", "vec"}:
-                return _musa_combine_topk_swa_indices_vectorized(
-                    topk_indices,
-                    query_start_loc,
-                    seq_lens,
-                    gather_lens,
-                    window_size,
-                    compress_ratio,
-                    topk,
-                    M,
-                    N,
-                )
             return _musa_combine_topk_swa_indices_fallback(
                 topk_indices,
                 query_start_loc,
