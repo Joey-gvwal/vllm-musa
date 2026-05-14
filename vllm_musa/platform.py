@@ -19,6 +19,13 @@ from vllm.logger import init_logger
 from vllm.platforms.interface import DeviceCapability, Platform, PlatformEnum
 from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
 
+from vllm_musa.deepseek_v4_fallbacks import (
+    DEEPSEEK_V4_CORRECTNESS_FALLBACK_DEFAULTS as _DEEPSEEK_V4_CORRECTNESS_FALLBACK_DEFAULTS,
+)
+from vllm_musa.deepseek_v4_fallbacks import (
+    enable_deepseek_v4_sparse_correctness_fallbacks as _enable_deepseek_v4_sparse_correctness_fallbacks,
+)
+
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
     from vllm.config.cache import CacheDType
@@ -283,6 +290,7 @@ class MUSAPlatformBase(Platform):
                 if getattr(vllm_config.model_config.hf_config, "model_type", None) == (
                     "deepseek_v4"
                 ):
+                    _enable_deepseek_v4_sparse_correctness_fallbacks(logger)
                     _force_deepseek_v4_sparse_correctness_eager(vllm_config)
 
         scheduler_config = vllm_config.scheduler_config

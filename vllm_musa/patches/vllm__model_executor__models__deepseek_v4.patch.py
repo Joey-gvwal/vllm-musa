@@ -35,6 +35,10 @@ from vllm.model_executor.layers.fused_moe.router.fused_topk_bias_router import (
     make_layers,
     maybe_prefix,
 )
+
+from vllm_musa.deepseek_v4_fallbacks import (
+    enable_deepseek_v4_sparse_correctness_fallbacks as _musa_enable_deepseek_v4_sparse_correctness_fallbacks,
+)
 """,
         """from .utils import (
     AutoWeightsLoader,
@@ -85,6 +89,9 @@ def _musa_deepseek_v4_topk_softplus_sqrt_fallback(
     token_expert_indices.copy_(topk_selected.to(token_expert_indices.dtype))
     return topk_weights, topk_indices
 
+
+if current_platform.is_musa() or getattr(torch.version, "musa", None) is not None:
+    _musa_enable_deepseek_v4_sparse_correctness_fallbacks()
 
 if (
     current_platform.is_musa() or getattr(torch.version, "musa", None) is not None

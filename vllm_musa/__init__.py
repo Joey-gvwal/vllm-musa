@@ -27,6 +27,19 @@ __version__ = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
+
+def _enable_mxfp4_moe_fallback_default() -> None:
+    name = "VLLM_MUSA_ENABLE_MXFP4_MOE_FALLBACK"
+    if name not in os.environ:
+        os.environ[name] = "1"
+        logger.warning(
+            "Enabling MUSA MXFP4 MoE correctness fallback by default. "
+            "This is required before DeepSeek-V4 model construction reaches "
+            "MXFP4 backend selection; set %s=0 before startup to opt out.",
+            name,
+        )
+
+
 # Import torchada early to ensure torch.device patching happens before
 # any torch.device("cuda:X") calls in vLLM. This is critical for MUSA
 # to work correctly - it patches torch.cuda to redirect to MUSA.
@@ -219,6 +232,7 @@ def register_custom_ops() -> None:
     It applies vLLM source patches and registers all MUSA-specific ops,
     distributed connectors, and attention backends.
     """
+    _enable_mxfp4_moe_fallback_default()
     _register_patches()
     _register_ops()
     _register_modules()
@@ -229,6 +243,7 @@ def register() -> str | None:
     """Compatibility platform entry point used by older vLLM plugin metadata."""
     platform = musa_platform_plugin()
     if platform is not None:
+        _enable_mxfp4_moe_fallback_default()
         _apply_vllm_patches()
     return platform
 

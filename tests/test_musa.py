@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Tests for the MUSA Platform implementation."""
 
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -219,6 +220,24 @@ class TestMUSAPlatformBase:
         assert config.compilation_config.max_cudagraph_capture_size == 0
         assert config.compilation_config.cudagraph_capture_sizes == []
         assert config.compilation_config.cudagraph_num_of_warmups == 0
+
+    def test_deepseek_v4_sparse_correctness_fallback_defaults(self, monkeypatch):
+        from vllm_musa.platform import (
+            _DEEPSEEK_V4_CORRECTNESS_FALLBACK_DEFAULTS,
+            _enable_deepseek_v4_sparse_correctness_fallbacks,
+        )
+
+        for name in _DEEPSEEK_V4_CORRECTNESS_FALLBACK_DEFAULTS:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("VLLM_MUSA_ENABLE_TORCH_FP8_EINSUM_FALLBACK", "0")
+
+        _enable_deepseek_v4_sparse_correctness_fallbacks()
+
+        for name, value in _DEEPSEEK_V4_CORRECTNESS_FALLBACK_DEFAULTS.items():
+            expected = (
+                "0" if name == "VLLM_MUSA_ENABLE_TORCH_FP8_EINSUM_FALLBACK" else value
+            )
+            assert os.environ[name] == expected
 
     def test_turboquant_rejects_k8v4_on_musa(self):
         import torch
