@@ -52,25 +52,6 @@ def _is_mxfp4_scheme(ocp_mx_scheme: str | None) -> bool:
     return ocp_mx_scheme in _MXFP4_SCHEMES
 
 
-def _musa_fused_moe_local_expert_ids(
-    flat_ids: torch.Tensor,
-    expert_map: torch.Tensor | None,
-    local_num_experts: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if expert_map is None:
-        local_ids = flat_ids
-    elif expert_map.numel() == 0:
-        local_ids = torch.full_like(flat_ids, -1)
-    else:
-        in_map = (flat_ids >= 0) & (flat_ids < expert_map.numel())
-        safe_ids = flat_ids.clamp(min=0, max=expert_map.numel() - 1)
-        mapped = expert_map[safe_ids].to(flat_ids.dtype)
-        local_ids = torch.where(in_map, mapped, torch.full_like(flat_ids, -1))
-
-    valid = (local_ids >= 0) & (local_ids < local_num_experts)
-    return local_ids, torch.unique(local_ids[valid], sorted=True)
-
-
 def _musa_torch_fused_moe_fallback(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -111,12 +92,21 @@ def _musa_torch_fused_moe_fallback(
         (num_tokens * top_k, out_size), device=hidden_states.device, dtype=torch.float32
     )
 
-    local_ids, selected_local_ids = _musa_fused_moe_local_expert_ids(
-        flat_ids, expert_map, w1.shape[0]
-    )
-    for local_expert_id in selected_local_ids:
-        expert_index = local_expert_id.to(torch.long).view(1)
-        mask = local_ids == local_expert_id
+    unique_expert_ids = sorted({int(expert_id) for expert_id in flat_ids.cpu().tolist()})
+    for global_expert_id in unique_expert_ids:
+        if global_expert_id < 0:
+            continue
+        local_expert_id = global_expert_id
+        if expert_map is not None:
+            if global_expert_id >= expert_map.numel():
+                continue
+            local_expert_id = int(expert_map[global_expert_id].item())
+            if local_expert_id < 0:
+                continue
+        if local_expert_id >= w1.shape[0]:
+            continue
+
+        mask = flat_ids == global_expert_id
         x = flat_hidden[mask].to(torch.float32)
         router_weight = flat_weights[mask].unsqueeze(-1)
         if apply_router_weight_on_input:
@@ -124,19 +114,15 @@ def _musa_torch_fused_moe_fallback(
 
         if _is_mxfp4_scheme(ocp_mx_scheme):
             w1_local = _dequant_mxfp4_musa(
-                w1.index_select(0, expert_index).squeeze(0),
-                w1_scale.index_select(0, expert_index).squeeze(0),
-                torch.float32,
+                w1[local_expert_id], w1_scale[local_expert_id], torch.float32
             )
         else:
-            w1_local = w1.index_select(0, expert_index).squeeze(0).to(torch.float32)
+            w1_local = w1[local_expert_id].to(torch.float32)
         gate_up = x.matmul(w1_local.transpose(0, 1))
         del w1_local
 
         if w1_bias is not None:
-            gate_up = gate_up + w1_bias.index_select(0, expert_index).squeeze(0).to(
-                torch.float32
-            )
+            gate_up = gate_up + w1_bias[local_expert_id].to(torch.float32)
         if activation_value == "swigluoai":
             gate, up = gate_up[..., ::2], gate_up[..., 1::2]
             limit = 7.0 if swiglu_limit is None else swiglu_limit
@@ -155,19 +141,15 @@ def _musa_torch_fused_moe_fallback(
 
         if _is_mxfp4_scheme(ocp_mx_scheme):
             w2_local = _dequant_mxfp4_musa(
-                w2.index_select(0, expert_index).squeeze(0),
-                w2_scale.index_select(0, expert_index).squeeze(0),
-                torch.float32,
+                w2[local_expert_id], w2_scale[local_expert_id], torch.float32
             )
         else:
-            w2_local = w2.index_select(0, expert_index).squeeze(0).to(torch.float32)
+            w2_local = w2[local_expert_id].to(torch.float32)
         expert_out = intermediate.matmul(w2_local.transpose(0, 1))
         del w2_local
 
         if w2_bias is not None:
-            expert_out = expert_out + w2_bias.index_select(0, expert_index).squeeze(
-                0
-            ).to(torch.float32)
+            expert_out = expert_out + w2_bias[local_expert_id].to(torch.float32)
         if not apply_router_weight_on_input:
             expert_out = expert_out * router_weight
         flat_out[mask] = expert_out
