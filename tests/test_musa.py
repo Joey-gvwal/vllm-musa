@@ -239,6 +239,26 @@ class TestMUSAPlatformBase:
             )
             assert os.environ[name] == expected
 
+    def test_deepseek_v4_model_patch_inserts_fallback_defaults_on_clean_source(self):
+        from vllm_musa.patches import _load_patch_config
+
+        patch_file = (
+            Path(__file__).parents[1]
+            / "vllm_musa"
+            / "patches"
+            / "vllm__model_executor__models__deepseek_v4.patch.py"
+        )
+        patches, _ = _load_patch_config(patch_file)
+        old, new = next(
+            (old, new)
+            for old, new in patches
+            if "_musa_deepseek_v4_topk_softplus_sqrt_fallback" in new
+        )
+
+        assert "vllm_musa.deepseek_v4_fallbacks" not in old
+        assert "from vllm_musa.deepseek_v4_fallbacks import" in new
+        assert "_musa_enable_deepseek_v4_sparse_correctness_fallbacks()" in new
+
     def test_turboquant_rejects_k8v4_on_musa(self):
         import torch
         from vllm.platforms.interface import DeviceCapability

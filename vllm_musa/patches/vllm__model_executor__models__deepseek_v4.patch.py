@@ -35,10 +35,6 @@ from vllm.model_executor.layers.fused_moe.router.fused_topk_bias_router import (
     make_layers,
     maybe_prefix,
 )
-
-from vllm_musa.deepseek_v4_fallbacks import (
-    enable_deepseek_v4_sparse_correctness_fallbacks as _musa_enable_deepseek_v4_sparse_correctness_fallbacks,
-)
 """,
         """from .utils import (
     AutoWeightsLoader,
@@ -46,6 +42,10 @@ from vllm_musa.deepseek_v4_fallbacks import (
     extract_layer_index,
     make_layers,
     maybe_prefix,
+)
+
+from vllm_musa.deepseek_v4_fallbacks import (
+    enable_deepseek_v4_sparse_correctness_fallbacks as _musa_enable_deepseek_v4_sparse_correctness_fallbacks,
 )
 
 
