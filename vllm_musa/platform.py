@@ -41,6 +41,29 @@ def _get_sparse_mla_block_size(hf_config) -> int:
     return 64
 
 
+def _force_deepseek_v4_sparse_correctness_eager(vllm_config: "VllmConfig") -> None:
+    from vllm.config.compilation import CUDAGraphMode, CompilationMode
+
+    model_config = vllm_config.model_config
+    compilation_config = vllm_config.compilation_config
+
+    if not model_config.enforce_eager:
+        model_config.enforce_eager = True
+        logger.warning(
+            "Forcing eager execution for DeepSeek-V4 sparse FlashMLA on MUSA. "
+            "The current vllm-musa path uses torch correctness providers for "
+            "sparse FlashMLA and DeepSeek-V4 cache/indexer fallbacks; "
+            "CUDAGraph/torch.compile remains disabled until fused "
+            "graph-safe MUSA kernels are available."
+        )
+
+    compilation_config.mode = CompilationMode.NONE
+    compilation_config.cudagraph_mode = CUDAGraphMode.NONE
+    compilation_config.max_cudagraph_capture_size = 0
+    compilation_config.cudagraph_capture_sizes = []
+    compilation_config.cudagraph_num_of_warmups = 0
+
+
 @cache
 def _get_backend_priorities(
     use_mla: bool,
@@ -257,6 +280,10 @@ class MUSAPlatformBase(Platform):
                         "Forcing kv cache block size to %s for FlashMLASparse backend.",
                         sparse_block_size,
                     )
+                if getattr(vllm_config.model_config.hf_config, "model_type", None) == (
+                    "deepseek_v4"
+                ):
+                    _force_deepseek_v4_sparse_correctness_eager(vllm_config)
 
         scheduler_config = vllm_config.scheduler_config
         # Note: model_config may be None during testing

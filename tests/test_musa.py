@@ -195,6 +195,31 @@ class TestMUSAPlatformBase:
             == 64
         )
 
+    def test_deepseek_v4_sparse_correctness_provider_forces_eager(self):
+        from vllm.config.compilation import CUDAGraphMode, CompilationMode
+
+        from vllm_musa.platform import _force_deepseek_v4_sparse_correctness_eager
+
+        config = SimpleNamespace(
+            model_config=SimpleNamespace(enforce_eager=False),
+            compilation_config=SimpleNamespace(
+                mode=CompilationMode.VLLM_COMPILE,
+                cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+                max_cudagraph_capture_size=256,
+                cudagraph_capture_sizes=[1, 2, 4],
+                cudagraph_num_of_warmups=1,
+            ),
+        )
+
+        _force_deepseek_v4_sparse_correctness_eager(config)
+
+        assert config.model_config.enforce_eager is True
+        assert config.compilation_config.mode == CompilationMode.NONE
+        assert config.compilation_config.cudagraph_mode == CUDAGraphMode.NONE
+        assert config.compilation_config.max_cudagraph_capture_size == 0
+        assert config.compilation_config.cudagraph_capture_sizes == []
+        assert config.compilation_config.cudagraph_num_of_warmups == 0
+
     def test_turboquant_rejects_k8v4_on_musa(self):
         import torch
         from vllm.platforms.interface import DeviceCapability
