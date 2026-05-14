@@ -89,6 +89,8 @@ def per_token_group_quant_fp8(
         f"by `group_size` {group_size}"
     )
     assert x.stride(-1) == 1, "`x` groups must be contiguous"
+    if current_platform.is_musa() and x.dim() == 2 and not x.is_contiguous():
+        x = x.contiguous()
 
     fp8_min, fp8_max = get_fp8_min_max()
 

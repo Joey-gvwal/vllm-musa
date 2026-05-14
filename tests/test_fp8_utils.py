@@ -222,3 +222,48 @@ def test_run_deepgemm_makes_noncontiguous_input_contiguous(monkeypatch):
     assert seen == {"is_contiguous": True, "shape": (4, 4)}
     assert output.shape == (4, 3)
     assert output.dtype == torch.bfloat16
+
+
+def test_per_token_group_quant_fp8_musa_accepts_strided_2d(monkeypatch):
+    from vllm_musa.model_executor.layers.quantization.utils import fp8_utils
+
+    base = torch.arange(32, dtype=torch.bfloat16).reshape(8, 4)
+    input_ = base[::2, :]
+    assert not input_.is_contiguous()
+    assert input_.stride(-1) == 1
+
+    seen = {}
+
+    class FakeMusaOps:
+        @staticmethod
+        def per_token_group_fp8_quant(
+            x,
+            x_q,
+            x_s,
+            group_size,
+            eps,
+            fp8_min,
+            fp8_max,
+            use_ue8m0,
+            column_major_scales,
+            tma_aligned_scales,
+        ):
+            del group_size, eps, fp8_min, fp8_max, use_ue8m0
+            del column_major_scales, tma_aligned_scales
+            seen["is_contiguous"] = x.is_contiguous()
+            seen["shape"] = tuple(x.shape)
+            x_q.zero_()
+            x_s.zero_()
+
+    monkeypatch.setattr(fp8_utils.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(torch.ops, "_C_musa_ops", FakeMusaOps(), raising=False)
+
+    quantized, scales = fp8_utils.per_token_group_quant_fp8(
+        input_,
+        group_size=4,
+        dtype=torch.uint8,
+    )
+
+    assert seen == {"is_contiguous": True, "shape": (4, 4)}
+    assert quantized.shape == input_.shape
+    assert scales.shape == (4, 1)
