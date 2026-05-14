@@ -67,14 +67,24 @@ def test_sparse_flashmla_provider_is_available_without_env(monkeypatch):
     assert flashmla.is_flashmla_sparse_supported() == (True, None)
 
 
-def test_musa_deepseek_v4_sparse_backend_uses_s5000_block_size():
+def test_musa_deepseek_v4_sparse_backend_matches_sparse_swa_block_size():
+    from vllm.v1.attention.backends.mla.sparse_swa import DeepseekSparseSWABackend
+    from vllm.v1.worker.utils import select_common_block_size
+
     from vllm_musa.v1.attention.backends.mla.flashmla_sparse import (
         MUSADeepseekV4FlashMLASparseBackend,
     )
 
     assert MUSADeepseekV4FlashMLASparseBackend.get_supported_kernel_block_sizes() == [
-        64
+        256
     ]
+    assert (
+        select_common_block_size(
+            256,
+            [MUSADeepseekV4FlashMLASparseBackend, DeepseekSparseSWABackend],
+        )
+        == 256
+    )
 
 
 def test_sparse_flashmla_prefill_provider_matches_reference_production_dims():

@@ -25,14 +25,4 @@ PATCHES = [
         "return capability.major in [9, 10]",
         "return capability.major in [3, 9, 10]",
     ),
-    (
-        """    @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-        return [256]
-""",
-        """    @staticmethod
-    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-        return [64]
-""",
-    ),
 ]
