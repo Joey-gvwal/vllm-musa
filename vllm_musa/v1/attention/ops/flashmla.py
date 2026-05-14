@@ -3,7 +3,6 @@
 
 import inspect
 import math
-import os
 
 import torch
 from vllm.logger import init_logger
@@ -21,9 +20,6 @@ except ImportError as e:
 _mate_flash_mla_with_kvcache = _mate_flashmla.flash_mla_with_kvcache
 _mate_get_mla_metadata = _mate_flashmla.get_mla_metadata
 _flash_mla_sparse_fwd = getattr(_mate_flashmla, "flash_mla_sparse_fwd", None)
-_ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK = (
-    os.getenv("VLLM_MUSA_ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK", "0") == "1"
-)
 _DEEPSEEK_V4_SPARSE_KVCACHE_KWARGS = {
     "topk_length",
     "attn_sink",
@@ -97,10 +93,9 @@ def _torch_flash_mla_sparse_fwd(
     )
     gathered = gathered.view(num_tokens, topk, kv.shape[-1])
 
-    # Match the upstream sparse-MLA reference math in natural-log space.
-    # Production support still requires a MUSA kernel; this fallback is for
-    # diagnostic correctness probes and must prefer explicit semantics over
-    # kernel-specific log-base conventions.
+    # Match the upstream sparse-MLA reference math in natural-log space. This
+    # provider prioritizes correctness on MUSA when MATE lacks sparse FlashMLA;
+    # it is not a performance replacement for a fused sparse FlashMLA kernel.
     logits = torch.einsum("thd,tkd->thk", q.to(torch.float32), gathered) * sm_scale
     logits = logits.masked_fill(~valid.unsqueeze(1), -float("inf"))
     no_key_mask = ~valid.any(dim=-1)
@@ -342,16 +337,16 @@ def _torch_flash_mla_with_kvcache_sparse_fallback(
     del block_table, cache_seqlens, tile_scheduler_metadata, num_splits
     if is_fp8_kvcache:
         logger.warning_once(
-            "Using diagnostic torch sparse FlashMLA kvcache fallback with "
+            "Using vllm-musa torch sparse FlashMLA kvcache correctness provider "
+            "with "
             "is_fp8_kvcache=True. Packed fp8_ds_mla cache bytes are "
-            "dequantized with torch operations; this is not a production "
-            "DeepSeek-V4 provider."
+            "dequantized with torch operations; this is not a fused sparse "
+            "FlashMLA performance kernel."
         )
     else:
         logger.warning_once(
-            "Using diagnostic torch sparse FlashMLA kvcache fallback. This is "
-            "for small correctness probes only and is not a production MUSA "
-            "sparse FlashMLA provider."
+            "Using vllm-musa torch sparse FlashMLA kvcache correctness "
+            "provider. This is not a fused sparse FlashMLA performance kernel."
         )
 
     batch, seq_len, num_heads, q_dim = q.shape
@@ -449,7 +444,7 @@ def flash_mla_with_kvcache(
         or kwargs
     )
     if has_deepseek_v4_sparse_kwargs:
-        if _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK and _flash_mla_sparse_fwd is None:
+        if _flash_mla_sparse_fwd is None:
             return _torch_flash_mla_with_kvcache_sparse_fallback(
                 q=q,
                 k_cache=k_cache,
@@ -491,28 +486,26 @@ def flash_mla_with_kvcache(
                 out=out,
                 **kwargs,
             )
-        if _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK:
-            return _torch_flash_mla_with_kvcache_sparse_fallback(
-                q=q,
-                k_cache=k_cache,
-                block_table=block_table,
-                cache_seqlens=cache_seqlens,
-                head_dim_v=head_dim_v,
-                tile_scheduler_metadata=tile_scheduler_metadata,
-                num_splits=num_splits,
-                softmax_scale=softmax_scale,
-                causal=causal,
-                is_fp8_kvcache=is_fp8_kvcache,
-                indices=indices,
-                topk_length=topk_length,
-                attn_sink=attn_sink,
-                extra_k_cache=extra_k_cache,
-                extra_indices_in_kvcache=extra_indices_in_kvcache,
-                extra_topk_length=extra_topk_length,
-                out=out,
-                **kwargs,
-            )
-        _raise_deepseek_v4_sparse_flashmla_unavailable()
+        return _torch_flash_mla_with_kvcache_sparse_fallback(
+            q=q,
+            k_cache=k_cache,
+            block_table=block_table,
+            cache_seqlens=cache_seqlens,
+            head_dim_v=head_dim_v,
+            tile_scheduler_metadata=tile_scheduler_metadata,
+            num_splits=num_splits,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            is_fp8_kvcache=is_fp8_kvcache,
+            indices=indices,
+            topk_length=topk_length,
+            attn_sink=attn_sink,
+            extra_k_cache=extra_k_cache,
+            extra_indices_in_kvcache=extra_indices_in_kvcache,
+            extra_topk_length=extra_topk_length,
+            out=out,
+            **kwargs,
+        )
     return _mate_flash_mla_with_kvcache(
         q=q,
         k_cache=k_cache,
@@ -535,21 +528,9 @@ def _is_flashmla_available() -> tuple[bool, str | None]:
 
 def _is_flashmla_sparse_available() -> tuple[bool, str | None]:
     if _flash_mla_sparse_fwd is None:
-        if _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK:
-            return True, None
-        return (
-            False,
-            "MATE does not expose flash_mla_sparse_fwd; DeepSeek-V4 sparse "
-            "FlashMLA requires a MUSA sparse FlashMLA implementation.",
-        )
+        return True, None
     if not _supports_deepseek_v4_sparse_kvcache_kwargs():
-        if _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK:
-            return True, None
-        return (
-            False,
-            "MATE flash_mla_with_kvcache does not support the DeepSeek-V4 "
-            "sparse FlashMLA kwargs required by upstream vLLM.",
-        )
+        return True, None
     return True, None
 
 
@@ -610,10 +591,8 @@ def get_mla_metadata(*args, **kwargs):
 
 if _flash_mla_sparse_fwd is not None:
     flash_mla_sparse_fwd = _flash_mla_sparse_fwd
-elif _ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK:
-    flash_mla_sparse_fwd = _torch_flash_mla_sparse_fwd
 else:
-    flash_mla_sparse_fwd = _raise_flashmla_sparse_unavailable
+    flash_mla_sparse_fwd = _torch_flash_mla_sparse_fwd
 
 
 def get_mla_metadata_dense_fp8(

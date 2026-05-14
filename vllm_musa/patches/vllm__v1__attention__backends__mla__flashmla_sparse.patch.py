@@ -22,16 +22,6 @@ PATCHES = [
 """,
     ),
     (
-        """import numpy as np
-import torch
-""",
-        """import os
-
-import numpy as np
-import torch
-""",
-    ),
-    (
         "return capability.major in [9, 10]",
         "return capability.major in [3, 9, 10]",
     ),
@@ -42,8 +32,6 @@ import torch
 """,
         """    @staticmethod
     def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-        if os.getenv("VLLM_MUSA_ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK", "0") == "1":
-            return [256]
         return [64]
 """,
     ),

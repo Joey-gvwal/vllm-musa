@@ -6,8 +6,6 @@ The implementation stays on upstream vLLM's sparse MLA code path and narrows
 only the platform capability and MATE availability checks.
 """
 
-import os
-
 import torch
 from vllm.config.cache import CacheDType
 from vllm.platforms.interface import DeviceCapability
@@ -43,8 +41,6 @@ class MUSAFlashMLASparseBackend(FlashMLASparseBackend):
 class MUSADeepseekV4FlashMLASparseBackend(DeepseekV4FlashMLASparseBackend):
     @staticmethod
     def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-        if os.getenv("VLLM_MUSA_ENABLE_TORCH_SPARSE_FLASHMLA_FALLBACK", "0") == "1":
-            return [256]
         return [64]
 
     @classmethod
