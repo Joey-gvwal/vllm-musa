@@ -176,22 +176,29 @@ PATCHES = [
         shared_experts_input: torch.Tensor | None,
     ) -> torch.Tensor:
         if self._use_musa_mxfp4_fallback():
-            from vllm.model_executor.layers.fused_moe.fused_moe import fused_experts
+            from vllm_musa.model_executor.layers.fused_moe.fused_moe import (
+                _musa_torch_fused_moe_fallback,
+            )
 
             quant_config = self.get_fused_moe_quant_config(layer)
             assert quant_config is not None
-            return fused_experts(
+            return _musa_torch_fused_moe_fallback(
                 hidden_states=x,
                 w1=layer.w13_weight,
                 w2=layer.w2_weight,
                 topk_weights=topk_weights,
                 topk_ids=topk_ids,
-                inplace=False,
                 activation=layer.activation,
                 apply_router_weight_on_input=layer.apply_router_weight_on_input,
-                global_num_experts=layer.global_num_experts,
                 expert_map=layer.expert_map,
-                quant_config=quant_config,
+                w1_scale=quant_config.w1_scale,
+                w2_scale=quant_config.w2_scale,
+                w1_bias=quant_config.w1_bias,
+                w2_bias=quant_config.w2_bias,
+                ocp_mx_scheme=quant_config.ocp_mx_scheme,
+                swiglu_limit=quant_config.gemm1_clamp_limit,
+                swiglu_alpha=quant_config.gemm1_alpha,
+                swiglu_beta=quant_config.gemm1_beta,
             )
 
         assert not self.is_monolithic
@@ -220,22 +227,29 @@ PATCHES = [
             )
 """,
         """        if self._use_musa_mxfp4_fallback():
-            from vllm.model_executor.layers.fused_moe.fused_moe import fused_experts
+            from vllm_musa.model_executor.layers.fused_moe.fused_moe import (
+                _musa_torch_fused_moe_fallback,
+            )
 
             quant_config = self.get_fused_moe_quant_config(layer)
             assert quant_config is not None
-            return fused_experts(
+            return _musa_torch_fused_moe_fallback(
                 hidden_states=x,
                 w1=layer.w13_weight,
                 w2=layer.w2_weight,
                 topk_weights=topk_weights,
                 topk_ids=topk_ids,
-                inplace=False,
                 activation=layer.activation,
                 apply_router_weight_on_input=layer.apply_router_weight_on_input,
-                global_num_experts=layer.global_num_experts,
                 expert_map=layer.expert_map,
-                quant_config=quant_config,
+                w1_scale=quant_config.w1_scale,
+                w2_scale=quant_config.w2_scale,
+                w1_bias=quant_config.w1_bias,
+                w2_bias=quant_config.w2_bias,
+                ocp_mx_scheme=quant_config.ocp_mx_scheme,
+                swiglu_limit=quant_config.gemm1_clamp_limit,
+                swiglu_alpha=quant_config.gemm1_alpha,
+                swiglu_beta=quant_config.gemm1_beta,
             )
 """,
     ),
