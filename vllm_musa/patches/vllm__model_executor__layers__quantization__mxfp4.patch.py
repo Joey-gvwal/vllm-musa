@@ -103,6 +103,58 @@ PATCHES = [
 """,
     ),
     (
+        """    def select_gemm_impl(
+        self,
+        prepare_finalize: mk.FusedMoEPrepareAndFinalize,
+        layer: torch.nn.Module,
+    ) -> mk.FusedMoEExpertsModular:
+        raise ValueError(
+            f"{self.__class__.__name__} uses the new modular kernel "
+            "initialization logic. This function should not be called."
+        )
+""",
+        """    def select_gemm_impl(
+        self,
+        prepare_finalize: mk.FusedMoEPrepareAndFinalize,
+        layer: torch.nn.Module,
+    ) -> mk.FusedMoEExpertsModular:
+        if self._use_musa_mxfp4_fallback():
+            from vllm_musa.model_executor.layers.fused_moe.fused_moe import (
+                MusaMxfp4BatchedExperts,
+                MusaMxfp4StandardExperts,
+                _musa_mxfp4_make_w4a16_quant_config,
+            )
+
+            quant_config = self.get_fused_moe_quant_config(layer)
+            assert quant_config is not None
+            fallback_quant_config = _musa_mxfp4_make_w4a16_quant_config(
+                quant_config
+            )
+            if (
+                prepare_finalize.activation_format
+                == mk.FusedMoEActivationFormat.BatchedExperts
+            ):
+                max_num_tokens = prepare_finalize.max_num_tokens_per_rank()
+                num_dispatchers = prepare_finalize.num_dispatchers()
+                assert max_num_tokens is not None
+                return MusaMxfp4BatchedExperts(
+                    moe_config=self.moe,
+                    quant_config=fallback_quant_config,
+                    max_num_tokens=max_num_tokens,
+                    num_dispatchers=num_dispatchers,
+                )
+            return MusaMxfp4StandardExperts(
+                moe_config=self.moe,
+                quant_config=fallback_quant_config,
+            )
+
+        raise ValueError(
+            f"{self.__class__.__name__} uses the new modular kernel "
+            "initialization logic. This function should not be called."
+        )
+""",
+    ),
+    (
         """    def apply(
         self,
         layer: FusedMoE,

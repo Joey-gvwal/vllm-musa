@@ -7,10 +7,20 @@ import os
 import torch
 import torch.nn.functional as F
 from vllm import _custom_ops as ops
-from vllm.model_executor.layers.fused_moe.config import _get_config_dtype_str
+import vllm.model_executor.layers.fused_moe.modular_kernel as mk
+from vllm.model_executor.layers.fused_moe.activation import MoEActivation
+from vllm.model_executor.layers.fused_moe.config import (
+    FusedMoEConfig,
+    FusedMoEQuantConfig,
+    _get_config_dtype_str,
+)
 from vllm.model_executor.layers.fused_moe.fused_moe import (
     _get_config_quant_dtype,
     try_get_optimal_moe_config,
+)
+from vllm.model_executor.layers.fused_moe.topk_weight_and_reduce import (
+    TopKWeightAndReduceDelegate,
+    TopKWeightAndReduceNoOP,
 )
 from vllm.model_executor.layers.fused_moe.utils import (
     disable_inplace,
@@ -190,6 +200,263 @@ def _musa_mxfp4_scale_to_float(scale: torch.Tensor) -> torch.Tensor:
     if scale.dtype == torch.uint8:
         return (scale.to(torch.int32) << 23).view(torch.float32)
     return scale.to(torch.float32)
+
+
+def _musa_mxfp4_make_w4a16_quant_config(
+    quant_config: FusedMoEQuantConfig,
+) -> FusedMoEQuantConfig:
+    return FusedMoEQuantConfig.make(
+        quant_dtype=None,
+        weight_dtype="mxfp4",
+        w1_scale=quant_config.w1_scale,
+        w2_scale=quant_config.w2_scale,
+        w1_bias=quant_config.w1_bias,
+        w2_bias=quant_config.w2_bias,
+        gemm1_alpha=quant_config.gemm1_alpha,
+        gemm1_beta=quant_config.gemm1_beta,
+        gemm1_clamp_limit=quant_config.gemm1_clamp_limit,
+    )
+
+
+class _MusaMxfp4ExpertsBase(mk.FusedMoEExpertsModular):
+
+    @staticmethod
+    def _supports_current_device() -> bool:
+        return current_platform.is_musa()
+
+    @staticmethod
+    def _supports_no_act_and_mul() -> bool:
+        return True
+
+    @staticmethod
+    def _supports_quant_scheme(weight_key, activation_key) -> bool:
+        return weight_key == "mxfp4" and activation_key is None
+
+    @staticmethod
+    def _supports_activation(activation: MoEActivation) -> bool:
+        return activation in (MoEActivation.SILU, MoEActivation.SWIGLUOAI)
+
+    @staticmethod
+    def _supports_parallel_config(moe_parallel_config) -> bool:
+        return True
+
+    @staticmethod
+    def _is_current_stream_capturing() -> bool:
+        cuda_module = getattr(torch, "cuda", None)
+        if cuda_module is None:
+            return False
+        is_capturing = getattr(cuda_module, "is_current_stream_capturing", None)
+        if is_capturing is None:
+            return False
+        try:
+            return bool(is_capturing())
+        except Exception:
+            return False
+
+    def _apply_expert(
+        self,
+        x: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        activation: MoEActivation,
+        expert_id: int,
+    ) -> torch.Tensor:
+        x = x.to(torch.float32)
+        assert self.quant_config.w1_scale is not None
+        assert self.quant_config.w2_scale is not None
+        w1_local = _dequant_mxfp4_musa(
+            w1[expert_id], self.quant_config.w1_scale[expert_id], torch.float32
+        )
+        gate_up = x.matmul(w1_local.transpose(0, 1))
+        del w1_local
+
+        if self.quant_config.w1_bias is not None:
+            gate_up = gate_up + self.quant_config.w1_bias[expert_id].to(torch.float32)
+        if activation == MoEActivation.SWIGLUOAI:
+            gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+            limit = self.quant_config.gemm1_clamp_limit
+            if limit is None:
+                limit = 7.0
+            if limit > 0:
+                gate = torch.clamp(gate, max=limit)
+                up = torch.clamp(up, min=-limit, max=limit)
+            alpha = self.quant_config.gemm1_alpha
+            beta = self.quant_config.gemm1_beta
+            alpha = 1.702 if alpha is None else alpha
+            beta = 1.0 if beta is None else beta
+            intermediate = (up + beta) * (gate * torch.sigmoid(gate * alpha))
+        else:
+            gate, up = gate_up.chunk(2, dim=-1)
+            limit = self.quant_config.gemm1_clamp_limit
+            if limit is not None and limit > 0:
+                gate = torch.clamp(gate, max=limit)
+                up = torch.clamp(up, min=-limit, max=limit)
+            intermediate = F.silu(gate) * up
+
+        w2_local = _dequant_mxfp4_musa(
+            w2[expert_id], self.quant_config.w2_scale[expert_id], torch.float32
+        )
+        out = intermediate.matmul(w2_local.transpose(0, 1))
+        del w2_local
+
+        if self.quant_config.w2_bias is not None:
+            out = out + self.quant_config.w2_bias[expert_id].to(torch.float32)
+        return out
+
+
+class MusaMxfp4BatchedExperts(_MusaMxfp4ExpertsBase):
+
+    def __init__(
+        self,
+        moe_config: FusedMoEConfig,
+        quant_config: FusedMoEQuantConfig,
+        max_num_tokens: int,
+        num_dispatchers: int,
+    ):
+        super().__init__(
+            moe_config=moe_config,
+            quant_config=quant_config,
+            max_num_tokens=max_num_tokens,
+            num_dispatchers=num_dispatchers,
+        )
+
+    @staticmethod
+    def activation_format() -> mk.FusedMoEActivationFormat:
+        return mk.FusedMoEActivationFormat.BatchedExperts
+
+    def supports_expert_map(self) -> bool:
+        return False
+
+    def finalize_weight_and_reduce_impl(self) -> mk.TopKWeightAndReduce:
+        return TopKWeightAndReduceDelegate()
+
+    def workspace_shapes(
+        self,
+        M: int,
+        N: int,
+        K: int,
+        topk: int,
+        global_num_experts: int,
+        local_num_experts: int,
+        expert_tokens_meta: mk.ExpertTokensMetadata | None,
+        activation: MoEActivation,
+    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+        assert self.max_num_tokens is not None
+        assert self.num_dispatchers is not None
+        max_tokens = self.max_num_tokens * self.num_dispatchers
+        workspace13 = (local_num_experts, max_tokens, max(N, K))
+        workspace2 = (local_num_experts, max_tokens, max(N // 2, K))
+        output = (local_num_experts, max_tokens, K)
+        return workspace13, workspace2, output
+
+    def apply(
+        self,
+        output: torch.Tensor,
+        hidden_states: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+        activation: MoEActivation,
+        global_num_experts: int,
+        expert_map: torch.Tensor | None,
+        a1q_scale: torch.Tensor | None,
+        a2_scale: torch.Tensor | None,
+        workspace13: torch.Tensor,
+        workspace2: torch.Tensor,
+        expert_tokens_meta: mk.ExpertTokensMetadata | None,
+        apply_router_weight_on_input: bool,
+    ) -> None:
+        del topk_weights, topk_ids, global_num_experts, expert_map
+        del a1q_scale, a2_scale, workspace13, workspace2
+        del apply_router_weight_on_input
+
+        assert hidden_states.dim() == 3
+        assert expert_tokens_meta is not None
+        output.zero_()
+        expert_num_tokens = expert_tokens_meta.expert_num_tokens
+        for expert_id in range(w1.shape[0]):
+            if torch.compiler.is_compiling() or self._is_current_stream_capturing():
+                num_tokens = hidden_states.shape[1]
+            else:
+                num_tokens = int(expert_num_tokens[expert_id].item())
+            if num_tokens == 0:
+                continue
+            expert_out = self._apply_expert(
+                hidden_states[expert_id, :num_tokens],
+                w1,
+                w2,
+                activation,
+                expert_id,
+            )
+            output[expert_id, :num_tokens] = expert_out.to(output.dtype)
+
+
+class MusaMxfp4StandardExperts(_MusaMxfp4ExpertsBase):
+
+    @staticmethod
+    def activation_format() -> mk.FusedMoEActivationFormat:
+        return mk.FusedMoEActivationFormat.Standard
+
+    def supports_expert_map(self) -> bool:
+        return True
+
+    def finalize_weight_and_reduce_impl(self) -> mk.TopKWeightAndReduce:
+        return TopKWeightAndReduceNoOP()
+
+    def workspace_shapes(
+        self,
+        M: int,
+        N: int,
+        K: int,
+        topk: int,
+        global_num_experts: int,
+        local_num_experts: int,
+        expert_tokens_meta: mk.ExpertTokensMetadata | None,
+        activation: MoEActivation,
+    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+        return (M, topk, max(N, K)), (M, topk, max(N // 2, K)), (M, K)
+
+    def apply(
+        self,
+        output: torch.Tensor,
+        hidden_states: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+        activation: MoEActivation,
+        global_num_experts: int,
+        expert_map: torch.Tensor | None,
+        a1q_scale: torch.Tensor | None,
+        a2_scale: torch.Tensor | None,
+        workspace13: torch.Tensor,
+        workspace2: torch.Tensor,
+        expert_tokens_meta: mk.ExpertTokensMetadata | None,
+        apply_router_weight_on_input: bool,
+    ) -> None:
+        del global_num_experts, a1q_scale, a2_scale, workspace13, workspace2
+        del expert_tokens_meta
+
+        expert_out = _musa_torch_fused_moe_fallback(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            expert_map=expert_map,
+            w1_bias=self.quant_config.w1_bias,
+            w2_bias=self.quant_config.w2_bias,
+            ocp_mx_scheme=self.quant_config.ocp_mx_scheme,
+            w1_scale=self.quant_config.w1_scale,
+            w2_scale=self.quant_config.w2_scale,
+            swiglu_limit=self.quant_config.gemm1_clamp_limit,
+            swiglu_alpha=self.quant_config.gemm1_alpha,
+            swiglu_beta=self.quant_config.gemm1_beta,
+        )
+        output.copy_(expert_out, non_blocking=True)
 
 
 def _supports_quant_scheme(

@@ -133,6 +133,66 @@ def test_mxfp4_moe_fallback_supports_swigluoai_activation():
     torch.testing.assert_close(out, expected)
 
 
+def test_mxfp4_batched_modular_fallback_runs_local_experts(monkeypatch):
+    from vllm.model_executor.layers.fused_moe.activation import MoEActivation
+    from vllm.model_executor.layers.fused_moe.config import FusedMoEQuantConfig
+    from vllm.model_executor.layers.fused_moe.modular_kernel import (
+        ExpertTokensMetadata,
+    )
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    monkeypatch.setattr(fused_moe.current_platform, "is_musa", lambda: True)
+
+    hidden_states = torch.ones((2, 2, 32), dtype=torch.float32)
+    w1 = torch.full((2, 64, 16), 0x22, dtype=torch.uint8)
+    w2 = torch.full((2, 32, 16), 0x22, dtype=torch.uint8)
+    w1_scale = torch.full((2, 64, 1), 127, dtype=torch.uint8)
+    w2_scale = torch.full((2, 32, 1), 127, dtype=torch.uint8)
+    base_quant_config = FusedMoEQuantConfig.make(
+        quant_dtype="mxfp8",
+        weight_dtype="mxfp4",
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+    )
+    fallback_quant_config = fused_moe._musa_mxfp4_make_w4a16_quant_config(
+        base_quant_config
+    )
+    assert fallback_quant_config.quant_dtype is None
+    assert fallback_quant_config.weight_quant_dtype == "mxfp4"
+
+    experts = fused_moe.MusaMxfp4BatchedExperts(
+        moe_config=object(),
+        quant_config=fallback_quant_config,
+        max_num_tokens=2,
+        num_dispatchers=1,
+    )
+    output = torch.empty((2, 2, 32), dtype=torch.float32)
+    experts.apply(
+        output=output,
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_weights=torch.ones((2, 1), dtype=torch.float32),
+        topk_ids=torch.zeros((2, 1), dtype=torch.int64),
+        activation=MoEActivation.SILU,
+        global_num_experts=2,
+        expert_map=None,
+        a1q_scale=None,
+        a2_scale=None,
+        workspace13=torch.empty((1,), dtype=torch.float32),
+        workspace2=torch.empty((1,), dtype=torch.float32),
+        expert_tokens_meta=ExpertTokensMetadata(
+            expert_num_tokens=torch.tensor([1, 0], dtype=torch.int32),
+            expert_num_tokens_cpu=None,
+        ),
+        apply_router_weight_on_input=False,
+    )
+
+    assert output[0, 0].abs().sum() > 0
+    torch.testing.assert_close(output[0, 1], torch.zeros_like(output[0, 1]))
+    torch.testing.assert_close(output[1], torch.zeros_like(output[1]))
+
+
 def test_deepgemm_post_process_upcasts_e8m0_scales_when_disabled():
     e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
     if e8m0_dtype is None:
