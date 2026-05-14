@@ -221,6 +221,47 @@ def _musa_deepseek_v4_quant_insert(
     k_cache_2d[block_idx.unsqueeze(1), rope_offsets] = rope_bytes
 
 
+def _musa_try_tilelang_deepseek_v4_qnorm_rope_kv_insert(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    k_cache_2d: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    eps: float,
+    block_size: int,
+) -> bool:
+    try:
+        from vllm_musa.deepseek_v4_jit.qnorm_rope_kv_insert import (
+            try_tilelang_qnorm_rope_kv_insert,
+        )
+    except Exception as exc:
+        logger.warning_once(
+            "TileLang DeepSeek-V4 QNorm/RoPE/KV insert path is unavailable; "
+            "using torch correctness fallback. Import error: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+    handled, reason = try_tilelang_qnorm_rope_kv_insert(
+        q,
+        kv,
+        k_cache_2d,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        eps,
+        block_size,
+    )
+    if not handled and not reason.startswith("disabled by "):
+        logger.warning_once(
+            "TileLang DeepSeek-V4 QNorm/RoPE/KV insert path did not handle "
+            "this call; using torch correctness fallback. Reason: %s",
+            reason,
+        )
+    return handled
+
+
 def _musa_fused_deepseek_v4_qnorm_rope_kv_insert_fallback(
     q: torch.Tensor,
     kv: torch.Tensor,
@@ -231,6 +272,17 @@ def _musa_fused_deepseek_v4_qnorm_rope_kv_insert_fallback(
     eps: float,
     block_size: int,
 ) -> None:
+    if _musa_try_tilelang_deepseek_v4_qnorm_rope_kv_insert(
+        q,
+        kv,
+        k_cache_2d,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        eps,
+        block_size,
+    ):
+        return
     q_float = q.to(torch.float32)
     variance = q_float.pow(2).mean(dim=-1, keepdim=True)
     q_float = q_float * torch.rsqrt(variance + eps)
