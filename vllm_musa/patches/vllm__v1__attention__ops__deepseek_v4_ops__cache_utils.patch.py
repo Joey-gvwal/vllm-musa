@@ -145,37 +145,6 @@ def _musa_compute_global_topk_indices_and_lens_fallback(
     return global_topk_indices, topk_lens
 
 
-def _musa_compute_global_topk_indices_and_lens_vectorized(
-    topk_indices: torch.Tensor,
-    token_to_req_indices: torch.Tensor,
-    block_table: torch.Tensor,
-    block_size: int,
-    is_valid_token: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    local_indices = topk_indices.to(torch.long)
-    valid = local_indices >= 0
-    safe_local = torch.where(valid, local_indices, torch.zeros_like(local_indices))
-    block_indices = torch.div(safe_local, block_size, rounding_mode="floor")
-    block_offsets = safe_local.remainder(block_size)
-    req_indices = token_to_req_indices.to(torch.long).view(-1, 1).expand_as(
-        block_indices
-    )
-    block_numbers = block_table[req_indices, block_indices].to(torch.long)
-    slot_ids = block_numbers * int(block_size) + block_offsets
-    global_topk_indices = torch.where(
-        valid,
-        slot_ids,
-        torch.full_like(slot_ids, -1),
-    ).to(topk_indices.dtype)
-    valid_counts = valid.sum(dim=1).to(torch.int32)
-    topk_lens = torch.where(
-        is_valid_token.to(torch.bool),
-        valid_counts,
-        torch.zeros_like(valid_counts),
-    )
-    return global_topk_indices, topk_lens
-
-
 def _musa_combine_topk_swa_indices_fallback(
     topk_indices: torch.Tensor,
     query_start_loc: torch.Tensor,
@@ -276,17 +245,6 @@ def _musa_combine_topk_swa_indices_fallback(
         """    if _is_musa_tensor(topk_indices):
         if _musa_deepseek_v4_cache_fallback_enabled():
             _musa_warn_cache_fallback_once("compute_global_topk_indices_and_lens")
-            impl = os.getenv(
-                "VLLM_MUSA_DEEPSEEK_V4_GLOBAL_TOPK_IMPL", "loop"
-            ).strip().lower()
-            if impl in {"vectorized", "vec"}:
-                return _musa_compute_global_topk_indices_and_lens_vectorized(
-                    topk_indices,
-                    token_to_req_indices,
-                    block_table,
-                    block_size,
-                    is_valid_token,
-                )
             return _musa_compute_global_topk_indices_and_lens_fallback(
                 topk_indices,
                 token_to_req_indices,
