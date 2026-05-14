@@ -32,7 +32,7 @@ PATCHES = [
 """,
         """    @staticmethod
     def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-        return [64]
+        return [256]
 """,
     ),
 ]

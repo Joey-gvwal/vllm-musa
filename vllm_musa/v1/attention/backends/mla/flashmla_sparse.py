@@ -41,7 +41,7 @@ class MUSAFlashMLASparseBackend(FlashMLASparseBackend):
 class MUSADeepseekV4FlashMLASparseBackend(DeepseekV4FlashMLASparseBackend):
     @staticmethod
     def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-        return [64]
+        return [256]
 
     @classmethod
     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:

@@ -73,7 +73,7 @@ def test_musa_deepseek_v4_sparse_backend_uses_s5000_block_size():
     )
 
     assert MUSADeepseekV4FlashMLASparseBackend.get_supported_kernel_block_sizes() == [
-        64
+        256
     ]
 
 
