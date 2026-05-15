@@ -15,6 +15,8 @@ class MusaSiluAndMul(SiluAndMul):
             return self.forward_native(x)
 
         # ==================== MUSA ADAPTATION ====================
+        if torch._dynamo.is_compiling():
+            return self.forward_native(x)
         return F.swish_glu(x)
         # ========================== END ==========================
 
