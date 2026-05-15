@@ -14,6 +14,7 @@ from vllm.model_executor.kernels.linear.scaled_mm.deep_gemm import (
 from vllm.model_executor.layers.quantization.input_quant_fp8 import QuantFP8
 from vllm.model_executor.utils import replace_parameter
 from vllm.platforms import current_platform
+from vllm.utils.torch_utils import direct_register_custom_op
 
 from vllm_musa.model_executor.layers.quantization.utils.fp8_utils import (
     deepgemm_post_process_fp8_weight_block,
@@ -120,10 +121,51 @@ def run_deepgemm(
         device=q_input.device,
     )
 
+    torch.ops.vllm.musa_fp8_gemm_nt_op(
+        q_input,
+        input_scale,
+        weight,
+        weight_scale,
+        output,
+        use_deep_gemm_e8m0,
+    )
+    return output
+
+
+def _musa_fp8_gemm_nt_op(
+    q_input: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    output: torch.Tensor,
+    use_deep_gemm_e8m0: bool,
+) -> None:
+    if not input_scale.is_contiguous():
+        input_scale = input_scale.contiguous()
+    if not weight_scale.is_contiguous():
+        weight_scale = weight_scale.contiguous()
     fp8_gemm_nt(
         (q_input, input_scale),
         (weight, weight_scale),
         output,
         is_deep_gemm_e8m0_used=use_deep_gemm_e8m0,
     )
-    return output
+
+
+def _musa_fp8_gemm_nt_op_fake(
+    q_input: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    output: torch.Tensor,
+    use_deep_gemm_e8m0: bool,
+) -> None:
+    return None
+
+
+direct_register_custom_op(
+    "musa_fp8_gemm_nt_op",
+    _musa_fp8_gemm_nt_op,
+    mutates_args=["output"],
+    fake_impl=_musa_fp8_gemm_nt_op_fake,
+)

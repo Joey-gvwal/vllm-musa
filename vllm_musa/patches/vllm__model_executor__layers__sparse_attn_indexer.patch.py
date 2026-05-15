@@ -88,6 +88,34 @@ def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Te
     return kv_cache[block_id].view(torch.uint8).flatten()
 
 
+def _musa_sparse_indexer_cache_gather_impl() -> str:
+    impl = os.getenv("VLLM_MUSA_SPARSE_INDEXER_CACHE_GATHER_IMPL", "auto")
+    impl = impl.strip().lower()
+    if impl in ("auto", "vectorized"):
+        return impl
+    if impl in ("torch", "scalar"):
+        return "torch"
+    logger.warning_once(
+        "Unknown VLLM_MUSA_SPARSE_INDEXER_CACHE_GATHER_IMPL=%r; using auto.",
+        impl,
+    )
+    return "auto"
+
+
+def _musa_sparse_indexer_topk_impl() -> str:
+    impl = os.getenv("VLLM_MUSA_SPARSE_INDEXER_TOPK_IMPL", "auto")
+    impl = impl.strip().lower()
+    if impl in ("auto", "vectorized", "batched", "tilelang", "jit", "tilelang_small"):
+        return impl
+    if impl in ("torch", "scalar"):
+        return "torch"
+    logger.warning_once(
+        "Unknown VLLM_MUSA_SPARSE_INDEXER_TOPK_IMPL=%r; using auto.",
+        impl,
+    )
+    return "auto"
+
+
 def _musa_dequant_indexer_fp8_cache_row(
     kv_cache: torch.Tensor,
     block_id: int,
@@ -113,6 +141,38 @@ def _musa_dequant_indexer_fp8_cache_row(
     return values * scale
 
 
+def _musa_dequant_indexer_fp8_cache_rows_vectorized(
+    kv_cache: torch.Tensor,
+    block_ids: torch.Tensor,
+    pos_in_blocks: torch.Tensor,
+    head_dim: int,
+) -> torch.Tensor:
+    num_rows = int(block_ids.numel())
+    if num_rows == 0:
+        return torch.empty((0, head_dim), dtype=torch.float32, device=kv_cache.device)
+
+    block_size = kv_cache.shape[1]
+    cache_blocks = kv_cache.index_select(0, block_ids.to(torch.long))
+    cache_blocks = cache_blocks.view(torch.uint8).reshape(num_rows, -1)
+    positions = pos_in_blocks.to(torch.long)
+
+    value_offsets = (
+        positions[:, None] * head_dim
+        + torch.arange(head_dim, device=kv_cache.device, dtype=torch.long)[None, :]
+    )
+    values = cache_blocks.gather(1, value_offsets).contiguous()
+    values = values.view(torch.float8_e4m3fn).to(torch.float32)
+
+    scale_offsets = (
+        block_size * head_dim
+        + positions[:, None] * 4
+        + torch.arange(4, device=kv_cache.device, dtype=torch.long)[None, :]
+    )
+    scales = cache_blocks.gather(1, scale_offsets).contiguous()
+    scales = scales.view(torch.float32).reshape(num_rows, 1)
+    return values * scales
+
+
 def _musa_gather_indexer_fp8_cache(
     kv_cache: torch.Tensor,
     block_table: torch.Tensor,
@@ -126,6 +186,35 @@ def _musa_gather_indexer_fp8_cache(
         device=kv_cache.device,
     )
     block_size = kv_cache.shape[1]
+    impl = _musa_sparse_indexer_cache_gather_impl()
+    if impl != "torch":
+        try:
+            for req_idx in range(block_table.shape[0]):
+                start = int(cu_seq_lens[req_idx].item())
+                end = int(cu_seq_lens[req_idx + 1].item())
+                seq_len = end - start
+                if seq_len <= 0:
+                    continue
+                positions = torch.arange(
+                    seq_len, device=kv_cache.device, dtype=torch.long
+                )
+                physical_blocks = block_table[
+                    req_idx, positions // block_size
+                ].to(torch.long)
+                gathered[start:end] = _musa_dequant_indexer_fp8_cache_rows_vectorized(
+                    kv_cache,
+                    physical_blocks,
+                    positions % block_size,
+                    head_dim,
+                )
+            return gathered
+        except Exception:
+            if impl == "vectorized":
+                raise
+            logger.warning_once(
+                "MUSA vectorized sparse-indexer cache gather failed; falling "
+                "back to scalar torch gather/dequant."
+            )
     for req_idx in range(block_table.shape[0]):
         start = int(cu_seq_lens[req_idx].item())
         end = int(cu_seq_lens[req_idx + 1].item())
@@ -152,6 +241,168 @@ def _musa_sparse_indexer_logits(
     return (per_head * weights.to(torch.float32).unsqueeze(-1)).sum(dim=0)
 
 
+def _musa_fill_topk_rows_from_indexer_logits_vectorized(
+    q_deq: torch.Tensor,
+    k_deq: torch.Tensor,
+    weights: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+) -> None:
+    rows = min(q_deq.shape[0], topk_indices.shape[0], cu_seqlen_ks.numel())
+    if rows <= 0:
+        return
+
+    width = int(k_deq.shape[0])
+    topk = min(int(topk_tokens), int(topk_indices.shape[1]), width)
+    if topk <= 0:
+        return
+
+    logger.warning_once(
+        "Using MUSA vectorized exact DeepSeek-V4 sparse-indexer prefill top-k "
+        "path. Set VLLM_MUSA_SPARSE_INDEXER_TOPK_IMPL=torch to use the scalar "
+        "torch fallback."
+    )
+    starts = cu_seqlen_ks[:rows].to(torch.long).clamp(0, width)
+    ends = cu_seqlen_ke[:rows].to(torch.long).clamp(0, width)
+    row_lens = (ends - starts).clamp_min(0)
+
+    scores = torch.full(
+        (rows, width),
+        -torch.inf,
+        dtype=torch.float32,
+        device=k_deq.device,
+    )
+    for row in range(rows):
+        start = int(starts[row].item())
+        end = int(ends[row].item())
+        if end <= start:
+            continue
+        scores[row, start:end] = _musa_sparse_indexer_logits(
+            q_deq[row],
+            k_deq[start:end],
+            weights[row],
+        )
+
+    raw_indices = torch.topk(scores, topk, dim=-1).indices
+    local_indices = raw_indices - starts.unsqueeze(1)
+    ranks = torch.arange(topk, device=k_deq.device, dtype=torch.long).unsqueeze(0)
+    output = torch.where(
+        ranks < row_lens.unsqueeze(1),
+        local_indices,
+        torch.full_like(local_indices, -1),
+    )
+    topk_indices[:rows, :topk] = output.to(topk_indices.dtype)
+
+
+def _musa_fill_topk_rows_from_indexer_logits_batched(
+    q_deq: torch.Tensor,
+    k_deq: torch.Tensor,
+    weights: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+) -> None:
+    rows = min(q_deq.shape[0], topk_indices.shape[0], cu_seqlen_ks.numel())
+    if rows <= 0:
+        return
+
+    width = int(k_deq.shape[0])
+    topk = min(int(topk_tokens), int(topk_indices.shape[1]), width)
+    if topk <= 0:
+        return
+
+    logger.warning_once(
+        "Using MUSA batched-logits DeepSeek-V4 sparse-indexer prefill top-k "
+        "candidate. Set VLLM_MUSA_SPARSE_INDEXER_TOPK_IMPL=torch to use the "
+        "scalar torch fallback."
+    )
+    starts = cu_seqlen_ks[:rows].to(torch.long).clamp(0, width)
+    ends = cu_seqlen_ke[:rows].to(torch.long).clamp(0, width)
+    row_lens = (ends - starts).clamp_min(0)
+
+    per_head = torch.einsum(
+        "r h d, n d -> r h n",
+        q_deq[:rows].to(torch.float32),
+        k_deq.to(torch.float32),
+    )
+    scores = (
+        per_head * weights[:rows].to(torch.float32).unsqueeze(-1)
+    ).sum(dim=1)
+
+    positions = torch.arange(width, device=k_deq.device, dtype=torch.long).unsqueeze(0)
+    valid = (positions >= starts.unsqueeze(1)) & (positions < ends.unsqueeze(1))
+    scores = scores.masked_fill(~valid, -torch.inf)
+
+    raw_indices = torch.topk(scores, topk, dim=-1).indices
+    local_indices = raw_indices - starts.unsqueeze(1)
+    ranks = torch.arange(topk, device=k_deq.device, dtype=torch.long).unsqueeze(0)
+    output = torch.where(
+        ranks < row_lens.unsqueeze(1),
+        local_indices,
+        torch.full_like(local_indices, -1),
+    )
+    topk_indices[:rows, :topk] = output.to(topk_indices.dtype)
+
+
+def _musa_fill_topk_rows_from_indexer_logits_tilelang(
+    q_deq: torch.Tensor,
+    k_deq: torch.Tensor,
+    weights: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+) -> None:
+    rows = min(q_deq.shape[0], topk_indices.shape[0], cu_seqlen_ks.numel())
+    if rows <= 0:
+        return
+
+    width = int(k_deq.shape[0])
+    topk = min(int(topk_tokens), int(topk_indices.shape[1]), width)
+    if topk <= 0:
+        return
+
+    logger.warning_once(
+        "Using MUSA TileLang DeepSeek-V4 sparse-indexer prefill top-k "
+        "candidate. Set VLLM_MUSA_SPARSE_INDEXER_TOPK_IMPL=torch to use the "
+        "scalar torch fallback."
+    )
+    starts = cu_seqlen_ks[:rows].to(torch.int32).clamp(0, width).contiguous()
+    ends = cu_seqlen_ke[:rows].to(torch.int32).clamp(0, width).contiguous()
+
+    per_head = torch.einsum(
+        "r h d, n d -> r h n",
+        q_deq[:rows].to(torch.float32),
+        k_deq.to(torch.float32),
+    )
+    scores = (
+        per_head * weights[:rows].to(torch.float32).unsqueeze(-1)
+    ).sum(dim=1).contiguous()
+
+    from vllm_musa.deepseek_v4_jit.topk import (
+        try_tilelang_sparse_indexer_topk_rows,
+    )
+
+    tilelang_out = torch.empty(
+        (rows, topk),
+        dtype=torch.int32,
+        device=topk_indices.device,
+    )
+    handled, reason = try_tilelang_sparse_indexer_topk_rows(
+        scores,
+        starts,
+        ends,
+        tilelang_out,
+        topk,
+    )
+    if not handled:
+        raise NotImplementedError(reason)
+    topk_indices[:rows, :topk] = tilelang_out.to(topk_indices.dtype)
+
+
 def _musa_fill_topk_rows_from_indexer_logits(
     q_deq: torch.Tensor,
     k_deq: torch.Tensor,
@@ -161,6 +412,49 @@ def _musa_fill_topk_rows_from_indexer_logits(
     topk_indices: torch.Tensor,
     topk_tokens: int,
 ) -> None:
+    impl = _musa_sparse_indexer_topk_impl()
+    if impl in ("tilelang", "jit", "tilelang_small"):
+        _musa_fill_topk_rows_from_indexer_logits_tilelang(
+            q_deq,
+            k_deq,
+            weights,
+            cu_seqlen_ks,
+            cu_seqlen_ke,
+            topk_indices,
+            topk_tokens,
+        )
+        return
+    if impl == "batched":
+        _musa_fill_topk_rows_from_indexer_logits_batched(
+            q_deq,
+            k_deq,
+            weights,
+            cu_seqlen_ks,
+            cu_seqlen_ke,
+            topk_indices,
+            topk_tokens,
+        )
+        return
+    if impl != "torch":
+        try:
+            _musa_fill_topk_rows_from_indexer_logits_vectorized(
+                q_deq,
+                k_deq,
+                weights,
+                cu_seqlen_ks,
+                cu_seqlen_ke,
+                topk_indices,
+                topk_tokens,
+            )
+            return
+        except Exception:
+            if impl == "vectorized":
+                raise
+            logger.warning_once(
+                "MUSA vectorized sparse-indexer prefill top-k failed; falling "
+                "back to scalar torch top-k."
+            )
+
     rows = min(q_deq.shape[0], topk_indices.shape[0], cu_seqlen_ks.numel())
     for row in range(rows):
         start = int(cu_seqlen_ks[row].item())
@@ -191,28 +485,68 @@ def _musa_fill_decode_topk_from_indexer_cache(
     seq_lens = decode_metadata.seq_lens.reshape(-1)
     rows = min(q_deq.shape[0], seq_lens.numel(), topk_indices_buffer.shape[0])
     block_size = kv_cache.shape[1]
+    impl = _musa_sparse_indexer_cache_gather_impl()
     for row in range(rows):
         seq_len = int(seq_lens[row].item())
         if seq_len <= 0:
             continue
         block_row = min(row, decode_metadata.block_table.shape[0] - 1)
-        gathered = torch.empty(
-            (seq_len, head_dim),
-            dtype=torch.float32,
-            device=kv_cache.device,
-        )
-        for local_pos in range(seq_len):
-            physical_block = int(
-                decode_metadata.block_table[
-                    block_row, local_pos // block_size
-                ].item()
+        if impl != "torch":
+            try:
+                positions = torch.arange(
+                    seq_len, device=kv_cache.device, dtype=torch.long
+                )
+                physical_blocks = decode_metadata.block_table[
+                    block_row, positions // block_size
+                ].to(torch.long)
+                gathered = _musa_dequant_indexer_fp8_cache_rows_vectorized(
+                    kv_cache,
+                    physical_blocks,
+                    positions % block_size,
+                    head_dim,
+                )
+            except Exception:
+                if impl == "vectorized":
+                    raise
+                logger.warning_once(
+                    "MUSA vectorized sparse-indexer decode gather failed; "
+                    "falling back to scalar torch gather/dequant."
+                )
+                gathered = torch.empty(
+                    (seq_len, head_dim),
+                    dtype=torch.float32,
+                    device=kv_cache.device,
+                )
+                for local_pos in range(seq_len):
+                    physical_block = int(
+                        decode_metadata.block_table[
+                            block_row, local_pos // block_size
+                        ].item()
+                    )
+                    gathered[local_pos] = _musa_dequant_indexer_fp8_cache_row(
+                        kv_cache,
+                        physical_block,
+                        local_pos % block_size,
+                        head_dim,
+                    )
+        else:
+            gathered = torch.empty(
+                (seq_len, head_dim),
+                dtype=torch.float32,
+                device=kv_cache.device,
             )
-            gathered[local_pos] = _musa_dequant_indexer_fp8_cache_row(
-                kv_cache,
-                physical_block,
-                local_pos % block_size,
-                head_dim,
-            )
+            for local_pos in range(seq_len):
+                physical_block = int(
+                    decode_metadata.block_table[
+                        block_row, local_pos // block_size
+                    ].item()
+                )
+                gathered[local_pos] = _musa_dequant_indexer_fp8_cache_row(
+                    kv_cache,
+                    physical_block,
+                    local_pos % block_size,
+                    head_dim,
+                )
         k_i = min(int(topk_tokens), seq_len, topk_indices_buffer.shape[1])
         logits = _musa_sparse_indexer_logits(q_deq[row], gathered, weights[row])
         topk_indices_buffer[row, :k_i] = torch.topk(logits, k_i, dim=-1).indices.to(
@@ -396,6 +730,117 @@ def _musa_fill_exact_sparse_indexer_indices(
                     self.topk_indices_buffer,
                 )
 """,
+    ),
+    (
+        """def _musa_gather_indexer_fp8_cache(
+    kv_cache: torch.Tensor,
+    block_table: torch.Tensor,
+    cu_seq_lens: torch.Tensor,
+    head_dim: int,
+) -> torch.Tensor:
+    total_seq_lens = int(cu_seq_lens[-1].item())
+    gathered = torch.empty(
+        (total_seq_lens, head_dim),
+        dtype=torch.float32,
+        device=kv_cache.device,
+    )
+    block_size = kv_cache.shape[1]
+    for req_idx in range(block_table.shape[0]):
+        start = int(cu_seq_lens[req_idx].item())
+        end = int(cu_seq_lens[req_idx + 1].item())
+        for local_pos in range(end - start):
+            physical_block = int(block_table[req_idx, local_pos // block_size].item())
+            pos_in_block = local_pos % block_size
+            gathered[start + local_pos] = _musa_dequant_indexer_fp8_cache_row(
+                kv_cache,
+                physical_block,
+                pos_in_block,
+                head_dim,
+            )
+    return gathered
+
+
+def _musa_sparse_indexer_logits(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    weights: torch.Tensor,
+) -> torch.Tensor:
+    # q is FP8-dequantized without an explicit q scale; the FP8 q scale is
+    # already folded into weights by fused_indexer_q_rope_quant.
+    per_head = torch.einsum("h d, n d -> h n", q.to(torch.float32), k)
+    return (per_head * weights.to(torch.float32).unsqueeze(-1)).sum(dim=0)
+
+
+def _musa_fill_topk_rows_from_indexer_logits(
+    q_deq: torch.Tensor,
+    k_deq: torch.Tensor,
+    weights: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+) -> None:
+    rows = min(q_deq.shape[0], topk_indices.shape[0], cu_seqlen_ks.numel())
+    for row in range(rows):
+        start = int(cu_seqlen_ks[row].item())
+        end = int(cu_seqlen_ke[row].item())
+        row_len = max(0, end - start)
+        if row_len == 0:
+            continue
+        k_i = min(int(topk_tokens), row_len, topk_indices.shape[1])
+        logits = _musa_sparse_indexer_logits(
+            q_deq[row],
+            k_deq[start:end],
+            weights[row],
+        )
+        topk_indices[row, :k_i] = torch.topk(logits, k_i, dim=-1).indices.to(
+            topk_indices.dtype
+        )
+
+
+def _musa_fill_decode_topk_from_indexer_cache(
+    q_deq: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    decode_metadata,
+    topk_indices_buffer: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> None:
+    seq_lens = decode_metadata.seq_lens.reshape(-1)
+    rows = min(q_deq.shape[0], seq_lens.numel(), topk_indices_buffer.shape[0])
+    block_size = kv_cache.shape[1]
+    for row in range(rows):
+        seq_len = int(seq_lens[row].item())
+        if seq_len <= 0:
+            continue
+        block_row = min(row, decode_metadata.block_table.shape[0] - 1)
+        gathered = torch.empty(
+            (seq_len, head_dim),
+            dtype=torch.float32,
+            device=kv_cache.device,
+        )
+        for local_pos in range(seq_len):
+            physical_block = int(
+                decode_metadata.block_table[
+                    block_row, local_pos // block_size
+                ].item()
+            )
+            gathered[local_pos] = _musa_dequant_indexer_fp8_cache_row(
+                kv_cache,
+                physical_block,
+                local_pos % block_size,
+                head_dim,
+            )
+        k_i = min(int(topk_tokens), seq_len, topk_indices_buffer.shape[1])
+        logits = _musa_sparse_indexer_logits(q_deq[row], gathered, weights[row])
+        topk_indices_buffer[row, :k_i] = torch.topk(logits, k_i, dim=-1).indices.to(
+            topk_indices_buffer.dtype
+        )
+
+
+""",
+        "",
     ),
     (
         """        elif (

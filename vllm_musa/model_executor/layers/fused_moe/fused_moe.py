@@ -46,10 +46,42 @@ _MXFP4_SCHEMES = {
     OCP_MX_Scheme.w_mxfp4_a_mxfp6_e3m2,
     OCP_MX_Scheme.w_mxfp4_a_mxfp6_e2m3,
 }
+_MXFP4_SIGNED_LUT_VALUES = (
+    0.0,
+    0.5,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    4.0,
+    6.0,
+    -0.0,
+    -0.5,
+    -1.0,
+    -1.5,
+    -2.0,
+    -3.0,
+    -4.0,
+    -6.0,
+)
+_MXFP4_SIGNED_LUT_CACHE: dict[tuple[str, int | None], torch.Tensor] = {}
 
 
 def _is_mxfp4_scheme(ocp_mx_scheme: str | None) -> bool:
     return ocp_mx_scheme in _MXFP4_SCHEMES
+
+
+def _musa_mxfp4_signed_lut(device: torch.device) -> torch.Tensor:
+    key = (device.type, device.index)
+    lut = _MXFP4_SIGNED_LUT_CACHE.get(key)
+    if lut is None:
+        lut = torch.tensor(
+            _MXFP4_SIGNED_LUT_VALUES,
+            dtype=torch.float32,
+            device=device,
+        )
+        _MXFP4_SIGNED_LUT_CACHE[key] = lut
+    return lut
 
 
 def _musa_torch_fused_moe_fallback(
@@ -169,25 +201,19 @@ def _dequant_mxfp4_musa(
     if scale is None:
         raise ValueError("MXFP4 dequantization requires block scales")
 
-    values = torch.tensor(
-        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0],
-        dtype=torch.float32,
-        device=x.device,
-    )
+    signed_values = _musa_mxfp4_signed_lut(x.device)
     unpacked = torch.empty(
         (*x.shape[:-1], x.shape[-1] * 2), dtype=torch.uint8, device=x.device
     )
     unpacked[..., 0::2] = x & 0x0F
     unpacked[..., 1::2] = (x >> 4) & 0x0F
 
-    sign = torch.where((unpacked & 0x08) != 0, -1.0, 1.0)
-    magnitude = values[(unpacked & 0x07).long()]
-    out = sign * magnitude
+    out = signed_values[unpacked.long()]
 
     block_size = 32
     out = out.reshape(*out.shape[:-1], -1, block_size)
     scale_factor = _musa_mxfp4_scale_to_float(scale).unsqueeze(-1)
-    out = out * scale_factor
+    out.mul_(scale_factor)
     out = out.reshape(*out.shape[:-2], -1)
     return out.to(float_dtype)
 
@@ -739,8 +765,108 @@ def fused_experts_impl(
 
 
 import vllm.model_executor.layers.fused_moe.fused_moe
+import vllm.model_executor.layers.fused_moe.router.base_router
+import vllm.model_executor.layers.fused_moe.runner.moe_runner
+from vllm_musa.deepseek_v4_jit.topk import (
+    record_moe_apply_trace,
+    record_router_select_trace,
+)
+
+
+_ORIGINAL_BASE_ROUTER_SELECT_EXPERTS = (
+    vllm.model_executor.layers.fused_moe.router.base_router.BaseRouter.select_experts
+)
+
+
+def _musa_router_select_experts_trace(
+    self,
+    hidden_states: torch.Tensor,
+    router_logits: torch.Tensor,
+    *,
+    input_ids: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_ROUTER_TOPK_TRACE", "0").lower() in {
+        "",
+        "0",
+        "false",
+        "off",
+        "no",
+    }:
+        return _ORIGINAL_BASE_ROUTER_SELECT_EXPERTS(
+            self,
+            hidden_states,
+            router_logits,
+            input_ids=input_ids,
+        )
+
+    indices_type = self._get_indices_type()
+    topk_weights, topk_ids = _ORIGINAL_BASE_ROUTER_SELECT_EXPERTS(
+        self,
+        hidden_states,
+        router_logits,
+        input_ids=input_ids,
+    )
+    record_router_select_trace(
+        router_name=self.__class__.__name__,
+        hidden_states=hidden_states,
+        router_logits=router_logits,
+        input_ids=input_ids,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        indices_type=indices_type,
+        enable_eplb=getattr(self, "enable_eplb", False),
+        stage="post_select",
+    )
+    return topk_weights, topk_ids
+
+
+_ORIGINAL_MOE_RUNNER_APPLY_QUANT_METHOD = (
+    vllm.model_executor.layers.fused_moe.runner.moe_runner.MoERunner._apply_quant_method
+)
+
+
+def _musa_moe_runner_apply_quant_method_trace(
+    self,
+    layer: torch.nn.Module,
+    hidden_states: torch.Tensor,
+    router_logits: torch.Tensor,
+    shared_experts_input: torch.Tensor | None,
+    input_ids: torch.Tensor | None = None,
+) -> tuple[torch.Tensor | None, torch.Tensor]:
+    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_ROUTER_TOPK_TRACE", "0").lower() not in {
+        "",
+        "0",
+        "false",
+        "off",
+        "no",
+    }:
+        record_moe_apply_trace(
+            layer_name=getattr(layer, "layer_name", "unknown"),
+            quant_method_name=self.quant_method.__class__.__name__,
+            router_name=self.router.__class__.__name__,
+            is_monolithic=bool(self.quant_method.is_monolithic),
+            hidden_states=hidden_states,
+            router_logits=router_logits,
+            input_ids=input_ids,
+            shared_experts_input=shared_experts_input,
+            stage="pre_apply",
+        )
+    return _ORIGINAL_MOE_RUNNER_APPLY_QUANT_METHOD(
+        self,
+        layer,
+        hidden_states,
+        router_logits,
+        shared_experts_input,
+        input_ids=input_ids,
+    )
 
 vllm.model_executor.layers.fused_moe.fused_moe.fused_experts_impl = fused_experts_impl
 vllm.model_executor.layers.fused_moe.fused_moe.TritonExperts._supports_quant_scheme = (
     _supports_quant_scheme
+)
+vllm.model_executor.layers.fused_moe.router.base_router.BaseRouter.select_experts = (
+    _musa_router_select_experts_trace
+)
+vllm.model_executor.layers.fused_moe.runner.moe_runner.MoERunner._apply_quant_method = (
+    _musa_moe_runner_apply_quant_method_trace
 )

@@ -54,6 +54,118 @@ def _musa_warn_cache_fallback_once(op_name: str) -> None:
     )
 
 
+def _musa_try_tilelang_dequantize_and_gather_k_cache(
+    out: torch.Tensor,
+    k_cache: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor | None,
+    block_table: torch.Tensor,
+    block_size: int,
+    offset: int,
+) -> bool:
+    mode = (
+        os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_IMPL", "auto")
+        .strip()
+        .lower()
+    )
+    if mode in {"", "torch", "fallback", "0", "off"}:
+        return False
+    try:
+        from vllm_musa.deepseek_v4_jit.cache_utils import (
+            try_tilelang_dequantize_and_gather_k_cache,
+        )
+
+        handled, reason = try_tilelang_dequantize_and_gather_k_cache(
+            out,
+            k_cache,
+            seq_lens,
+            gather_lens,
+            block_table,
+            block_size,
+            offset,
+        )
+    except Exception as exc:
+        if mode in {"tilelang", "jit", "force"}:
+            raise
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang dequantize_and_gather_k_cache "
+            "candidate failed; falling back to torch path: %s",
+            exc,
+        )
+        return False
+    if handled:
+        logger.warning_once(
+            "Using MUSA TileLang DeepSeek-V4 dequantize_and_gather_k_cache "
+            "candidate. This is auto-enabled with torch fallback for "
+            "unsupported shapes."
+        )
+        return True
+    if os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_TRACE") == "1":
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang dequantize_and_gather_k_cache skipped: %s",
+            reason,
+        )
+    return False
+
+
+def _musa_try_tilelang_combine_topk_swa_indices(
+    topk_indices: torch.Tensor,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor,
+    window_size: int,
+    compress_ratio: int,
+    topk: int,
+    M: int,
+    N: int,
+) -> tuple[bool, tuple[torch.Tensor, torch.Tensor] | None]:
+    mode = (
+        os.getenv("VLLM_MUSA_DEEPSEEK_V4_COMBINE_TOPK_SWA_IMPL", "auto")
+        .strip()
+        .lower()
+    )
+    if mode in {"", "torch", "fallback", "0", "off"}:
+        return False, None
+    try:
+        from vllm_musa.deepseek_v4_jit.cache_utils import (
+            try_tilelang_combine_topk_swa_indices,
+        )
+
+        handled, result, reason = try_tilelang_combine_topk_swa_indices(
+            topk_indices,
+            query_start_loc,
+            seq_lens,
+            gather_lens,
+            window_size,
+            compress_ratio,
+            topk,
+            M,
+            N,
+        )
+    except Exception as exc:
+        if mode in {"tilelang", "jit", "force"}:
+            raise
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang combine_topk_swa_indices candidate "
+            "failed; falling back to torch path: %s",
+            exc,
+        )
+        return False, None
+    if handled and result is not None:
+        logger.warning_once(
+            "Using MUSA TileLang DeepSeek-V4 combine_topk_swa_indices "
+            "candidate. This is env-gated with torch fallback for "
+            "unsupported shapes."
+        )
+        return True, result
+    if os.getenv("VLLM_MUSA_DEEPSEEK_V4_COMBINE_TOPK_SWA_TRACE") == "1":
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang combine_topk_swa_indices skipped: %s",
+            reason,
+        )
+    return False, None
+
+
 def _musa_deepseek_v4_block_cache_view(k_cache: torch.Tensor) -> torch.Tensor:
     if k_cache.dtype != torch.uint8:
         raise AssertionError(f"DeepSeek-V4 K cache must be uint8, got {k_cache.dtype}")
@@ -212,6 +324,187 @@ def _musa_combine_topk_swa_indices_fallback(
 """,
     ),
     (
+        """def _musa_warn_cache_fallback_once(op_name: str) -> None:
+    logger.warning_once(
+        "Using opt-in MUSA torch DeepSeek-V4 %s fallback. This emulates "
+        "the Triton cache/top-k utility in torch; it is diagnostic, not a "
+        "production backend.",
+        op_name,
+    )
+
+
+def _musa_deepseek_v4_block_cache_view(k_cache: torch.Tensor) -> torch.Tensor:
+""",
+        """def _musa_warn_cache_fallback_once(op_name: str) -> None:
+    logger.warning_once(
+        "Using opt-in MUSA torch DeepSeek-V4 %s fallback. This emulates "
+        "the Triton cache/top-k utility in torch; it is diagnostic, not a "
+        "production backend.",
+        op_name,
+    )
+
+
+def _musa_try_tilelang_dequantize_and_gather_k_cache(
+    out: torch.Tensor,
+    k_cache: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor | None,
+    block_table: torch.Tensor,
+    block_size: int,
+    offset: int,
+) -> bool:
+    mode = (
+        os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_IMPL", "auto")
+        .strip()
+        .lower()
+    )
+    if mode in {"", "torch", "fallback", "0", "off"}:
+        return False
+    try:
+        from vllm_musa.deepseek_v4_jit.cache_utils import (
+            try_tilelang_dequantize_and_gather_k_cache,
+        )
+
+        handled, reason = try_tilelang_dequantize_and_gather_k_cache(
+            out,
+            k_cache,
+            seq_lens,
+            gather_lens,
+            block_table,
+            block_size,
+            offset,
+        )
+    except Exception as exc:
+        if mode in {"tilelang", "jit", "force"}:
+            raise
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang dequantize_and_gather_k_cache "
+            "candidate failed; falling back to torch path: %s",
+            exc,
+        )
+        return False
+    if handled:
+        logger.warning_once(
+            "Using MUSA TileLang DeepSeek-V4 dequantize_and_gather_k_cache "
+            "candidate. This is auto-enabled with torch fallback for "
+            "unsupported shapes."
+        )
+        return True
+    if os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_TRACE") == "1":
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang dequantize_and_gather_k_cache skipped: %s",
+            reason,
+        )
+    return False
+
+
+def _musa_deepseek_v4_block_cache_view(k_cache: torch.Tensor) -> torch.Tensor:
+""",
+    ),
+    (
+        """    if os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_TRACE") == "1":
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang dequantize_and_gather_k_cache skipped: %s",
+            reason,
+        )
+    return False
+
+
+def _musa_deepseek_v4_block_cache_view(k_cache: torch.Tensor) -> torch.Tensor:
+""",
+        """    if os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_TRACE") == "1":
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang dequantize_and_gather_k_cache skipped: %s",
+            reason,
+        )
+    return False
+
+
+def _musa_try_tilelang_combine_topk_swa_indices(
+    topk_indices: torch.Tensor,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor,
+    window_size: int,
+    compress_ratio: int,
+    topk: int,
+    M: int,
+    N: int,
+) -> tuple[bool, tuple[torch.Tensor, torch.Tensor] | None]:
+    mode = (
+        os.getenv("VLLM_MUSA_DEEPSEEK_V4_COMBINE_TOPK_SWA_IMPL", "auto")
+        .strip()
+        .lower()
+    )
+    if mode in {"", "torch", "fallback", "0", "off"}:
+        return False, None
+    try:
+        from vllm_musa.deepseek_v4_jit.cache_utils import (
+            try_tilelang_combine_topk_swa_indices,
+        )
+
+        handled, result, reason = try_tilelang_combine_topk_swa_indices(
+            topk_indices,
+            query_start_loc,
+            seq_lens,
+            gather_lens,
+            window_size,
+            compress_ratio,
+            topk,
+            M,
+            N,
+        )
+    except Exception as exc:
+        if mode in {"tilelang", "jit", "force"}:
+            raise
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang combine_topk_swa_indices candidate "
+            "failed; falling back to torch path: %s",
+            exc,
+        )
+        return False, None
+    if handled and result is not None:
+        logger.warning_once(
+            "Using MUSA TileLang DeepSeek-V4 combine_topk_swa_indices "
+            "candidate. This is env-gated with torch fallback for "
+            "unsupported shapes."
+        )
+        return True, result
+    if os.getenv("VLLM_MUSA_DEEPSEEK_V4_COMBINE_TOPK_SWA_TRACE") == "1":
+        logger.warning_once(
+            "DeepSeek-V4 MUSA TileLang combine_topk_swa_indices skipped: %s",
+            reason,
+        )
+    return False, None
+
+
+def _musa_deepseek_v4_block_cache_view(k_cache: torch.Tensor) -> torch.Tensor:
+""",
+    ),
+    (
+        """    if _is_musa_tensor(out):
+        if _musa_deepseek_v4_cache_fallback_enabled():
+            _musa_warn_cache_fallback_once("dequantize_and_gather_k_cache")
+""",
+        """    if _is_musa_tensor(out):
+        if _musa_try_tilelang_dequantize_and_gather_k_cache(
+            out, k_cache, seq_lens, gather_lens, block_table, block_size, offset
+        ):
+            return
+        if _musa_deepseek_v4_cache_fallback_enabled():
+            _musa_warn_cache_fallback_once("dequantize_and_gather_k_cache")
+""",
+    ),
+    (
+        """os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_IMPL", "torch")""",
+        """os.getenv("VLLM_MUSA_DEEPSEEK_V4_DEQUANT_GATHER_IMPL", "auto")""",
+    ),
+    (
+        '''"candidate. This is env-gated pending parity and E2E acceptance."''',
+        '''"candidate. This is auto-enabled with torch fallback for "
+            "unsupported shapes."''',
+    ),
+    (
         """    assert k.dim() == 2 and k.shape[1] == 512, (
         f"K must be [num_tokens, 512], got {k.shape}"
     )
@@ -230,6 +523,10 @@ def _musa_combine_topk_swa_indices_fallback(
 """,
         """) -> None:
     if _is_musa_tensor(out):
+        if _musa_try_tilelang_dequantize_and_gather_k_cache(
+            out, k_cache, seq_lens, gather_lens, block_table, block_size, offset
+        ):
+            return
         if _musa_deepseek_v4_cache_fallback_enabled():
             _musa_warn_cache_fallback_once("dequantize_and_gather_k_cache")
             return _musa_dequantize_and_gather_k_cache_fallback(
@@ -262,10 +559,76 @@ def _musa_combine_topk_swa_indices_fallback(
 """,
     ),
     (
+        """    if _is_musa_tensor(topk_indices):
+        if _musa_deepseek_v4_cache_fallback_enabled():
+            _musa_warn_cache_fallback_once("combine_topk_swa_indices")
+            return _musa_combine_topk_swa_indices_fallback(
+                topk_indices,
+                query_start_loc,
+                seq_lens,
+                gather_lens,
+                window_size,
+                compress_ratio,
+                topk,
+                M,
+                N,
+            )
+        _raise_musa_deepseek_v4_cache_unsupported("combine_topk_swa_indices")
+""",
+        "",
+    ),
+    (
+        """    if _is_musa_tensor(topk_indices):
+        if _musa_deepseek_v4_cache_fallback_enabled():
+            _musa_warn_cache_fallback_once("combine_topk_swa_indices")
+            impl = os.getenv(
+                "VLLM_MUSA_DEEPSEEK_V4_COMBINE_TOPK_SWA_IMPL", "loop"
+            ).strip().lower()
+            if impl in {"vectorized", "vec"}:
+                return _musa_combine_topk_swa_indices_vectorized(
+                    topk_indices,
+                    query_start_loc,
+                    seq_lens,
+                    gather_lens,
+                    window_size,
+                    compress_ratio,
+                    topk,
+                    M,
+                    N,
+                )
+            return _musa_combine_topk_swa_indices_fallback(
+                topk_indices,
+                query_start_loc,
+                seq_lens,
+                gather_lens,
+                window_size,
+                compress_ratio,
+                topk,
+                M,
+                N,
+            )
+        _raise_musa_deepseek_v4_cache_unsupported("combine_topk_swa_indices")
+""",
+        "",
+    ),
+    (
         """    num_tokens = topk_indices.shape[0]
     num_reqs = seq_lens.shape[0]
 """,
         """    if _is_musa_tensor(topk_indices):
+        handled, result = _musa_try_tilelang_combine_topk_swa_indices(
+            topk_indices,
+            query_start_loc,
+            seq_lens,
+            gather_lens,
+            window_size,
+            compress_ratio,
+            topk,
+            M,
+            N,
+        )
+        if handled and result is not None:
+            return result
         if _musa_deepseek_v4_cache_fallback_enabled():
             _musa_warn_cache_fallback_once("combine_topk_swa_indices")
             return _musa_combine_topk_swa_indices_fallback(

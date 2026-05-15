@@ -21,6 +21,15 @@ logger = init_logger(__name__)
 _patches_applied = False
 
 
+def _patch_is_needed(source: str, old: str, new: str) -> bool:
+    """Return whether a text replacement still needs to be applied."""
+    if old not in source:
+        return False
+    if new == "":
+        return True
+    return new not in source
+
+
 @contextlib.contextmanager
 def _patch_file_lock():
     lock_path = Path(os.getenv("VLLM_MUSA_PATCH_LOCK", "/tmp/vllm_musa_patches.lock"))
@@ -131,7 +140,7 @@ def _apply_patches_unlocked():
 
             # Check if any patches are needed
             needs_patch = any(
-                old in source and new not in source for old, new in patches
+                _patch_is_needed(source, old, new) for old, new in patches
             )
             if not needs_patch:
                 logger.debug(f"No patches needed for {module_name}")
@@ -141,7 +150,7 @@ def _apply_patches_unlocked():
             patched_source = source
             applied_count = 0
             for old, new in patches:
-                if old in patched_source and new not in patched_source:
+                if _patch_is_needed(patched_source, old, new):
                     patched_source = patched_source.replace(old, new)
                     applied_count += 1
 

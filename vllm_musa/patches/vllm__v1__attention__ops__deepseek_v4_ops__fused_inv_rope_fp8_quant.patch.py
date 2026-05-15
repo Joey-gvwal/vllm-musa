@@ -117,7 +117,8 @@ logger = init_logger(__name__)
         rotated = torch.empty_like(rope)
         rotated[..., 0::2] = even * cos + odd * sin
         rotated[..., 1::2] = odd * cos - even * sin
-        x = x.clone()
+        if torch.compiler.is_compiling() or x.data_ptr() == o.data_ptr():
+            x = x.clone()
         x[..., rope_abs_start : rope_abs_start + rope_dim] = rotated
 
         x = (
@@ -178,16 +179,28 @@ logger = init_logger(__name__)
             )
             scale_buf.copy_(scales)
 
-        logger.warning_once(
-            "Using opt-in MUSA torch fused_inv_rope_fp8_quant fallback. "
-            "This is diagnostic and not a production replacement for the "
-            "native fused inverse-RoPE FP8 quant kernel."
-        )
+        if not torch.compiler.is_compiling():
+            logger.warning_once(
+                "Using opt-in MUSA torch fused_inv_rope_fp8_quant fallback. "
+                "This is diagnostic and not a production replacement for the "
+                "native fused inverse-RoPE FP8 quant kernel."
+            )
         return fp8_buf.transpose(0, 1), scale_buf.transpose(0, 1)
     from vllm.utils.deep_gemm import get_tma_aligned_size
 
     # Shape setup for the native Triton path.
     num_tokens, num_heads, head_dim = o.shape
+""",
+    ),
+    (
+        """        rotated[..., 1::2] = odd * cos - even * sin
+        x = x.clone()
+        x[..., rope_abs_start : rope_abs_start + rope_dim] = rotated
+""",
+        """        rotated[..., 1::2] = odd * cos - even * sin
+        if torch.compiler.is_compiling() or x.data_ptr() == o.data_ptr():
+            x = x.clone()
+        x[..., rope_abs_start : rope_abs_start + rope_dim] = rotated
 """,
     ),
 ]

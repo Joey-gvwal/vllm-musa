@@ -313,6 +313,21 @@ def _musa_deepseek_v4_dequant_weight(
     groups: int,
 ) -> torch.Tensor:
     group_size = 128
+    b, scales, out_dim, in_dim = _musa_deepseek_v4_prepare_fp8_einsum_weight(
+        b, b_scale, groups
+    )
+    b_blocks = b.to(torch.float32).reshape(
+        groups, out_dim // group_size, group_size, in_dim // group_size, group_size
+    )
+    return (b_blocks * scales[:, :, None, :, None]).reshape(groups, out_dim, in_dim)
+
+
+def _musa_deepseek_v4_prepare_fp8_einsum_weight(
+    b: torch.Tensor,
+    b_scale: torch.Tensor,
+    groups: int,
+) -> tuple[torch.Tensor, torch.Tensor, int, int]:
+    group_size = 128
     if b.dim() == 2:
         flat_out_dim, in_dim = b.shape
         if flat_out_dim % groups != 0:
@@ -353,10 +368,89 @@ def _musa_deepseek_v4_dequant_weight(
     elif scales.shape == (groups, in_blocks, out_blocks):
         scales = scales.transpose(-1, -2)
     assert scales.shape == (groups, out_blocks, in_blocks)
-    b_blocks = b.to(torch.float32).reshape(
-        groups, out_blocks, group_size, in_blocks, group_size
+    return b, scales.contiguous(), out_dim, in_dim
+
+
+def _musa_deepseek_v4_try_fp8_einsum_gemv(
+    a: torch.Tensor,
+    a_scale: torch.Tensor,
+    b: torch.Tensor,
+    b_scale: torch.Tensor,
+    out: torch.Tensor,
+    equation: str,
+) -> bool:
+    mode = os.getenv("VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_IMPL", "torch").strip().lower()
+    if mode not in {"gemv", "musa_gemv", "native_gemv"}:
+        return False
+    if equation != "bhr,hdr->bhd":
+        return False
+    if not current_platform.is_musa():
+        return False
+    fp8_dtype = torch.float8_e4m3fn
+    if a.dtype != fp8_dtype or b.dtype != fp8_dtype:
+        return False
+    if a.dim() != 3 or a_scale.dim() != 3 or out.dim() != 3:
+        return False
+
+    tokens, groups, hidden = a.shape
+    if groups == 1:
+        if tokens > 2:
+            return False
+    elif groups == 2:
+        if tokens > 1:
+            return False
+    else:
+        return False
+
+    if hidden % 128 != 0 or tuple(a_scale.shape) != (tokens, groups, hidden // 128):
+        return False
+
+    try:
+        import vllm_musa._custom_ops  # noqa: F401
+    except Exception as exc:
+        logger.warning_once(
+            "Unable to import vllm_musa._custom_ops for MUSA native GEMV "
+            "DeepSeek-V4 FP8 einsum path; using fallback. Error: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    gemv = getattr(getattr(torch.ops, "_C_musa_ops", None), "musa_fused_gemv", None)
+    if gemv is None:
+        return False
+
+    b, b_scales, out_dim, in_dim = _musa_deepseek_v4_prepare_fp8_einsum_weight(
+        b, b_scale, groups
     )
-    return (b_blocks * scales[:, :, None, :, None]).reshape(groups, out_dim, in_dim)
+    if in_dim != hidden or tuple(out.shape) != (tokens, groups, out_dim):
+        return False
+
+    try:
+        for group in range(groups):
+            tmp = torch.empty((tokens, out_dim), device=out.device, dtype=out.dtype)
+            gemv(
+                a[:, group, :].contiguous(),
+                b[group].contiguous(),
+                tmp,
+                a_scale[:, group, :].contiguous().to(torch.float32),
+                b_scales[group],
+                False,
+                False,
+                False,
+                None,
+                1.0e-6,
+            )
+            out[:, group, :].copy_(tmp)
+    except Exception as exc:
+        logger.warning_once(
+            "Opt-in MUSA native GEMV DeepSeek-V4 FP8 einsum path failed; "
+            "falling back to torch FP8 einsum fallback. Error: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+    return True
 
 
 def _musa_deepseek_v4_fp8_einsum_fallback(
@@ -367,6 +461,14 @@ def _musa_deepseek_v4_fp8_einsum_fallback(
     out: torch.Tensor,
     equation: str,
 ) -> None:
+    if _musa_deepseek_v4_try_fp8_einsum_gemv(
+        a, a_scale, b, b_scale, out, equation
+    ):
+        logger.warning_once(
+            "Using opt-in MUSA native GEMV DeepSeek-V4 FP8 einsum path for "
+            "decode-sized rows; larger rows stay on the torch fallback."
+        )
+        return
     if equation != "bhr,hdr->bhd":
         raise NotImplementedError(
             f"MUSA DeepSeek-V4 FP8 einsum fallback does not support {equation!r}"

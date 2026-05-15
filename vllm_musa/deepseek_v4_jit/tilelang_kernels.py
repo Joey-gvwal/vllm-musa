@@ -233,3 +233,516 @@ def kv_rope_pack_kernel():
                         ] = T.Cast("uint8", 0)
 
     return _kv_rope_pack_kernel
+
+
+@tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+def dequantize_gather_k_cache_kernel():
+    num_reqs = T.dynamic("num_reqs")
+    out_tokens = T.dynamic("out_tokens")
+    num_pages = T.dynamic("num_pages")
+    page_bytes = T.dynamic("page_bytes")
+    page_u32 = T.dynamic("page_u32")
+    max_blocks_per_seq = T.dynamic("max_blocks_per_seq")
+    threads = 256
+
+    @T.prim_func
+    def _dequantize_gather_k_cache_kernel(
+        out: T.Tensor((num_reqs, out_tokens, HIDDEN_SIZE), T.bfloat16),
+        out_u32: T.Tensor((num_reqs, out_tokens, HIDDEN_SIZE // 2), T.uint32),
+        cache_u8: T.Tensor((num_pages, page_bytes), T.uint8),
+        cache_u32: T.Tensor((num_pages, page_u32), T.uint32),
+        seq_lens: T.Tensor((num_reqs,), T.int32),
+        gather_lens: T.Tensor((num_reqs,), T.int32),
+        block_table: T.Tensor((num_reqs, max_blocks_per_seq), T.int32),
+        block_size: T.int32,
+        offset: T.int32,
+        has_gather_lens: T.int32,
+    ):
+        with T.Kernel(num_reqs, out_tokens, threads=threads) as (
+            req_id,
+            gather_id,
+        ):
+            tx = T.get_thread_binding()
+            seq_len = seq_lens[req_id]
+            gather_len = T.if_then_else(
+                has_gather_lens != 0,
+                gather_lens[req_id],
+                seq_len,
+            )
+            out_token = offset + gather_id
+
+            if gather_id < gather_len and out_token < out_tokens:
+                pos = seq_len - gather_len + gather_id
+                block_in_seq = pos // block_size
+                pos_in_block = pos - block_in_seq * block_size
+                physical_block = block_table[req_id, block_in_seq]
+
+                if physical_block >= 0 and physical_block < num_pages:
+                    token_base = pos_in_block * TOKEN_VALUE_BYTES
+                    scale_base = (
+                        block_size * TOKEN_VALUE_BYTES
+                        + pos_in_block * TOKEN_SCALE_BYTES
+                    )
+
+                    for col_base in T.serial(0, NOPE_DIM, threads):
+                        col = col_base + tx
+                        if col < NOPE_DIM:
+                            qblock_id = col // 64
+                            q = T.Cast(
+                                "float32",
+                                T.reinterpret(
+                                    "float8_e4m3fn",
+                                    cache_u8[physical_block, token_base + col],
+                                ),
+                            )
+                            encoded_scale = T.Cast(
+                                "float32",
+                                cache_u8[physical_block, scale_base + qblock_id],
+                            )
+                            scale = T.exp2(encoded_scale - 127.0)
+                            out[req_id, out_token, col] = T.Cast(
+                                "bfloat16",
+                                q * scale,
+                            )
+
+                    if tx < ROPE_DIM // 2:
+                        out_u32[
+                            req_id,
+                            out_token,
+                            NOPE_DIM // 2 + tx,
+                        ] = cache_u32[
+                            physical_block,
+                            (token_base + NOPE_DIM) // 4 + tx,
+                        ]
+
+    return _dequantize_gather_k_cache_kernel
+
+
+@tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+def combine_topk_swa_indices_kernel(
+    topk_width: int,
+    topk: int,
+    window_size: int,
+    compress_ratio: int,
+    combined_topk: int,
+):
+    num_tokens = T.dynamic("num_tokens")
+    num_reqs = T.dynamic("num_reqs")
+    num_query_locs = T.dynamic("num_query_locs")
+    threads = 128
+
+    @T.prim_func
+    def _combine_topk_swa_indices_kernel(
+        combined_indices: T.Tensor((num_tokens, combined_topk), T.int32),
+        combined_lens: T.Tensor((num_tokens,), T.int32),
+        topk_indices: T.Tensor((num_tokens, topk_width), T.int32),
+        query_start_loc: T.Tensor((num_query_locs,), T.int32),
+        seq_lens: T.Tensor((num_reqs,), T.int32),
+        gather_lens: T.Tensor((num_reqs,), T.int32),
+        M: T.int32,
+        N: T.int32,
+    ):
+        with T.Kernel(num_reqs, num_tokens, threads=threads) as (
+            req_id,
+            token_offset,
+        ):
+            tx = T.get_thread_binding()
+
+            base = query_start_loc[0]
+            query_start = query_start_loc[req_id] - base
+            query_end = query_start_loc[req_id + 1] - base
+            query_len = query_end - query_start
+
+            if token_offset < query_len:
+                token_idx = query_start + token_offset
+                seq_len = seq_lens[req_id]
+                gather_len = gather_lens[req_id]
+                pos = seq_len - query_len + token_offset
+                gather_start = seq_len - gather_len
+                topk_len = T.min((pos + 1) // compress_ratio, topk)
+                swa_len = T.min(pos + 1, window_size)
+                req_offset = M * req_id
+
+                for col_base in T.serial(0, topk, threads):
+                    col = col_base + tx
+                    if col < topk_len and col < topk_width:
+                        combined_indices[token_idx, col] = (
+                            topk_indices[token_idx, col] + req_offset
+                        )
+
+                for col_base in T.serial(0, window_size, threads):
+                    col = col_base + tx
+                    out_col = topk_len + col
+                    if col < swa_len and out_col < combined_topk:
+                        combined_indices[token_idx, out_col] = (
+                            req_offset
+                            + N
+                            + col
+                            + pos
+                            - swa_len
+                            + 1
+                            - gather_start
+                        )
+
+                if tx == 0:
+                    combined_lens[token_idx] = topk_len + swa_len
+
+    return _combine_topk_swa_indices_kernel
+
+
+@tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+def sparse_indexer_topk_rows_kernel(max_width: int, topk: int, score_stride: int):
+    rows = T.dynamic("rows")
+    threads = 128
+
+    @T.prim_func
+    def _sparse_indexer_topk_rows_kernel(
+        scores: T.StridedTensor((rows, max_width), (score_stride, 1), T.float32),
+        starts: T.Tensor((rows,), T.int32),
+        ends: T.Tensor((rows,), T.int32),
+        out: T.Tensor((rows, topk), T.int32),
+    ):
+        with T.Kernel(rows, threads=threads) as row_id:
+            tx = T.get_thread_binding()
+            selected = T.alloc_shared((max_width,), dtype=T.int32)
+            thread_scores = T.alloc_shared((threads,), dtype=T.float32)
+            thread_indices = T.alloc_shared((threads,), dtype=T.int32)
+            local_best_score = T.alloc_local((1,), dtype=T.float32)
+            local_best_idx = T.alloc_local((1,), dtype=T.int32)
+
+            row_start = starts[row_id]
+            row_end = ends[row_id]
+            row_len = row_end - row_start
+
+            for init_base in T.serial(0, max_width, threads):
+                pos = init_base + tx
+                if pos < max_width:
+                    selected[pos] = 0
+            T.sync_threads()
+
+            for kth in T.serial(0, topk):
+                local_best_score[0] = -3.4028234663852886e38
+                local_best_idx[0] = -1
+
+                if kth < row_len:
+                    for pos_base in T.serial(0, max_width, threads):
+                        pos = pos_base + tx
+                        if (
+                            pos >= row_start
+                            and pos < row_end
+                            and selected[pos] == 0
+                        ):
+                            score = scores[row_id, pos]
+                            if score > local_best_score[0] or (
+                                score == local_best_score[0]
+                                and (
+                                    local_best_idx[0] < 0
+                                    or pos < local_best_idx[0]
+                                )
+                            ):
+                                local_best_score[0] = score
+                                local_best_idx[0] = pos
+
+                thread_scores[tx] = local_best_score[0]
+                thread_indices[tx] = local_best_idx[0]
+                T.sync_threads()
+
+                if tx == 0:
+                    for reduce_idx in T.serial(1, threads):
+                        other_score = thread_scores[reduce_idx]
+                        other_idx = thread_indices[reduce_idx]
+                        if other_idx >= 0 and (
+                            other_score > thread_scores[0]
+                            or (
+                                other_score == thread_scores[0]
+                                and (
+                                    thread_indices[0] < 0
+                                    or other_idx < thread_indices[0]
+                                )
+                            )
+                        ):
+                            thread_scores[0] = other_score
+                            thread_indices[0] = other_idx
+
+                    if thread_indices[0] >= 0:
+                        selected[thread_indices[0]] = 1
+                        out[row_id, kth] = thread_indices[0] - row_start
+                    else:
+                        out[row_id, kth] = -1
+                T.sync_threads()
+
+    return _sparse_indexer_topk_rows_kernel
+
+
+@tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+def biased_topk_softplus_sqrt_256_kernel(
+    topk: int,
+    renormalize: bool,
+    apply_routed_scaling_factor: bool,
+):
+    num_tokens = T.dynamic("num_tokens")
+    num_experts = 256
+    threads = 256
+
+    @T.prim_func
+    def _biased_topk_softplus_sqrt_256_kernel(
+        gating_output: T.Tensor((num_tokens, num_experts), T.float32),
+        correction_bias: T.Tensor((num_experts,), T.float32),
+        topk_weights: T.Tensor((num_tokens, topk), T.float32),
+        topk_indices: T.Tensor((num_tokens, topk), T.int64),
+        token_expert_indices: T.Tensor((num_tokens, topk), T.int32),
+        routed_scaling_factor: T.float32,
+    ):
+        with T.Kernel(num_tokens, threads=threads) as token_id:
+            tx = T.get_thread_binding()
+            selected_ids = T.alloc_shared((topk,), dtype=T.int32)
+            selected_sum = T.alloc_shared((1,), dtype=T.float32)
+            reduction_scores = T.alloc_shared((threads,), dtype=T.float32)
+            reduction_weights = T.alloc_shared((threads,), dtype=T.float32)
+            reduction_ids = T.alloc_shared((threads,), dtype=T.int32)
+            raw_score = T.alloc_local((1,), dtype=T.float32)
+            choice_score = T.alloc_local((1,), dtype=T.float32)
+            candidate_id = T.alloc_local((1,), dtype=T.int32)
+            already_selected = T.alloc_local((1,), dtype=T.int32)
+
+            if tx == 0:
+                selected_sum[0] = 0.0
+            T.sync_threads()
+
+            for kth in T.serial(0, topk):
+                raw_score[0] = T.sqrt(
+                    T.log(1.0 + T.exp(gating_output[token_id, tx]))
+                )
+                choice_score[0] = raw_score[0] + correction_bias[tx]
+                candidate_id[0] = tx
+                already_selected[0] = 0
+
+                for prev in T.serial(0, kth):
+                    if tx == selected_ids[prev]:
+                        already_selected[0] = 1
+                if already_selected[0] != 0:
+                    choice_score[0] = -3.4028234663852886e38
+
+                reduction_scores[tx] = choice_score[0]
+                reduction_weights[tx] = raw_score[0]
+                reduction_ids[tx] = candidate_id[0]
+                T.sync_threads()
+
+                if tx < 128:
+                    other_score = reduction_scores[tx + 128]
+                    other_id = reduction_ids[tx + 128]
+                    if (other_score > reduction_scores[tx]) or (
+                        other_score == reduction_scores[tx]
+                        and other_id < reduction_ids[tx]
+                    ):
+                        reduction_scores[tx] = other_score
+                        reduction_weights[tx] = reduction_weights[tx + 128]
+                        reduction_ids[tx] = other_id
+                T.sync_threads()
+                if tx < 64:
+                    other_score = reduction_scores[tx + 64]
+                    other_id = reduction_ids[tx + 64]
+                    if (other_score > reduction_scores[tx]) or (
+                        other_score == reduction_scores[tx]
+                        and other_id < reduction_ids[tx]
+                    ):
+                        reduction_scores[tx] = other_score
+                        reduction_weights[tx] = reduction_weights[tx + 64]
+                        reduction_ids[tx] = other_id
+                T.sync_threads()
+                if tx < 32:
+                    other_score = reduction_scores[tx + 32]
+                    other_id = reduction_ids[tx + 32]
+                    if (other_score > reduction_scores[tx]) or (
+                        other_score == reduction_scores[tx]
+                        and other_id < reduction_ids[tx]
+                    ):
+                        reduction_scores[tx] = other_score
+                        reduction_weights[tx] = reduction_weights[tx + 32]
+                        reduction_ids[tx] = other_id
+                T.sync_threads()
+                if tx < 16:
+                    other_score = reduction_scores[tx + 16]
+                    other_id = reduction_ids[tx + 16]
+                    if (other_score > reduction_scores[tx]) or (
+                        other_score == reduction_scores[tx]
+                        and other_id < reduction_ids[tx]
+                    ):
+                        reduction_scores[tx] = other_score
+                        reduction_weights[tx] = reduction_weights[tx + 16]
+                        reduction_ids[tx] = other_id
+                T.sync_threads()
+                if tx < 8:
+                    other_score = reduction_scores[tx + 8]
+                    other_id = reduction_ids[tx + 8]
+                    if (other_score > reduction_scores[tx]) or (
+                        other_score == reduction_scores[tx]
+                        and other_id < reduction_ids[tx]
+                    ):
+                        reduction_scores[tx] = other_score
+                        reduction_weights[tx] = reduction_weights[tx + 8]
+                        reduction_ids[tx] = other_id
+                T.sync_threads()
+                if tx < 4:
+                    other_score = reduction_scores[tx + 4]
+                    other_id = reduction_ids[tx + 4]
+                    if (other_score > reduction_scores[tx]) or (
+                        other_score == reduction_scores[tx]
+                        and other_id < reduction_ids[tx]
+                    ):
+                        reduction_scores[tx] = other_score
+                        reduction_weights[tx] = reduction_weights[tx + 4]
+                        reduction_ids[tx] = other_id
+                T.sync_threads()
+                if tx < 2:
+                    other_score = reduction_scores[tx + 2]
+                    other_id = reduction_ids[tx + 2]
+                    if (other_score > reduction_scores[tx]) or (
+                        other_score == reduction_scores[tx]
+                        and other_id < reduction_ids[tx]
+                    ):
+                        reduction_scores[tx] = other_score
+                        reduction_weights[tx] = reduction_weights[tx + 2]
+                        reduction_ids[tx] = other_id
+                T.sync_threads()
+                if tx == 0:
+                    other_score = reduction_scores[1]
+                    other_id = reduction_ids[1]
+                    if (other_score > reduction_scores[0]) or (
+                        other_score == reduction_scores[0]
+                        and other_id < reduction_ids[0]
+                    ):
+                        reduction_scores[0] = other_score
+                        reduction_weights[0] = reduction_weights[1]
+                        reduction_ids[0] = other_id
+
+                    selected_ids[kth] = reduction_ids[0]
+                    selected_sum[0] += reduction_weights[0]
+                    topk_weights[token_id, kth] = reduction_weights[0]
+                    topk_indices[token_id, kth] = T.Cast("int64", reduction_ids[0])
+                    token_expert_indices[token_id, kth] = reduction_ids[0]
+                T.sync_threads()
+
+            if tx == 0:
+                if renormalize:
+                    denom = T.max(selected_sum[0], 1.0e-20)
+                    for kth in T.serial(0, topk):
+                        topk_weights[token_id, kth] = (
+                            topk_weights[token_id, kth] / denom
+                        )
+                if apply_routed_scaling_factor:
+                    for kth in T.serial(0, topk):
+                        topk_weights[token_id, kth] = (
+                            topk_weights[token_id, kth] * routed_scaling_factor
+                        )
+
+    return _biased_topk_softplus_sqrt_256_kernel
+
+
+@tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+def biased_topk_softplus_sqrt_256_warp_kernel(
+    topk: int,
+    renormalize: bool,
+    apply_routed_scaling_factor: bool,
+    tokens_per_block: int = 16,
+):
+    num_tokens = T.dynamic("num_tokens")
+    num_experts = 256
+    warp_size = 32
+    elems_per_thread = 8
+    threads = tokens_per_block * warp_size
+
+    @T.prim_func
+    def _biased_topk_softplus_sqrt_256_warp_kernel(
+        gating_output: T.Tensor((num_tokens, num_experts), T.float32),
+        correction_bias: T.Tensor((num_experts,), T.float32),
+        topk_weights: T.Tensor((num_tokens, topk), T.float32),
+        topk_indices: T.Tensor((num_tokens, topk), T.int64),
+        token_expert_indices: T.Tensor((num_tokens, topk), T.int32),
+        routed_scaling_factor: T.float32,
+    ):
+        with T.Kernel(T.ceildiv(num_tokens, tokens_per_block), threads=threads) as block_id:
+            tx = T.get_thread_binding()
+            lane_id = tx % warp_size
+            warp_id = tx // warp_size
+            token_id = block_id * tokens_per_block + warp_id
+
+            raw_scores = T.alloc_local((elems_per_thread,), dtype=T.float32)
+            choice_scores = T.alloc_local((elems_per_thread,), dtype=T.float32)
+            selected_sum = T.alloc_local((1,), dtype=T.float32)
+            best_choice = T.alloc_local((1,), dtype=T.float32)
+            best_raw = T.alloc_local((1,), dtype=T.float32)
+            best_id = T.alloc_local((1,), dtype=T.int32)
+
+            if token_id < num_tokens:
+                selected_sum[0] = 0.0
+                for j in T.serial(0, elems_per_thread):
+                    expert_id = j * warp_size + lane_id
+                    raw = T.sqrt(
+                        T.log(1.0 + T.exp(gating_output[token_id, expert_id]))
+                    )
+                    raw_scores[j] = raw
+                    choice_scores[j] = raw + correction_bias[expert_id]
+
+                for kth in T.serial(0, topk):
+                    best_choice[0] = -3.4028234663852886e38
+                    best_raw[0] = 0.0
+                    best_id[0] = -1
+
+                    for j in T.serial(0, elems_per_thread):
+                        expert_id = j * warp_size + lane_id
+                        if (choice_scores[j] > best_choice[0]) or (
+                            choice_scores[j] == best_choice[0]
+                            and (
+                                best_id[0] < 0
+                                or expert_id < best_id[0]
+                            )
+                        ):
+                            best_choice[0] = choice_scores[j]
+                            best_raw[0] = raw_scores[j]
+                            best_id[0] = expert_id
+
+                    for i in T.serial(0, 5):
+                        mask = T.int32(16) >> i
+                        other_choice = T.shfl_xor(best_choice[0], mask)
+                        other_raw = T.shfl_xor(best_raw[0], mask)
+                        other_id = T.shfl_xor(best_id[0], mask)
+                        take_other = (other_choice > best_choice[0]) or (
+                            other_choice == best_choice[0]
+                            and (
+                                best_id[0] < 0
+                                or other_id < best_id[0]
+                            )
+                        )
+                        best_choice[0] = T.if_then_else(
+                            take_other, other_choice, best_choice[0]
+                        )
+                        best_raw[0] = T.if_then_else(
+                            take_other, other_raw, best_raw[0]
+                        )
+                        best_id[0] = T.if_then_else(take_other, other_id, best_id[0])
+
+                    selected_sum[0] += best_raw[0]
+                    if lane_id == 0:
+                        topk_weights[token_id, kth] = best_raw[0]
+                        topk_indices[token_id, kth] = T.Cast("int64", best_id[0])
+                        token_expert_indices[token_id, kth] = best_id[0]
+
+                    for j in T.serial(0, elems_per_thread):
+                        if j * warp_size + lane_id == best_id[0]:
+                            choice_scores[j] = -3.4028234663852886e38
+
+                if lane_id == 0:
+                    if renormalize:
+                        denom = T.max(selected_sum[0], 1.0e-20)
+                        for kth in T.serial(0, topk):
+                            topk_weights[token_id, kth] = (
+                                topk_weights[token_id, kth] / denom
+                            )
+                    if apply_routed_scaling_factor:
+                        for kth in T.serial(0, topk):
+                            topk_weights[token_id, kth] = (
+                                topk_weights[token_id, kth] * routed_scaling_factor
+                            )
+
+    return _biased_topk_softplus_sqrt_256_warp_kernel

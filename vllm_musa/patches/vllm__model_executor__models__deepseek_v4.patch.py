@@ -60,6 +60,42 @@ def _musa_deepseek_v4_topk_softplus_sqrt_fallback(
     hash_indices_table: torch.Tensor | None = None,
     routed_scaling_factor: float = 1.0,
 ) -> tuple[torch.Tensor, ...]:
+    from vllm_musa.deepseek_v4_jit.topk import (
+        try_tilelang_biased_topk_softplus_sqrt,
+    )
+
+    used_tilelang, tilelang_reason = try_tilelang_biased_topk_softplus_sqrt(
+        topk_weights,
+        topk_indices,
+        token_expert_indices,
+        gating_output,
+        renormalize,
+        routed_scaling_factor,
+        e_score_correction_bias,
+        input_tokens,
+        hash_indices_table,
+    )
+    if used_tilelang:
+        return topk_weights, topk_indices
+    router_topk_mode = os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_ROUTER_TOPK_IMPL", "torch"
+    ).strip().lower()
+    if (
+        router_topk_mode in {
+        "tilelang",
+        "jit",
+        "warp",
+        "warp_tilelang",
+        "tilelang_warp",
+        "fast",
+        }
+        and tilelang_reason != "hash-routed path stays on the existing fallback"
+    ):
+        raise RuntimeError(
+            "Forced MUSA TileLang DeepSeek-V4 router top-k failed: "
+            f"{tilelang_reason}"
+        )
+
     scores = F.softplus(gating_output).sqrt()
     scores_for_choice = scores.view(-1, scores.shape[-1])
     if e_score_correction_bias is not None:

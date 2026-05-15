@@ -8,6 +8,7 @@ from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
 )
 from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
+from vllm_musa.deepseek_v4_jit.topk import record_router_grouped_topk_trace
 
 try:
     from mate import moe_fused_gate as mate_moe_fused_gate
@@ -47,6 +48,23 @@ def _compute_routing(
             )
             if self.routed_scaling_factor != 1.0:
                 topk_weights *= self.routed_scaling_factor
+            record_router_grouped_topk_trace(
+                decision="fused_topk_bias",
+                reason="invalid_grouping_bias",
+                hidden_states=hidden_states,
+                gating_output=router_logits,
+                topk=self.top_k,
+                renormalize=self.renormalize,
+                routed_scaling_factor=self.routed_scaling_factor,
+                e_score_correction_bias=self.e_score_correction_bias,
+                input_ids=input_ids,
+                num_expert_group=self.num_expert_group,
+                topk_group=self.topk_group,
+                scoring_func=self.scoring_func,
+                num_fused_shared_experts=self.num_fused_shared_experts,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+            )
         else:
             topk_weights, topk_ids, token_expert_indices = fused_topk(
                 hidden_states=hidden_states,
@@ -55,8 +73,30 @@ def _compute_routing(
                 renormalize=self.renormalize,
                 indices_type=indices_type,
             )
+            record_router_grouped_topk_trace(
+                decision="fused_topk",
+                reason="invalid_grouping_no_bias",
+                hidden_states=hidden_states,
+                gating_output=router_logits,
+                topk=self.top_k,
+                renormalize=self.renormalize,
+                routed_scaling_factor=self.routed_scaling_factor,
+                e_score_correction_bias=self.e_score_correction_bias,
+                input_ids=input_ids,
+                num_expert_group=self.num_expert_group,
+                topk_group=self.topk_group,
+                scoring_func=self.scoring_func,
+                num_fused_shared_experts=self.num_fused_shared_experts,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+            )
         return topk_weights, topk_ids
     # ==================== MUSA ADAPTATION ====================
+    decision = (
+        "mate_moe_fused_gate"
+        if _will_use_mate_fused_gate(self, router_logits)
+        else "torch_grouped_topk"
+    )
     topk_weights, topk_ids = grouped_topk(
         hidden_states=hidden_states,
         gating_output=router_logits,
@@ -69,6 +109,23 @@ def _compute_routing(
         e_score_correction_bias=self.e_score_correction_bias,
         num_fused_shared_experts=self.num_fused_shared_experts,
     )
+    record_router_grouped_topk_trace(
+        decision=decision,
+        reason="valid_grouping",
+        hidden_states=hidden_states,
+        gating_output=router_logits,
+        topk=self.top_k,
+        renormalize=self.renormalize,
+        routed_scaling_factor=self.routed_scaling_factor,
+        e_score_correction_bias=self.e_score_correction_bias,
+        input_ids=input_ids,
+        num_expert_group=self.num_expert_group,
+        topk_group=self.topk_group,
+        scoring_func=self.scoring_func,
+        num_fused_shared_experts=self.num_fused_shared_experts,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+    )
     # ========================== END ==========================
 
     return topk_weights, topk_ids
@@ -76,6 +133,24 @@ def _compute_routing(
 
 def is_power_of_two(n):
     return n > 0 and math.log2(n).is_integer()
+
+
+def _will_use_mate_fused_gate(self, gating_output: torch.Tensor) -> bool:
+    if not is_fused_gate or self.num_expert_group <= 0:
+        return False
+    num_experts = gating_output.shape[1]
+    supported_group_shape = (
+        num_experts // self.num_expert_group <= 32
+        or (
+            self.num_expert_group == 1
+            and num_experts in {160, 256, 384}
+        )
+    )
+    return (
+        supported_group_shape
+        and self.e_score_correction_bias is not None
+        and is_power_of_two(self.e_score_correction_bias.shape[0])
+    )
 
 
 @torch.compile(
