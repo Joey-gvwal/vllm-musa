@@ -1162,3 +1162,226 @@ def mhc_pre_mix_kernel(
         return _kernel
 
     return _mhc_pre_mix_kernel()
+
+
+@lru_cache(maxsize=None)
+def mhc_pre_full_kernel(
+    hidden_size: int,
+    sinkhorn_repeat: int,
+    threads: int = 256,
+):
+    if threads <= 0 or threads % 32 != 0:
+        raise ValueError(f"threads must be a positive multiple of 32, got {threads}")
+    if sinkhorn_repeat < 1:
+        raise ValueError(f"sinkhorn_repeat must be >= 1, got {sinkhorn_repeat}")
+
+    warps_per_cta = threads // 32
+    hc_hidden_size = 4 * hidden_size
+
+    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    def _mhc_pre_full_kernel():
+        num_tokens = T.dynamic("num_tokens")
+
+        @T.prim_func
+        def _kernel(
+            residual: T.Tensor((num_tokens, 4, hidden_size), T.bfloat16),
+            fn: T.Tensor((24, hc_hidden_size), T.float32),
+            hc_scale: T.Tensor((3,), T.float32),
+            hc_base: T.Tensor((24,), T.float32),
+            post_mix: T.Tensor((num_tokens, 4, 1), T.float32),
+            comb_mix: T.Tensor((num_tokens, 4, 4), T.float32),
+            layer_input: T.Tensor((num_tokens, hidden_size), T.bfloat16),
+            rms_eps: T.float32,
+            hc_pre_eps: T.float32,
+            hc_sinkhorn_eps: T.float32,
+            hc_post_mult_value: T.float32,
+        ):
+            with T.Kernel(num_tokens, threads=threads) as token_id:
+                tx = T.get_thread_binding()
+                lane = tx % 32
+                warp = tx // 32
+                accum = T.alloc_local((24,), T.float32)
+                sqsum = T.alloc_local((1,), T.float32)
+                warp_accum = T.alloc_shared((warps_per_cta, 25), T.float32)
+                mixes = T.alloc_shared((24,), T.float32)
+                sqsum_shared = T.alloc_shared((1,), T.float32)
+                pre = T.alloc_shared((4,), T.float32)
+
+                for mix_idx in T.serial(0, 24):
+                    accum[mix_idx] = 0.0
+                sqsum[0] = 0.0
+
+                for col_base in T.serial(0, hc_hidden_size, threads):
+                    col = col_base + tx
+                    if col < hc_hidden_size:
+                        hc_idx = col // hidden_size
+                        hidden_idx = col - hc_idx * hidden_size
+                        value = T.cast(
+                            residual[token_id, hc_idx, hidden_idx], T.float32
+                        )
+                        sqsum[0] += value * value
+                        for mix_idx in T.serial(0, 24):
+                            accum[mix_idx] += value * fn[mix_idx, col]
+
+                for mix_idx in T.serial(0, 24):
+                    reduced = _warp_reduce_sum(accum[mix_idx])
+                    if lane == 0:
+                        warp_accum[warp, mix_idx] = reduced
+                reduced_sqsum = _warp_reduce_sum(sqsum[0])
+                if lane == 0:
+                    warp_accum[warp, 24] = reduced_sqsum
+                T.sync_threads()
+
+                if warp == 0:
+                    for mix_idx in T.serial(0, 24):
+                        partial = T.if_then_else(
+                            tx < warps_per_cta, warp_accum[tx, mix_idx], 0.0
+                        )
+                        partial = _warp_reduce_sum(partial)
+                        if lane == 0:
+                            mixes[mix_idx] = partial
+
+                    partial_sqsum = T.if_then_else(
+                        tx < warps_per_cta, warp_accum[tx, 24], 0.0
+                    )
+                    partial_sqsum = _warp_reduce_sum(partial_sqsum)
+                    if lane == 0:
+                        sqsum_shared[0] = partial_sqsum
+                T.sync_threads()
+
+                if tx == 0:
+                    rms = T.rsqrt(sqsum_shared[0] / float(hc_hidden_size) + rms_eps)
+                    m0 = mixes[0] * rms
+                    m1 = mixes[1] * rms
+                    m2 = mixes[2] * rms
+                    m3 = mixes[3] * rms
+                    m4 = mixes[4] * rms
+                    m5 = mixes[5] * rms
+                    m6 = mixes[6] * rms
+                    m7 = mixes[7] * rms
+                    m8 = mixes[8] * rms
+                    m9 = mixes[9] * rms
+                    m10 = mixes[10] * rms
+                    m11 = mixes[11] * rms
+                    m12 = mixes[12] * rms
+                    m13 = mixes[13] * rms
+                    m14 = mixes[14] * rms
+                    m15 = mixes[15] * rms
+                    m16 = mixes[16] * rms
+                    m17 = mixes[17] * rms
+                    m18 = mixes[18] * rms
+                    m19 = mixes[19] * rms
+                    m20 = mixes[20] * rms
+                    m21 = mixes[21] * rms
+                    m22 = mixes[22] * rms
+                    m23 = mixes[23] * rms
+
+                    pre[0] = T.sigmoid(m0 * hc_scale[0] + hc_base[0]) + hc_pre_eps
+                    pre[1] = T.sigmoid(m1 * hc_scale[0] + hc_base[1]) + hc_pre_eps
+                    pre[2] = T.sigmoid(m2 * hc_scale[0] + hc_base[2]) + hc_pre_eps
+                    pre[3] = T.sigmoid(m3 * hc_scale[0] + hc_base[3]) + hc_pre_eps
+
+                    post_mix[token_id, 0, 0] = (
+                        T.sigmoid(m4 * hc_scale[1] + hc_base[4])
+                        * hc_post_mult_value
+                    )
+                    post_mix[token_id, 1, 0] = (
+                        T.sigmoid(m5 * hc_scale[1] + hc_base[5])
+                        * hc_post_mult_value
+                    )
+                    post_mix[token_id, 2, 0] = (
+                        T.sigmoid(m6 * hc_scale[1] + hc_base[6])
+                        * hc_post_mult_value
+                    )
+                    post_mix[token_id, 3, 0] = (
+                        T.sigmoid(m7 * hc_scale[1] + hc_base[7])
+                        * hc_post_mult_value
+                    )
+
+                    cm = T.alloc_local((16,), T.float32)
+                    row = T.alloc_local((4,), T.float32)
+                    colsum = T.alloc_local((4,), T.float32)
+                    cm[0] = m8 * hc_scale[2] + hc_base[8]
+                    cm[1] = m9 * hc_scale[2] + hc_base[9]
+                    cm[2] = m10 * hc_scale[2] + hc_base[10]
+                    cm[3] = m11 * hc_scale[2] + hc_base[11]
+                    cm[4] = m12 * hc_scale[2] + hc_base[12]
+                    cm[5] = m13 * hc_scale[2] + hc_base[13]
+                    cm[6] = m14 * hc_scale[2] + hc_base[14]
+                    cm[7] = m15 * hc_scale[2] + hc_base[15]
+                    cm[8] = m16 * hc_scale[2] + hc_base[16]
+                    cm[9] = m17 * hc_scale[2] + hc_base[17]
+                    cm[10] = m18 * hc_scale[2] + hc_base[18]
+                    cm[11] = m19 * hc_scale[2] + hc_base[19]
+                    cm[12] = m20 * hc_scale[2] + hc_base[20]
+                    cm[13] = m21 * hc_scale[2] + hc_base[21]
+                    cm[14] = m22 * hc_scale[2] + hc_base[22]
+                    cm[15] = m23 * hc_scale[2] + hc_base[23]
+
+                    for j in T.serial(0, 4):
+                        base = j * 4
+                        row[j] = T.max(
+                            T.max(cm[base], cm[base + 1]),
+                            T.max(cm[base + 2], cm[base + 3]),
+                        )
+                        for k in T.serial(0, 4):
+                            cm[base + k] = T.exp(cm[base + k] - row[j])
+                        row[j] = (
+                            cm[base]
+                            + cm[base + 1]
+                            + cm[base + 2]
+                            + cm[base + 3]
+                        )
+                        for k in T.serial(0, 4):
+                            cm[base + k] = cm[base + k] / row[j] + hc_sinkhorn_eps
+
+                    for k in T.serial(0, 4):
+                        colsum[k] = cm[k] + cm[4 + k] + cm[8 + k] + cm[12 + k]
+                        for j in T.serial(0, 4):
+                            cm[j * 4 + k] = cm[j * 4 + k] / (
+                                colsum[k] + hc_sinkhorn_eps
+                            )
+
+                    for _ in T.serial(sinkhorn_repeat - 1):
+                        for j in T.serial(0, 4):
+                            base = j * 4
+                            row[j] = (
+                                cm[base]
+                                + cm[base + 1]
+                                + cm[base + 2]
+                                + cm[base + 3]
+                            )
+                            for k in T.serial(0, 4):
+                                cm[base + k] = cm[base + k] / (
+                                    row[j] + hc_sinkhorn_eps
+                                )
+
+                        for k in T.serial(0, 4):
+                            colsum[k] = cm[k] + cm[4 + k] + cm[8 + k] + cm[12 + k]
+                            for j in T.serial(0, 4):
+                                cm[j * 4 + k] = cm[j * 4 + k] / (
+                                    colsum[k] + hc_sinkhorn_eps
+                                )
+
+                    for j, k in T.Parallel(4, 4):
+                        comb_mix[token_id, j, k] = cm[j * 4 + k]
+                T.sync_threads()
+
+                for hidden_base in T.serial(0, hidden_size, threads):
+                    hidden_idx = hidden_base + tx
+                    if hidden_idx < hidden_size:
+                        value = (
+                            pre[0]
+                            * T.cast(residual[token_id, 0, hidden_idx], T.float32)
+                            + pre[1]
+                            * T.cast(residual[token_id, 1, hidden_idx], T.float32)
+                            + pre[2]
+                            * T.cast(residual[token_id, 2, hidden_idx], T.float32)
+                            + pre[3]
+                            * T.cast(residual[token_id, 3, hidden_idx], T.float32)
+                        )
+                        layer_input[token_id, hidden_idx] = T.cast(value, T.bfloat16)
+
+        return _kernel
+
+    return _mhc_pre_full_kernel()
