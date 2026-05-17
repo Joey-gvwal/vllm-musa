@@ -67,6 +67,10 @@ def _musa_mxfp4_dequant_impl() -> str:
     return os.getenv("VLLM_MUSA_MXFP4_DEQUANT_IMPL", "native").strip().lower()
 
 
+def _musa_mxfp4_grouped_gemv_impl() -> str:
+    return os.getenv("VLLM_MUSA_MXFP4_GROUPED_GEMV_IMPL", "off").strip().lower()
+
+
 def _musa_timed(scope_name: str):
     def decorator(fn):
         def wrapper(*args, **kwargs):
@@ -268,6 +272,104 @@ def _musa_mxfp4_scale_to_float(scale: torch.Tensor) -> torch.Tensor:
     if scale.dtype == torch.uint8:
         return (scale.to(torch.int32) << 23).view(torch.float32)
     return scale.to(torch.float32)
+
+
+def _musa_mxfp4_scale_bytes(scale: torch.Tensor) -> torch.Tensor:
+    if scale.dtype == torch.uint8:
+        return scale if scale.is_contiguous() else scale.contiguous()
+    return scale.view(torch.uint8).contiguous()
+
+
+def _musa_moe_activation(
+    gate_up: torch.Tensor,
+    activation: str | MoEActivation,
+    swiglu_limit: float | None = None,
+    swiglu_alpha: float | None = None,
+    swiglu_beta: float | None = None,
+) -> torch.Tensor:
+    activation_value = str(getattr(activation, "value", activation)).lower()
+    activation_value = activation_value.rsplit(".", 1)[-1]
+    if activation_value == "swigluoai":
+        gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+        limit = 7.0 if swiglu_limit is None else swiglu_limit
+        if limit > 0:
+            gate = torch.clamp(gate, max=limit)
+            up = torch.clamp(up, min=-limit, max=limit)
+        alpha = 1.702 if swiglu_alpha is None else swiglu_alpha
+        beta = 1.0 if swiglu_beta is None else swiglu_beta
+        return (up + beta) * (gate * torch.sigmoid(gate * alpha))
+    if activation_value != "silu":
+        raise NotImplementedError(
+            "MUSA MXFP4 grouped GEMV path only supports silu/SWIGLUOAI "
+            f"activation, got {activation!r}"
+        )
+    gate, up = gate_up.chunk(2, dim=-1)
+    if swiglu_limit is not None and swiglu_limit > 0:
+        gate = torch.clamp(gate, max=swiglu_limit)
+        up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
+    return F.silu(gate) * up
+
+
+@_musa_timed("mxfp4_moe.grouped_gemv")
+def _musa_mxfp4_grouped_gemv_moe(
+    output: torch.Tensor,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str | MoEActivation,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    apply_router_weight_on_input: bool,
+) -> None:
+    num_tokens, hidden_size = hidden_states.shape
+    top_k = topk_ids.shape[1]
+    n = w1.shape[1]
+    k = w2.shape[1]
+    flat_rows = num_tokens * top_k
+    if flat_rows == 0:
+        return
+
+    flat_hidden = (
+        hidden_states[:, None, :]
+        .expand(num_tokens, top_k, hidden_size)
+        .reshape(flat_rows, hidden_size)
+        .contiguous()
+    )
+    flat_ids = topk_ids.reshape(-1).contiguous()
+    flat_weights = topk_weights.reshape(-1, 1).to(hidden_states.dtype)
+    if apply_router_weight_on_input:
+        flat_hidden = flat_hidden * flat_weights
+
+    gate_up = torch.empty(
+        (flat_rows, n), device=hidden_states.device, dtype=hidden_states.dtype
+    )
+    musa_ops.mxfp4_grouped_gemv(
+        flat_hidden,
+        w1,
+        _musa_mxfp4_scale_bytes(w1_scale),
+        flat_ids,
+        gate_up,
+        expert_map,
+    )
+    intermediate = _musa_moe_activation(gate_up, activation).contiguous()
+
+    flat_out = torch.empty(
+        (flat_rows, k), device=hidden_states.device, dtype=hidden_states.dtype
+    )
+    musa_ops.mxfp4_grouped_gemv(
+        intermediate,
+        w2,
+        _musa_mxfp4_scale_bytes(w2_scale),
+        flat_ids,
+        flat_out,
+        expert_map,
+    )
+    if not apply_router_weight_on_input:
+        flat_out = flat_out * flat_weights
+    ops.moe_sum(flat_out.view(num_tokens, top_k, k), output)
 
 
 def _musa_mxfp4_make_w4a16_quant_config(
@@ -647,13 +749,26 @@ def fused_experts_impl(
         and os.getenv("VLLM_MUSA_ENABLE_MXFP4_MOE_FALLBACK", "0") == "1"
         and musa_gemv is None
     )
+    use_musa_mxfp4_grouped_gemv = (
+        current_platform.is_musa()
+        and _is_mxfp4_scheme(ocp_mx_scheme)
+        and _musa_mxfp4_grouped_gemv_impl() == "native"
+        and w1_scale is not None
+        and w2_scale is not None
+        and w1_bias is None
+        and w2_bias is None
+        and getattr(
+            getattr(torch.ops, "_C_musa_ops", None), "mxfp4_grouped_gemv", None
+        )
+        is not None
+    )
 
     if ocp_mx_scheme is not None:
         # TODO: On platforms for which `current_platform.supports_mx()` is True
         # and for which we have a native OCP mx fused MOE kernel,
         # this dequantization step should not be done.
         if _is_mxfp4_scheme(ocp_mx_scheme):
-            if not use_musa_torch_moe_fallback:
+            if not use_musa_torch_moe_fallback and not use_musa_mxfp4_grouped_gemv:
                 # Weight has to be dequantized for mxfp4 emulation.
                 w1 = _dequant_mxfp4_musa(w1, w1_scale, hidden_states.dtype)
                 w1_scale = None
@@ -728,6 +843,22 @@ def fused_experts_impl(
 
         curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
         curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
+
+        if use_musa_mxfp4_grouped_gemv:
+            _musa_mxfp4_grouped_gemv_moe(
+                curr_out_hidden_states,
+                curr_hidden_states,
+                w1,
+                w2,
+                curr_topk_weights,
+                curr_topk_ids,
+                activation,
+                expert_map,
+                w1_scale,
+                w2_scale,
+                apply_router_weight_on_input,
+            )
+            continue
 
         musa_ops.musa_fused_gemv_moe(
             curr_hidden_states,
