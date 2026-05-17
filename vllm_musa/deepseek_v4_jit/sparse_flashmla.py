@@ -174,23 +174,28 @@ def maybe_sglang_tilelang_flash_mla_with_kvcache(
                 f"{_IMPL_ENV}=sglang_tilelang received out shape "
                 f"{tuple(out.shape)}, expected {expected_out_shape}."
             )
-        out.copy_(provider_out.to(out.dtype))
+        if provider_out.dtype != out.dtype:
+            raise RuntimeError(
+                f"{_IMPL_ENV}=sglang_tilelang provider returned output dtype "
+                f"{provider_out.dtype}, expected {out.dtype} to avoid hidden "
+                "dtype-conversion allocations."
+            )
+        if provider_out.device != out.device:
+            raise RuntimeError(
+                f"{_IMPL_ENV}=sglang_tilelang provider returned output on "
+                f"{provider_out.device}, expected {out.device}."
+            )
+        out.copy_(provider_out)
         provider_out = out
 
-    # SGLang's combine kernel returns [B, S, H]; MATE/vLLM callers expect
-    # [B, H, S]. DeepSeek-V4 decode ignores LSE today, but keep the contract.
-    if (
-        provider_lse.dim() == 3
-        and provider_lse.shape[0] == q.shape[0]
-        and provider_lse.shape[1] == q.shape[1]
-        and provider_lse.shape[2] == q.shape[2]
-    ):
-        provider_lse = provider_lse.permute(0, 2, 1).contiguous()
-    elif tuple(provider_lse.shape) != (q.shape[0], q.shape[2], q.shape[1]):
+    # MATE/vLLM callers expect [B, H, S]. Do not repair [B, S, H] here:
+    # permute(...).contiguous() would allocate in the graph-sensitive path.
+    expected_lse_shape = (q.shape[0], q.shape[2], q.shape[1])
+    if tuple(provider_lse.shape) != expected_lse_shape:
         raise RuntimeError(
             f"{_IMPL_ENV}=sglang_tilelang provider returned LSE shape "
-            f"{tuple(provider_lse.shape)}, expected "
-            f"{(q.shape[0], q.shape[1], q.shape[2])} or "
-            f"{(q.shape[0], q.shape[2], q.shape[1])}."
+            f"{tuple(provider_lse.shape)}, expected {expected_lse_shape}. "
+            "Providers must return the vLLM/MATE layout directly to avoid "
+            "hidden graph-unsafe layout-conversion allocations."
         )
     return provider_out, provider_lse
