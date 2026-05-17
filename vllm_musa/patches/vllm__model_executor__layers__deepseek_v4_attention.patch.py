@@ -50,6 +50,15 @@ from vllm_musa.v1.attention.backends.mla.flashmla_sparse import (
 """,
     ),
     (
+        """            out=output.unsqueeze(1),
+        )
+""",
+        """            out=output.unsqueeze(1),
+            return_lse=False,
+        )
+""",
+    ),
+    (
         'assert cap is not None, "DeepseekV4 attention requires a CUDA device"',
         'assert cap is not None, "DeepseekV4 attention requires a MUSA device"',
     ),
