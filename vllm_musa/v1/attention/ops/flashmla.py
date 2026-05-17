@@ -34,6 +34,26 @@ _DSV4_BF16_ROPE_DIM = 64
 _DSV4_TOKEN_DATA_BYTES = _DSV4_FP8_NOPE_DIM + _DSV4_BF16_ROPE_DIM * 2
 _DSV4_TOKEN_SCALE_BYTES = 8
 _DSV4_QUANT_BLOCK_SIZE = 64
+_DSV4_SPARSE_FLASHMLA_IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_SPARSE_FLASHMLA_IMPL"
+_DSV4_SPARSE_FLASHMLA_PROVIDER_MODES = {
+    "sglang_tilelang",
+    "tilelang",
+    "external_sglang",
+}
+
+
+def _try_deepseek_v4_sparse_flashmla_provider(
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    impl = os.getenv(_DSV4_SPARSE_FLASHMLA_IMPL_ENV, "torch").strip().lower()
+    if impl not in _DSV4_SPARSE_FLASHMLA_PROVIDER_MODES:
+        return None
+
+    from vllm_musa.deepseek_v4_jit.sparse_flashmla import (
+        maybe_sglang_tilelang_flash_mla_with_kvcache,
+    )
+
+    return maybe_sglang_tilelang_flash_mla_with_kvcache(**kwargs)
 
 
 def _fp8_ds_mla_sparse_gather_impl() -> str:
@@ -224,8 +244,11 @@ def _gather_fp8_ds_mla_sparse_kv(
         current_platform.is_musa()
         and _fp8_ds_mla_sparse_gather_impl() == "native"
         and cache.dtype == torch.uint8
+        and cache.device.type == "musa"
         and cache.is_contiguous()
         and indices.dtype in (torch.int32, torch.int64)
+        and indices.device == cache.device
+        and indices.is_contiguous()
     ):
         native_gather = getattr(
             getattr(torch.ops, "_C_musa_ops", None),
@@ -234,11 +257,11 @@ def _gather_fp8_ds_mla_sparse_kv(
         )
         native_lengths = lengths
         lengths_supported = native_lengths is None or (
-            native_lengths.dtype in (torch.int32, torch.int64)
+            native_lengths.device == cache.device
+            and native_lengths.dtype in (torch.int32, torch.int64)
             and native_lengths.is_contiguous()
         )
         if native_gather is not None and lengths_supported:
-            native_indices = indices if indices.is_contiguous() else indices.contiguous()
             gathered = torch.empty(
                 (num_queries, topk, _DSV4_FP8_NOPE_DIM + _DSV4_BF16_ROPE_DIM),
                 device=cache.device,
@@ -247,7 +270,7 @@ def _gather_fp8_ds_mla_sparse_kv(
             valid = torch.empty(
                 (num_queries, topk), device=cache.device, dtype=torch.bool
             )
-            native_gather(cache, native_indices, native_lengths, gathered, valid)
+            native_gather(cache, indices, native_lengths, gathered, valid)
             return gathered, valid
 
     idx = indices.to(torch.long)
@@ -481,6 +504,28 @@ def flash_mla_with_kvcache(
         or kwargs
     )
     if has_deepseek_v4_sparse_kwargs:
+        provider_result = _try_deepseek_v4_sparse_flashmla_provider(
+            q=q,
+            k_cache=k_cache,
+            block_table=block_table,
+            cache_seqlens=cache_seqlens,
+            head_dim_v=head_dim_v,
+            tile_scheduler_metadata=tile_scheduler_metadata,
+            num_splits=num_splits,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            is_fp8_kvcache=is_fp8_kvcache,
+            indices=indices,
+            topk_length=topk_length,
+            attn_sink=attn_sink,
+            extra_k_cache=extra_k_cache,
+            extra_indices_in_kvcache=extra_indices_in_kvcache,
+            extra_topk_length=extra_topk_length,
+            out=out,
+            **kwargs,
+        )
+        if provider_result is not None:
+            return provider_result
         if _flash_mla_sparse_fwd is None:
             return _torch_flash_mla_with_kvcache_sparse_fallback(
                 q=q,

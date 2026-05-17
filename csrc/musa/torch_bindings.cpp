@@ -42,6 +42,21 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("mxfp4_grouped_gemv", torch::kMUSA, &mxfp4_grouped_gemv);
 
   musa_ops.def(
+      "deepseek_v4_mega_moe_pre_dispatch(Tensor x, Tensor topk_idx, "
+      "Tensor topk_weights, Tensor! buf_x, Tensor! buf_x_sf, "
+      "Tensor! buf_topk_idx, Tensor! buf_topk_weights, int "
+      "quant_group_size) -> ()");
+  musa_ops.impl("deepseek_v4_mega_moe_pre_dispatch", torch::kMUSA,
+           &deepseek_v4_mega_moe_pre_dispatch);
+
+  musa_ops.def(
+      "deepseek_v4_silu_and_mul_masked_post_quant(Tensor input, "
+      "Tensor! output, Tensor! output_scale, Tensor masked_m, int "
+      "quant_group_size, float swiglu_limit) -> ()");
+  musa_ops.impl("deepseek_v4_silu_and_mul_masked_post_quant", torch::kMUSA,
+           &deepseek_v4_silu_and_mul_masked_post_quant);
+
+  musa_ops.def(
       "fp8_ds_mla_sparse_gather(Tensor cache, Tensor indices, "
       "Tensor? lengths, Tensor! output, Tensor! valid) -> ()");
   musa_ops.impl("fp8_ds_mla_sparse_gather", torch::kMUSA,

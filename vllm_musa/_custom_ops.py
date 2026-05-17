@@ -1,4 +1,5 @@
 import logging
+import os
 
 import torch
 
@@ -6,6 +7,17 @@ try:
     import vllm_musa._C  # noqa: F401
 except ImportError as e:
     logging.error("Failed to import from vllm._C: %r", e)
+
+
+def _is_musa_tensor(tensor: torch.Tensor) -> bool:
+    return getattr(tensor, "device", None) is not None and tensor.device.type == "musa"
+
+
+def _same_device(*tensors: torch.Tensor) -> bool:
+    if not tensors:
+        return True
+    device = tensors[0].device
+    return all(tensor.device == device for tensor in tensors)
 
 
 def musa_fused_gemv_moe(
@@ -149,6 +161,136 @@ def mxfp4_grouped_gemv(
         expert_ids,
         output,
         expert_map,
+    )
+
+
+def deepseek_v4_mega_moe_pre_dispatch(
+    x: torch.Tensor,
+    topk_idx: torch.Tensor,
+    topk_weights: torch.Tensor,
+    buf_x: torch.Tensor,
+    buf_x_sf: torch.Tensor,
+    buf_topk_idx: torch.Tensor,
+    buf_topk_weights: torch.Tensor,
+    quant_group_size: int = 32,
+) -> None:
+    native_supported = (
+        _is_musa_tensor(x)
+        and _is_musa_tensor(topk_idx)
+        and _is_musa_tensor(topk_weights)
+        and _is_musa_tensor(buf_x)
+        and _is_musa_tensor(buf_x_sf)
+        and _is_musa_tensor(buf_topk_idx)
+        and _is_musa_tensor(buf_topk_weights)
+        and _same_device(
+            x,
+            topk_idx,
+            topk_weights,
+            buf_x,
+            buf_x_sf,
+            buf_topk_idx,
+            buf_topk_weights,
+        )
+        and x.dtype in (torch.float32, torch.float16, torch.bfloat16)
+        and topk_idx.dtype in (torch.int32, torch.int64)
+        and topk_weights.dtype == torch.float32
+        and buf_x.dtype == torch.float8_e4m3fn
+        and buf_x_sf.dtype in (torch.int32, torch.uint8)
+        and buf_topk_idx.dtype in (torch.int32, torch.int64)
+        and buf_topk_weights.dtype == torch.float32
+    )
+    if (
+        os.getenv("VLLM_MUSA_DEEPSEEK_V4_MEGA_MOE_PREDISPATCH_IMPL", "python")
+        .strip()
+        .lower()
+        == "native"
+        and native_supported
+        and getattr(
+            getattr(torch.ops, "_C_musa_ops", None),
+            "deepseek_v4_mega_moe_pre_dispatch",
+            None,
+        )
+        is not None
+    ):
+        return torch.ops._C_musa_ops.deepseek_v4_mega_moe_pre_dispatch(
+            x,
+            topk_idx,
+            topk_weights,
+            buf_x,
+            buf_x_sf,
+            buf_topk_idx,
+            buf_topk_weights,
+            quant_group_size,
+        )
+
+    from vllm_musa.deepseek_v4_moe_prereq import (
+        deepseek_v4_mega_moe_pre_dispatch,
+    )
+
+    return deepseek_v4_mega_moe_pre_dispatch(
+        x,
+        topk_idx,
+        topk_weights,
+        buf_x,
+        buf_x_sf,
+        buf_topk_idx,
+        buf_topk_weights,
+        quant_group_size,
+    )
+
+
+def deepseek_v4_silu_and_mul_masked_post_quant(
+    input: torch.Tensor,
+    output: torch.Tensor,
+    output_scale: torch.Tensor,
+    quant_group_size: int,
+    masked_m: torch.Tensor,
+    swiglu_limit: float | None = None,
+) -> None:
+    native_supported = (
+        _is_musa_tensor(input)
+        and _is_musa_tensor(output)
+        and _is_musa_tensor(output_scale)
+        and _is_musa_tensor(masked_m)
+        and _same_device(input, output, output_scale, masked_m)
+        and input.dtype in (torch.float32, torch.float16, torch.bfloat16)
+        and output.dtype == torch.float8_e4m3fn
+        and output_scale.dtype in (torch.int32, torch.uint8)
+        and masked_m.dtype == torch.int64
+    )
+    if (
+        os.getenv("VLLM_MUSA_DEEPSEEK_V4_SWIGLU_POST_QUANT_IMPL", "python")
+        .strip()
+        .lower()
+        == "native"
+        and native_supported
+        and getattr(
+            getattr(torch.ops, "_C_musa_ops", None),
+            "deepseek_v4_silu_and_mul_masked_post_quant",
+            None,
+        )
+        is not None
+    ):
+        return torch.ops._C_musa_ops.deepseek_v4_silu_and_mul_masked_post_quant(
+            input,
+            output,
+            output_scale,
+            masked_m,
+            quant_group_size,
+            -1.0 if swiglu_limit is None else float(swiglu_limit),
+        )
+
+    from vllm_musa.deepseek_v4_moe_prereq import (
+        deepseek_v4_silu_and_mul_masked_post_quant,
+    )
+
+    return deepseek_v4_silu_and_mul_masked_post_quant(
+        input,
+        output,
+        output_scale,
+        quant_group_size,
+        masked_m,
+        swiglu_limit,
     )
 
 

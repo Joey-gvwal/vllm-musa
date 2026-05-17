@@ -102,6 +102,8 @@ void mxfp4_dequant(const torch::Tensor& x, const torch::Tensor& scale,
   TORCH_CHECK(x.is_contiguous(), "x must be contiguous");
   TORCH_CHECK(scale.is_contiguous(), "scale must be contiguous");
   TORCH_CHECK(output.is_contiguous(), "output must be contiguous");
+  TORCH_CHECK(scale.device() == x.device() && output.device() == x.device(),
+              "scale and output must be on the same device as x");
   TORCH_CHECK(output.numel() == x.numel() * 2,
               "output must have x.numel() * 2 elements");
   TORCH_CHECK(output.numel() % 32 == 0,

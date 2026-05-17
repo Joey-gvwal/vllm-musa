@@ -277,6 +277,16 @@ void mxfp4_grouped_gemv(const torch::Tensor& input,
   TORCH_CHECK(weight_scale.is_contiguous(), "weight_scale must be contiguous");
   TORCH_CHECK(expert_ids.is_contiguous(), "expert_ids must be contiguous");
   TORCH_CHECK(output.is_contiguous(), "output must be contiguous");
+  TORCH_CHECK(packed_weight.device() == input.device() &&
+                  weight_scale.device() == input.device() &&
+                  expert_ids.device() == input.device() &&
+                  output.device() == input.device(),
+              "packed_weight, weight_scale, expert_ids, and output must be on "
+              "the same device as input");
+  if (expert_map.has_value()) {
+    TORCH_CHECK(expert_map->device() == input.device(),
+                "expert_map must be on the same device as input");
+  }
   TORCH_CHECK(input.size(0) == expert_ids.size(0),
               "input rows must match expert_ids");
   TORCH_CHECK(output.size(0) == input.size(0),

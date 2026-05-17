@@ -71,6 +71,17 @@ def _musa_mxfp4_grouped_gemv_impl() -> str:
     return os.getenv("VLLM_MUSA_MXFP4_GROUPED_GEMV_IMPL", "off").strip().lower()
 
 
+def _musa_mxfp4_fallback_impl() -> str:
+    return os.getenv("VLLM_MUSA_MXFP4_FALLBACK_IMPL", "chunked_bmm").strip().lower()
+
+
+def _musa_mxfp4_chunked_bmm_experts() -> int:
+    try:
+        return max(1, int(os.getenv("VLLM_MUSA_MXFP4_CHUNKED_BMM_EXPERTS", "16")))
+    except ValueError:
+        return 16
+
+
 def _musa_timed(scope_name: str):
     def decorator(fn):
         def wrapper(*args, **kwargs):
@@ -128,6 +139,30 @@ def _musa_torch_fused_moe_fallback(
         raise NotImplementedError(
             "MUSA torch fused-MoE fallback only supports silu/SWIGLUOAI "
             f"activation, got {activation!r}"
+        )
+    if (
+        current_platform.is_musa()
+        and _is_mxfp4_scheme(ocp_mx_scheme)
+        and _musa_mxfp4_fallback_impl() == "chunked_bmm"
+    ):
+        if w1_scale is None or w2_scale is None:
+            raise ValueError("MXFP4 chunked-bmm fallback requires block scales")
+        return _musa_mxfp4_chunked_bmm_fallback(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            expert_map=expert_map,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            swiglu_limit=swiglu_limit,
+            swiglu_alpha=swiglu_alpha,
+            swiglu_beta=swiglu_beta,
         )
 
     num_tokens, hidden_size = hidden_states.shape
@@ -223,7 +258,12 @@ def _dequant_mxfp4_musa(
         raise ValueError("MXFP4 dequantization requires block scales")
 
     native_impl = _musa_mxfp4_dequant_impl() == "native"
-    if native_impl and x.dtype == torch.uint8 and x.is_contiguous():
+    if (
+        native_impl
+        and x.dtype == torch.uint8
+        and x.is_contiguous()
+        and scale.device == x.device
+    ):
         native_dequant = getattr(
             getattr(torch.ops, "_C_musa_ops", None), "mxfp4_dequant", None
         )
@@ -276,8 +316,21 @@ def _musa_mxfp4_scale_to_float(scale: torch.Tensor) -> torch.Tensor:
 
 def _musa_mxfp4_scale_bytes(scale: torch.Tensor) -> torch.Tensor:
     if scale.dtype == torch.uint8:
-        return scale if scale.is_contiguous() else scale.contiguous()
-    return scale.view(torch.uint8).contiguous()
+        if not scale.is_contiguous():
+            raise RuntimeError("MXFP4 scale byte tensor must be contiguous")
+        return scale
+    scale_bytes = scale.view(torch.uint8)
+    if not scale_bytes.is_contiguous():
+        raise RuntimeError("MXFP4 scale byte view must be contiguous")
+    return scale_bytes
+
+
+def _musa_mxfp4_scale_bytes_ready(scale: torch.Tensor) -> bool:
+    try:
+        _musa_mxfp4_scale_bytes(scale)
+    except RuntimeError:
+        return False
+    return True
 
 
 def _musa_moe_activation(
@@ -308,6 +361,138 @@ def _musa_moe_activation(
         gate = torch.clamp(gate, max=swiglu_limit)
         up = torch.clamp(up, min=-swiglu_limit, max=swiglu_limit)
     return F.silu(gate) * up
+
+
+@_musa_timed("mxfp4_moe.chunked_bmm_fallback")
+def _musa_mxfp4_chunked_bmm_fallback(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str | MoEActivation,
+    apply_router_weight_on_input: bool,
+    expert_map: torch.Tensor | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    swiglu_limit: float | None = None,
+    swiglu_alpha: float | None = None,
+    swiglu_beta: float | None = None,
+) -> torch.Tensor:
+    num_tokens, hidden_size = hidden_states.shape
+    top_k = topk_ids.shape[1]
+    out_size = w2.shape[1]
+    flat_rows = num_tokens * top_k
+    if flat_rows == 0:
+        return torch.empty(
+            (num_tokens, out_size),
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+
+    flat_hidden = (
+        hidden_states[:, None, :]
+        .expand(num_tokens, top_k, hidden_size)
+        .reshape(flat_rows, hidden_size)
+    )
+    flat_ids = topk_ids.reshape(-1)
+    flat_weights = topk_weights.reshape(-1, 1).to(torch.float32)
+    flat_out = torch.zeros(
+        (flat_rows, out_size),
+        device=hidden_states.device,
+        dtype=torch.float32,
+    )
+
+    selected_global: list[int] = []
+    selected_local: list[int] = []
+    for global_expert_id in sorted(
+        {int(expert_id) for expert_id in flat_ids.cpu().tolist()}
+    ):
+        if global_expert_id < 0:
+            continue
+        local_expert_id = global_expert_id
+        if expert_map is not None:
+            if global_expert_id >= expert_map.numel():
+                continue
+            local_expert_id = int(expert_map[global_expert_id].item())
+            if local_expert_id < 0:
+                continue
+        if local_expert_id >= w1.shape[0]:
+            continue
+        selected_global.append(global_expert_id)
+        selected_local.append(local_expert_id)
+
+    chunk_experts = _musa_mxfp4_chunked_bmm_experts()
+    for start in range(0, len(selected_global), chunk_experts):
+        global_chunk = selected_global[start : start + chunk_experts]
+        local_chunk = selected_local[start : start + chunk_experts]
+        masks = [flat_ids == global_expert_id for global_expert_id in global_chunk]
+        row_indices = [
+            torch.nonzero(mask, as_tuple=False).flatten() for mask in masks
+        ]
+        max_rows = max(
+            (int(indices.numel()) for indices in row_indices),
+            default=0,
+        )
+        if max_rows == 0:
+            continue
+
+        local_ids = torch.tensor(
+            local_chunk,
+            device=hidden_states.device,
+            dtype=torch.long,
+        )
+        x_pack = torch.zeros(
+            (len(local_chunk), max_rows, hidden_size),
+            device=hidden_states.device,
+            dtype=torch.float32,
+        )
+        for chunk_idx, indices in enumerate(row_indices):
+            row_count = indices.numel()
+            x_pack[chunk_idx, :row_count] = flat_hidden[indices].to(torch.float32)
+            if apply_router_weight_on_input:
+                x_pack[chunk_idx, :row_count] *= flat_weights[indices]
+
+        w1_local = _dequant_mxfp4_musa(
+            w1[local_ids].contiguous(),
+            w1_scale[local_ids].contiguous(),
+            torch.float32,
+        )
+        gate_up = torch.bmm(x_pack, w1_local.transpose(1, 2))
+        del w1_local
+        if w1_bias is not None:
+            gate_up += w1_bias[local_ids].to(torch.float32).unsqueeze(1)
+
+        intermediate = _musa_moe_activation(
+            gate_up.reshape(len(local_chunk) * max_rows, -1),
+            activation,
+            swiglu_limit,
+            swiglu_alpha,
+            swiglu_beta,
+        ).reshape(len(local_chunk), max_rows, -1)
+
+        w2_local = _dequant_mxfp4_musa(
+            w2[local_ids].contiguous(),
+            w2_scale[local_ids].contiguous(),
+            torch.float32,
+        )
+        out_pack = torch.bmm(intermediate, w2_local.transpose(1, 2))
+        del w2_local
+        if w2_bias is not None:
+            out_pack += w2_bias[local_ids].to(torch.float32).unsqueeze(1)
+
+        for chunk_idx, indices in enumerate(row_indices):
+            row_count = indices.numel()
+            expert_out = out_pack[chunk_idx, :row_count]
+            if not apply_router_weight_on_input:
+                expert_out = expert_out * flat_weights[indices]
+            flat_out[indices] = expert_out
+
+    return flat_out.view(num_tokens, top_k, out_size).sum(dim=1).to(
+        hidden_states.dtype
+    )
 
 
 @_musa_timed("mxfp4_moe.grouped_gemv")
@@ -755,6 +940,10 @@ def fused_experts_impl(
         and _musa_mxfp4_grouped_gemv_impl() == "native"
         and w1_scale is not None
         and w2_scale is not None
+        and w1_scale.device == hidden_states.device
+        and w2_scale.device == hidden_states.device
+        and _musa_mxfp4_scale_bytes_ready(w1_scale)
+        and _musa_mxfp4_scale_bytes_ready(w2_scale)
         and w1_bias is None
         and w2_bias is None
         and getattr(

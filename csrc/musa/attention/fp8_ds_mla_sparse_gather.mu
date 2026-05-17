@@ -159,6 +159,10 @@ void fp8_ds_mla_sparse_gather(const torch::Tensor& cache,
   TORCH_CHECK(indices.is_contiguous(), "indices must be contiguous");
   TORCH_CHECK(output.is_contiguous(), "output must be contiguous");
   TORCH_CHECK(valid.is_contiguous(), "valid must be contiguous");
+  TORCH_CHECK(indices.device() == cache.device() &&
+                  output.device() == cache.device() &&
+                  valid.device() == cache.device(),
+              "indices, output, and valid must be on the same device as cache");
   TORCH_CHECK(cache.dim() >= 2, "cache must have at least two dimensions");
   TORCH_CHECK(indices.dim() == 2, "indices must be [num_queries, topk]");
   TORCH_CHECK(output.dim() == 3,
@@ -181,6 +185,8 @@ void fp8_ds_mla_sparse_gather(const torch::Tensor& cache,
   TORCH_CHECK(cache.numel() / cache.size(0) >= expected_block_stride,
               "cache block payload is too small for fp8_ds_mla layout");
   if (lengths.has_value()) {
+    TORCH_CHECK(lengths->device() == cache.device(),
+                "lengths must be on the same device as cache");
     TORCH_CHECK(lengths->numel() == indices.size(0),
                 "lengths must contain one value per query");
   }

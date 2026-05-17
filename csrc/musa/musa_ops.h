@@ -51,6 +51,24 @@ void mxfp4_grouped_gemv(
     torch::Tensor& output,
     const c10::optional<torch::Tensor>& expert_map);
 
+void deepseek_v4_mega_moe_pre_dispatch(
+    const torch::Tensor& x,
+    const torch::Tensor& topk_idx,
+    const torch::Tensor& topk_weights,
+    torch::Tensor& buf_x,
+    torch::Tensor& buf_x_sf,
+    torch::Tensor& buf_topk_idx,
+    torch::Tensor& buf_topk_weights,
+    int64_t quant_group_size);
+
+void deepseek_v4_silu_and_mul_masked_post_quant(
+    const torch::Tensor& input,
+    torch::Tensor& output,
+    torch::Tensor& output_scale,
+    const torch::Tensor& masked_m,
+    int64_t quant_group_size,
+    double swiglu_limit);
+
 void fp8_ds_mla_sparse_gather(
     const torch::Tensor& cache,
     const torch::Tensor& indices,

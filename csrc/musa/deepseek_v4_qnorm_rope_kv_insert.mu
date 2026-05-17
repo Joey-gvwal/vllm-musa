@@ -222,6 +222,12 @@ void fused_deepseek_v4_qnorm_rope_kv_insert(
               "q, kv, and k_cache must be contiguous");
   TORCH_CHECK(slot_mapping.is_contiguous() && positions.is_contiguous(),
               "slot_mapping and positions must be contiguous");
+  TORCH_CHECK(kv.device() == q.device() && k_cache.device() == q.device() &&
+                  slot_mapping.device() == q.device() &&
+                  positions.device() == q.device() &&
+                  cos_sin_cache.device() == q.device(),
+              "kv, k_cache, slot_mapping, positions, and cos_sin_cache must "
+              "be on the same device as q");
   TORCH_CHECK(cos_sin_cache.dim() == 2 &&
                   cos_sin_cache.size(1) == kRopeDim &&
                   cos_sin_cache.is_contiguous(),

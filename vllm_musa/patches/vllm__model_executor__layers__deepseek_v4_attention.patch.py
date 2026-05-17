@@ -487,6 +487,11 @@ def _musa_try_native_deepseek_v4_qnorm_rope_kv_insert(
         return False
     if not current_platform.is_musa():
         return False
+    tensors = (q, kv, k_cache_2d, slot_mapping, positions, cos_sin_cache)
+    if not all(tensor.device.type == "musa" for tensor in tensors):
+        return False
+    if len({tensor.device for tensor in tensors}) != 1:
+        return False
     if q.dtype != torch.bfloat16 or kv.dtype != torch.bfloat16:
         return False
     if k_cache_2d.dtype != torch.uint8 or cos_sin_cache.dtype != torch.float32:
