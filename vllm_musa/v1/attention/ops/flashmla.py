@@ -3,6 +3,7 @@
 
 import inspect
 import math
+import os
 
 import torch
 from vllm.logger import init_logger
@@ -33,6 +34,12 @@ _DSV4_BF16_ROPE_DIM = 64
 _DSV4_TOKEN_DATA_BYTES = _DSV4_FP8_NOPE_DIM + _DSV4_BF16_ROPE_DIM * 2
 _DSV4_TOKEN_SCALE_BYTES = 8
 _DSV4_QUANT_BLOCK_SIZE = 64
+
+
+def _fp8_ds_mla_sparse_gather_impl() -> str:
+    return os.getenv(
+        "VLLM_MUSA_FP8_DS_MLA_SPARSE_GATHER_IMPL", "torch"
+    ).strip().lower()
 
 
 def _raise_deepseek_v4_sparse_flashmla_unavailable() -> None:
@@ -213,6 +220,36 @@ def _gather_fp8_ds_mla_sparse_kv(
     num_blocks = cache.shape[0]
     block_size = cache.shape[1]
     num_kv_tokens = num_blocks * block_size
+    if (
+        current_platform.is_musa()
+        and _fp8_ds_mla_sparse_gather_impl() == "native"
+        and cache.dtype == torch.uint8
+        and cache.is_contiguous()
+        and indices.dtype in (torch.int32, torch.int64)
+    ):
+        native_gather = getattr(
+            getattr(torch.ops, "_C_musa_ops", None),
+            "fp8_ds_mla_sparse_gather",
+            None,
+        )
+        native_lengths = lengths
+        lengths_supported = native_lengths is None or (
+            native_lengths.dtype in (torch.int32, torch.int64)
+            and native_lengths.is_contiguous()
+        )
+        if native_gather is not None and lengths_supported:
+            native_indices = indices if indices.is_contiguous() else indices.contiguous()
+            gathered = torch.empty(
+                (num_queries, topk, _DSV4_FP8_NOPE_DIM + _DSV4_BF16_ROPE_DIM),
+                device=cache.device,
+                dtype=torch.float32,
+            )
+            valid = torch.empty(
+                (num_queries, topk), device=cache.device, dtype=torch.bool
+            )
+            native_gather(cache, native_indices, native_lengths, gathered, valid)
+            return gathered, valid
+
     idx = indices.to(torch.long)
     valid = (idx >= 0) & (idx < num_kv_tokens)
     if lengths is not None:

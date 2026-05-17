@@ -152,6 +152,22 @@ def mxfp4_grouped_gemv(
     )
 
 
+def fp8_ds_mla_sparse_gather(
+    cache: torch.Tensor,
+    indices: torch.Tensor,
+    lengths: torch.Tensor | None,
+    output: torch.Tensor,
+    valid: torch.Tensor,
+) -> None:
+    return torch.ops._C_musa_ops.fp8_ds_mla_sparse_gather(
+        cache,
+        indices,
+        lengths,
+        output,
+        valid,
+    )
+
+
 def fused_deepseek_v4_qnorm_rope_kv_insert(
     q: torch.Tensor,
     kv: torch.Tensor,

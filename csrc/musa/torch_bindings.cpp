@@ -42,6 +42,12 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("mxfp4_grouped_gemv", torch::kMUSA, &mxfp4_grouped_gemv);
 
   musa_ops.def(
+      "fp8_ds_mla_sparse_gather(Tensor cache, Tensor indices, "
+      "Tensor? lengths, Tensor! output, Tensor! valid) -> ()");
+  musa_ops.impl("fp8_ds_mla_sparse_gather", torch::kMUSA,
+           &fp8_ds_mla_sparse_gather);
+
+  musa_ops.def(
       "fused_deepseek_v4_qnorm_rope_kv_insert(Tensor! q, Tensor kv, "
       "Tensor! k_cache, Tensor slot_mapping, Tensor positions, "
       "Tensor cos_sin_cache, float eps, int block_size) -> ()");

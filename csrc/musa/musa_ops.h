@@ -51,6 +51,13 @@ void mxfp4_grouped_gemv(
     torch::Tensor& output,
     const c10::optional<torch::Tensor>& expert_map);
 
+void fp8_ds_mla_sparse_gather(
+    const torch::Tensor& cache,
+    const torch::Tensor& indices,
+    const c10::optional<torch::Tensor>& lengths,
+    torch::Tensor& output,
+    torch::Tensor& valid);
+
 void fused_deepseek_v4_qnorm_rope_kv_insert(
     torch::Tensor& q,
     const torch::Tensor& kv,
