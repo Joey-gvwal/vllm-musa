@@ -197,7 +197,10 @@ def _reshape_sparse_lengths(
             f"Torch sparse FlashMLA fallback expected {name} to contain "
             f"{num_queries} entries, got {lengths.shape}."
         )
-    return lengths.reshape(num_queries).to(torch.long)
+    flat = lengths.reshape(num_queries)
+    if flat.dtype in (torch.int32, torch.int64):
+        return flat
+    return flat.to(torch.long)
 
 
 def _flatten_mqa_k_cache(name: str, k_cache: torch.Tensor) -> torch.Tensor:
@@ -292,7 +295,7 @@ def _gather_fp8_ds_mla_sparse_kv(
     idx = indices.to(torch.long)
     valid = (idx >= 0) & (idx < num_kv_tokens)
     if lengths is not None:
-        topk_range = torch.arange(topk, device=indices.device)
+        topk_range = torch.arange(topk, device=indices.device, dtype=lengths.dtype)
         valid &= topk_range.unsqueeze(0) < lengths.unsqueeze(1)
 
     safe_idx = idx.masked_fill(~valid, 0).reshape(-1)
@@ -350,7 +353,7 @@ def _gather_sparse_kv(
     idx = indices.to(torch.long)
     valid = (idx >= 0) & (idx < num_kv_tokens)
     if lengths is not None:
-        topk_range = torch.arange(topk, device=indices.device)
+        topk_range = torch.arange(topk, device=indices.device, dtype=lengths.dtype)
         valid &= topk_range.unsqueeze(0) < lengths.unsqueeze(1)
 
     gathered = cache[:, 0, :].to(torch.float32).index_select(

@@ -87,6 +87,18 @@ def test_musa_deepseek_v4_sparse_backend_matches_sparse_swa_block_size():
     )
 
 
+def test_sparse_flashmla_lengths_preserve_int32_dtype_and_storage():
+    from vllm_musa.v1.attention.ops import flashmla
+
+    lengths = torch.tensor([[2, 1]], dtype=torch.int32)
+
+    actual = flashmla._reshape_sparse_lengths("topk_length", lengths, 2)
+
+    assert actual.dtype == torch.int32
+    assert actual.data_ptr() == lengths.data_ptr()
+    assert actual.tolist() == [2, 1]
+
+
 def test_sparse_flashmla_prefill_provider_matches_reference_production_dims():
     from vllm_musa.v1.attention.ops import flashmla
 
