@@ -38,7 +38,7 @@ _DSV4_QUANT_BLOCK_SIZE = 64
 
 def _fp8_ds_mla_sparse_gather_impl() -> str:
     return os.getenv(
-        "VLLM_MUSA_FP8_DS_MLA_SPARSE_GATHER_IMPL", "torch"
+        "VLLM_MUSA_FP8_DS_MLA_SPARSE_GATHER_IMPL", "native"
     ).strip().lower()
 
 
