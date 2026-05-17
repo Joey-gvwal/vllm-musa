@@ -60,14 +60,10 @@ def _musa_sparse_timed(scope_name: str):
 
 def _try_deepseek_v4_sparse_flashmla_provider(
     **kwargs,
-) -> tuple[torch.Tensor, torch.Tensor | None] | None:
-    return_lse = kwargs.pop("return_lse", True)
+) -> tuple[torch.Tensor, torch.Tensor] | None:
     impl = os.getenv(_DSV4_SPARSE_FLASHMLA_IMPL_ENV, "torch").strip().lower()
     if impl == "native":
-        provider_result = _try_deepseek_v4_native_sparse_flashmla_provider(**kwargs)
-        if provider_result is not None and not return_lse:
-            return provider_result[0], None
-        return provider_result
+        return _try_deepseek_v4_native_sparse_flashmla_provider(**kwargs)
     if impl not in _DSV4_SPARSE_FLASHMLA_PROVIDER_MODES:
         return None
 
@@ -75,10 +71,7 @@ def _try_deepseek_v4_sparse_flashmla_provider(
         maybe_sglang_tilelang_flash_mla_with_kvcache,
     )
 
-    provider_result = maybe_sglang_tilelang_flash_mla_with_kvcache(**kwargs)
-    if provider_result is not None and not return_lse:
-        return provider_result[0], None
-    return provider_result
+    return maybe_sglang_tilelang_flash_mla_with_kvcache(**kwargs)
 
 
 def _fp8_ds_mla_sparse_gather_impl() -> str:
@@ -605,9 +598,8 @@ def _torch_flash_mla_with_kvcache_sparse_fallback(
     extra_indices_in_kvcache: torch.Tensor | None = None,
     extra_topk_length: torch.Tensor | None = None,
     out: torch.Tensor | None = None,
-    return_lse: bool = True,
     **kwargs,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     if kwargs:
         raise TypeError(
             "Torch sparse FlashMLA fallback does not support kwargs: "
@@ -705,15 +697,12 @@ def _torch_flash_mla_with_kvcache_sparse_fallback(
     result = torch.einsum("qhk,qkd->qhd", weights, value)
     result = result.masked_fill(no_key_mask[:, None, None], 0.0)
     result = result.reshape(batch, seq_len, num_heads, head_dim_v).to(q.dtype)
-    if return_lse:
-        lse = (
-            key_lse.masked_fill(no_key_mask[:, None], float("inf"))
-            .reshape(batch, seq_len, num_heads)
-            .permute(0, 2, 1)
-            .contiguous()
-        )
-    else:
-        lse = None
+    lse = (
+        key_lse.masked_fill(no_key_mask[:, None], float("inf"))
+        .reshape(batch, seq_len, num_heads)
+        .permute(0, 2, 1)
+        .contiguous()
+    )
 
     if out is not None:
         out.copy_(result.to(out.dtype))
@@ -739,9 +728,8 @@ def flash_mla_with_kvcache(
     extra_indices_in_kvcache: torch.Tensor | None = None,
     extra_topk_length: torch.Tensor | None = None,
     out: torch.Tensor | None = None,
-    return_lse: bool = True,
     **kwargs,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     has_deepseek_v4_sparse_kwargs = (
         topk_length is not None
         or attn_sink is not None
@@ -770,7 +758,6 @@ def flash_mla_with_kvcache(
             extra_indices_in_kvcache=extra_indices_in_kvcache,
             extra_topk_length=extra_topk_length,
             out=out,
-            return_lse=return_lse,
             **kwargs,
         )
         if provider_result is not None:
@@ -794,11 +781,10 @@ def flash_mla_with_kvcache(
                 extra_indices_in_kvcache=extra_indices_in_kvcache,
                 extra_topk_length=extra_topk_length,
                 out=out,
-                return_lse=return_lse,
                 **kwargs,
             )
         if _supports_deepseek_v4_sparse_kvcache_kwargs():
-            result, lse = _mate_flash_mla_with_kvcache(
+            return _mate_flash_mla_with_kvcache(
                 q=q,
                 k_cache=k_cache,
                 block_table=block_table,
@@ -818,7 +804,6 @@ def flash_mla_with_kvcache(
                 out=out,
                 **kwargs,
             )
-            return result, lse if return_lse else None
         return _torch_flash_mla_with_kvcache_sparse_fallback(
             q=q,
             k_cache=k_cache,
@@ -837,7 +822,6 @@ def flash_mla_with_kvcache(
             extra_indices_in_kvcache=extra_indices_in_kvcache,
             extra_topk_length=extra_topk_length,
             out=out,
-            return_lse=return_lse,
             **kwargs,
         )
     return _mate_flash_mla_with_kvcache(
