@@ -71,6 +71,14 @@ def _musa_mxfp4_grouped_gemv_impl() -> str:
     return os.getenv("VLLM_MUSA_MXFP4_GROUPED_GEMV_IMPL", "off").strip().lower()
 
 
+def _musa_mxfp4_naive_grouped_moe_impl() -> str:
+    return (
+        os.getenv("VLLM_MUSA_MXFP4_NAIVE_GROUPED_MOE_IMPL", "off")
+        .strip()
+        .lower()
+    )
+
+
 def _musa_mxfp4_fallback_impl() -> str:
     return os.getenv("VLLM_MUSA_MXFP4_FALLBACK_IMPL", "chunked_bmm").strip().lower()
 
@@ -557,6 +565,33 @@ def _musa_mxfp4_grouped_gemv_moe(
     ops.moe_sum(flat_out.view(num_tokens, top_k, k), output)
 
 
+@_musa_timed("mxfp4_moe.naive_grouped_moe")
+def _musa_mxfp4_naive_grouped_moe(
+    output: torch.Tensor,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    apply_router_weight_on_input: bool,
+) -> None:
+    musa_ops.mxfp4_naive_grouped_moe(
+        hidden_states.contiguous(),
+        w1,
+        w2,
+        _musa_mxfp4_scale_bytes(w1_scale),
+        _musa_mxfp4_scale_bytes(w2_scale),
+        topk_weights.contiguous(),
+        topk_ids.contiguous(),
+        output,
+        expert_map,
+        apply_router_weight_on_input,
+    )
+
+
 def _musa_mxfp4_make_w4a16_quant_config(
     quant_config: FusedMoEQuantConfig,
 ) -> FusedMoEQuantConfig:
@@ -951,13 +986,42 @@ def fused_experts_impl(
         )
         is not None
     )
+    activation_value = str(getattr(activation, "value", activation)).lower()
+    activation_value = activation_value.rsplit(".", 1)[-1]
+    use_musa_mxfp4_naive_grouped_moe = (
+        current_platform.is_musa()
+        and _is_mxfp4_scheme(ocp_mx_scheme)
+        and _musa_mxfp4_naive_grouped_moe_impl() == "native"
+        and activation_value == "silu"
+        and w1_scale is not None
+        and w2_scale is not None
+        and w1_scale.device == hidden_states.device
+        and w2_scale.device == hidden_states.device
+        and _musa_mxfp4_scale_bytes_ready(w1_scale)
+        and _musa_mxfp4_scale_bytes_ready(w2_scale)
+        and w1_bias is None
+        and w2_bias is None
+        and swiglu_limit is None
+        and swiglu_alpha is None
+        and swiglu_beta is None
+        and getattr(
+            getattr(torch.ops, "_C_musa_ops", None),
+            "mxfp4_naive_grouped_moe",
+            None,
+        )
+        is not None
+    )
 
     if ocp_mx_scheme is not None:
         # TODO: On platforms for which `current_platform.supports_mx()` is True
         # and for which we have a native OCP mx fused MOE kernel,
         # this dequantization step should not be done.
         if _is_mxfp4_scheme(ocp_mx_scheme):
-            if not use_musa_torch_moe_fallback and not use_musa_mxfp4_grouped_gemv:
+            if (
+                not use_musa_torch_moe_fallback
+                and not use_musa_mxfp4_grouped_gemv
+                and not use_musa_mxfp4_naive_grouped_moe
+            ):
                 # Weight has to be dequantized for mxfp4 emulation.
                 w1 = _dequant_mxfp4_musa(w1, w1_scale, hidden_states.dtype)
                 w1_scale = None
@@ -1042,6 +1106,21 @@ def fused_experts_impl(
                 curr_topk_weights,
                 curr_topk_ids,
                 activation,
+                expert_map,
+                w1_scale,
+                w2_scale,
+                apply_router_weight_on_input,
+            )
+            continue
+
+        if use_musa_mxfp4_naive_grouped_moe:
+            _musa_mxfp4_naive_grouped_moe(
+                curr_out_hidden_states,
+                curr_hidden_states,
+                w1,
+                w2,
+                curr_topk_weights,
+                curr_topk_ids,
                 expert_map,
                 w1_scale,
                 w2_scale,

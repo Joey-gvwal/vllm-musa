@@ -51,6 +51,18 @@ void mxfp4_grouped_gemv(
     torch::Tensor& output,
     const c10::optional<torch::Tensor>& expert_map);
 
+void mxfp4_naive_grouped_moe(
+    const torch::Tensor& hidden,
+    const torch::Tensor& w1,
+    const torch::Tensor& w2,
+    const torch::Tensor& w1_scale,
+    const torch::Tensor& w2_scale,
+    const torch::Tensor& topk_weights,
+    const torch::Tensor& topk_ids,
+    torch::Tensor& output,
+    const c10::optional<torch::Tensor>& expert_map,
+    bool apply_router_weight_on_input);
+
 void deepseek_v4_mega_moe_pre_dispatch(
     const torch::Tensor& x,
     const torch::Tensor& topk_idx,

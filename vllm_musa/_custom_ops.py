@@ -310,6 +310,32 @@ def fp8_ds_mla_sparse_gather(
     )
 
 
+def mxfp4_naive_grouped_moe(
+    hidden: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    output: torch.Tensor,
+    expert_map: torch.Tensor | None,
+    apply_router_weight_on_input: bool,
+) -> None:
+    return torch.ops._C_musa_ops.mxfp4_naive_grouped_moe(
+        hidden,
+        w1,
+        w2,
+        w1_scale,
+        w2_scale,
+        topk_weights,
+        topk_ids,
+        output,
+        expert_map,
+        apply_router_weight_on_input,
+    )
+
+
 def fused_deepseek_v4_qnorm_rope_kv_insert(
     q: torch.Tensor,
     kv: torch.Tensor,

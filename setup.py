@@ -174,6 +174,7 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/quantization/per_token_group_quant.cu",
     "csrc/musa/quantization/mxfp4_dequant.mu",
     "csrc/musa/quantization/mxfp4_grouped_gemv.mu",
+    "csrc/musa/quantization/mxfp4_naive_grouped_moe.mu",
     "csrc/musa/deepseek_v4_moe_prereq.mu",
     "csrc/musa/attention/fp8_ds_mla_sparse_gather.mu",
     "csrc/musa/deepseek_v4_qnorm_rope_kv_insert.mu",

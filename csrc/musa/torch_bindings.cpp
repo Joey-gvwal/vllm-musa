@@ -42,6 +42,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("mxfp4_grouped_gemv", torch::kMUSA, &mxfp4_grouped_gemv);
 
   musa_ops.def(
+      "mxfp4_naive_grouped_moe(Tensor hidden, Tensor w1, Tensor w2, "
+      "Tensor w1_scale, Tensor w2_scale, Tensor topk_weights, "
+      "Tensor topk_ids, Tensor! output, Tensor? expert_map, "
+      "bool apply_router_weight_on_input) -> ()");
+  musa_ops.impl("mxfp4_naive_grouped_moe", torch::kMUSA,
+           &mxfp4_naive_grouped_moe);
+
+  musa_ops.def(
       "deepseek_v4_mega_moe_pre_dispatch(Tensor x, Tensor topk_idx, "
       "Tensor topk_weights, Tensor! buf_x, Tensor! buf_x_sf, "
       "Tensor! buf_topk_idx, Tensor! buf_topk_weights, int "
