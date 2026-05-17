@@ -42,6 +42,21 @@ _DSV4_SPARSE_FLASHMLA_PROVIDER_MODES = {
 }
 
 
+def _musa_sparse_timed(scope_name: str):
+    def decorator(fn):
+        def wrapper(*args, **kwargs):
+            try:
+                from vllm_musa.deepseek_v4_timers import timed
+            except Exception:
+                return fn(*args, **kwargs)
+            with timed(scope_name):
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def _try_deepseek_v4_sparse_flashmla_provider(
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
@@ -226,6 +241,7 @@ def _flatten_mqa_k_cache(name: str, k_cache: torch.Tensor) -> torch.Tensor:
     )
 
 
+@_musa_sparse_timed("flashmla_sparse.fp8_ds_mla_sparse_gather")
 def _gather_fp8_ds_mla_sparse_kv(
     cache: torch.Tensor,
     indices: torch.Tensor,
@@ -344,6 +360,7 @@ def _gather_sparse_kv(
     return gathered, valid
 
 
+@_musa_sparse_timed("flashmla_sparse.kvcache_torch_fallback")
 def _torch_flash_mla_with_kvcache_sparse_fallback(
     q: torch.Tensor,
     k_cache: torch.Tensor,
