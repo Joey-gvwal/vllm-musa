@@ -37,6 +37,7 @@ _DSV4_QUANT_BLOCK_SIZE = 64
 _DSV4_SPARSE_FLASHMLA_IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_SPARSE_FLASHMLA_IMPL"
 _DSV4_SPARSE_FLASHMLA_PROVIDER_MODES = {
     "native",
+    "native_grouped",
     "sglang_tilelang",
     "tilelang",
     "external_sglang",
@@ -62,8 +63,10 @@ def _try_deepseek_v4_sparse_flashmla_provider(
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     impl = os.getenv(_DSV4_SPARSE_FLASHMLA_IMPL_ENV, "torch").strip().lower()
-    if impl == "native":
-        return _try_deepseek_v4_native_sparse_flashmla_provider(**kwargs)
+    if impl in {"native", "native_grouped"}:
+        return _try_deepseek_v4_native_sparse_flashmla_provider(
+            grouped=impl == "native_grouped", **kwargs
+        )
     if impl not in _DSV4_SPARSE_FLASHMLA_PROVIDER_MODES:
         return None
 
@@ -250,6 +253,7 @@ def _require_native_sparse_indices(
 
 def _try_deepseek_v4_native_sparse_flashmla_provider(
     *,
+    grouped: bool = False,
     q: torch.Tensor,
     k_cache: torch.Tensor,
     block_table: torch.Tensor | None,
@@ -283,9 +287,14 @@ def _try_deepseek_v4_native_sparse_flashmla_provider(
         import vllm_musa._custom_ops  # noqa: F401
     except Exception:
         return None
+    op_name = (
+        "fp8_ds_mla_sparse_attention_grouped"
+        if grouped
+        else "fp8_ds_mla_sparse_attention"
+    )
     native_attention = getattr(
         getattr(torch.ops, "_C_musa_ops", None),
-        "fp8_ds_mla_sparse_attention",
+        op_name,
         None,
     )
     if native_attention is None:
