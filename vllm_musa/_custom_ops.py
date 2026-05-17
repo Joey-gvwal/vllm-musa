@@ -168,26 +168,6 @@ def fp8_ds_mla_sparse_gather(
     )
 
 
-def fp8_ds_mla_sparse_reduce(
-    q: torch.Tensor,
-    gathered: torch.Tensor,
-    valid: torch.Tensor,
-    attn_sink: torch.Tensor | None,
-    softmax_scale: float,
-    output: torch.Tensor,
-    lse: torch.Tensor,
-) -> None:
-    return torch.ops._C_musa_ops.fp8_ds_mla_sparse_reduce(
-        q,
-        gathered,
-        valid,
-        attn_sink,
-        softmax_scale,
-        output,
-        lse,
-    )
-
-
 def fused_deepseek_v4_qnorm_rope_kv_insert(
     q: torch.Tensor,
     kv: torch.Tensor,

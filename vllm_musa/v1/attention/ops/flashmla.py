@@ -42,12 +42,6 @@ def _fp8_ds_mla_sparse_gather_impl() -> str:
     ).strip().lower()
 
 
-def _fp8_ds_mla_sparse_reduce_impl() -> str:
-    return os.getenv(
-        "VLLM_MUSA_FP8_DS_MLA_SPARSE_REDUCE_IMPL", "off"
-    ).strip().lower()
-
-
 def _raise_deepseek_v4_sparse_flashmla_unavailable() -> None:
     raise RuntimeError(
         "DeepSeek-V4 sparse FlashMLA on MUSA requires a provider that supports "
@@ -327,72 +321,6 @@ def _gather_sparse_kv(
     return gathered, valid
 
 
-def _try_musa_fp8_ds_mla_sparse_reduce(
-    q_flat: torch.Tensor,
-    gathered: torch.Tensor,
-    valid: torch.Tensor,
-    batch: int,
-    seq_len: int,
-    head_dim_v: int,
-    softmax_scale: float,
-    attn_sink: torch.Tensor | None,
-    out: torch.Tensor | None,
-) -> tuple[torch.Tensor, torch.Tensor] | None:
-    if (
-        not current_platform.is_musa()
-        or _fp8_ds_mla_sparse_reduce_impl() != "native"
-        or gathered.dtype != torch.float32
-        or valid.dtype != torch.bool
-        or not q_flat.is_contiguous()
-        or not gathered.is_contiguous()
-        or not valid.is_contiguous()
-        or q_flat.dtype not in (torch.float16, torch.bfloat16, torch.float32)
-    ):
-        return None
-
-    native_reduce = getattr(
-        getattr(torch.ops, "_C_musa_ops", None),
-        "fp8_ds_mla_sparse_reduce",
-        None,
-    )
-    if native_reduce is None:
-        return None
-    if attn_sink is not None and (
-        not attn_sink.is_contiguous()
-        or attn_sink.dtype not in (torch.float16, torch.bfloat16, torch.float32)
-    ):
-        return None
-
-    num_queries, num_heads, _ = q_flat.shape
-    if out is None:
-        result_flat = torch.empty(
-            (num_queries, num_heads, head_dim_v),
-            device=q_flat.device,
-            dtype=q_flat.dtype,
-        )
-    else:
-        if not out.is_contiguous():
-            return None
-        result_flat = out.reshape(num_queries, num_heads, head_dim_v)
-    lse_flat = torch.empty(
-        (num_queries, num_heads), device=q_flat.device, dtype=torch.float32
-    )
-    native_reduce(
-        q_flat,
-        gathered,
-        valid,
-        attn_sink,
-        softmax_scale,
-        result_flat,
-        lse_flat,
-    )
-    result = result_flat.reshape(batch, seq_len, num_heads, head_dim_v)
-    lse = lse_flat.reshape(batch, seq_len, num_heads).permute(0, 2, 1).contiguous()
-    if out is not None:
-        result = out
-    return result, lse
-
-
 def _torch_flash_mla_with_kvcache_sparse_fallback(
     q: torch.Tensor,
     k_cache: torch.Tensor,
@@ -491,22 +419,7 @@ def _torch_flash_mla_with_kvcache_sparse_fallback(
             f"{gathered.shape[-1]}."
         )
 
-    q_flat_view = q.reshape(num_queries, num_heads, q_dim)
-    native_reduce = _try_musa_fp8_ds_mla_sparse_reduce(
-        q_flat_view,
-        gathered,
-        valid,
-        batch,
-        seq_len,
-        head_dim_v,
-        softmax_scale,
-        attn_sink,
-        out,
-    )
-    if native_reduce is not None:
-        return native_reduce
-
-    q_flat = q_flat_view.to(torch.float32)
+    q_flat = q.reshape(num_queries, num_heads, q_dim).to(torch.float32)
     key = gathered[:, :, :q_dim]
     value = gathered[:, :, :head_dim_v]
     logits = torch.einsum("qhd,qkd->qhk", q_flat, key) * softmax_scale

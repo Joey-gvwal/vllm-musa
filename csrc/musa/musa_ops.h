@@ -58,15 +58,6 @@ void fp8_ds_mla_sparse_gather(
     torch::Tensor& output,
     torch::Tensor& valid);
 
-void fp8_ds_mla_sparse_reduce(
-    const torch::Tensor& q,
-    const torch::Tensor& gathered,
-    const torch::Tensor& valid,
-    const c10::optional<torch::Tensor>& attn_sink,
-    double softmax_scale,
-    torch::Tensor& output,
-    torch::Tensor& lse);
-
 void fused_deepseek_v4_qnorm_rope_kv_insert(
     torch::Tensor& q,
     const torch::Tensor& kv,

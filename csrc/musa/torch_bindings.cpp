@@ -48,12 +48,6 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
            &fp8_ds_mla_sparse_gather);
 
   musa_ops.def(
-      "fp8_ds_mla_sparse_reduce(Tensor q, Tensor gathered, Tensor valid, "
-      "Tensor? attn_sink, float softmax_scale, Tensor! output, Tensor! lse) -> ()");
-  musa_ops.impl("fp8_ds_mla_sparse_reduce", torch::kMUSA,
-           &fp8_ds_mla_sparse_reduce);
-
-  musa_ops.def(
       "fused_deepseek_v4_qnorm_rope_kv_insert(Tensor! q, Tensor kv, "
       "Tensor! k_cache, Tensor slot_mapping, Tensor positions, "
       "Tensor cos_sin_cache, float eps, int block_size) -> ()");
