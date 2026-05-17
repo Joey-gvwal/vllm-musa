@@ -35,6 +35,21 @@ def mhc_pre_torch_fallback(
     hc_post_mult_value: float,
     sinkhorn_repeat: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "torch").lower()
+    if impl in {"tilelang", "jit", "force"}:
+        with _timed_or_noop("mhc.pre_tilelang_mix_provider"):
+            return _mhc_pre_tilelang_mix_provider(
+                residual,
+                fn,
+                hc_scale,
+                hc_base,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+            )
+
     with _timed_or_noop("mhc.pre_torch_fallback"):
         assert residual.dtype == torch.bfloat16
         assert fn.dtype == torch.float32
@@ -128,8 +143,92 @@ def mhc_post_torch_fallback(
 def _require_contiguous(name: str, tensor: torch.Tensor) -> None:
     if not tensor.is_contiguous():
         raise NotImplementedError(
-            f"MHC post TileLang provider requires contiguous {name}"
+            f"MHC TileLang provider requires contiguous {name}"
         )
+
+
+def _mhc_pre_tilelang_mix_provider(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert residual.dtype == torch.bfloat16
+    assert fn.dtype == torch.float32
+    assert hc_scale.dtype == torch.float32
+    assert hc_base.dtype == torch.float32
+
+    _require_contiguous("residual", residual)
+    _require_contiguous("fn", fn)
+    _require_contiguous("hc_scale", hc_scale)
+    _require_contiguous("hc_base", hc_base)
+
+    hc_mult = residual.shape[-2]
+    hidden_size = residual.shape[-1]
+    if hc_mult != 4:
+        raise NotImplementedError(
+            f"MHC pre TileLang provider only supports hc_mult=4, got {hc_mult}"
+        )
+    mhc_mult3 = hc_mult * 2 + hc_mult * hc_mult
+    hc_hidden_size = hc_mult * hidden_size
+    if fn.shape != (mhc_mult3, hc_hidden_size):
+        raise ValueError(
+            "MHC pre TileLang provider fn shape mismatch: "
+            f"expected {(mhc_mult3, hc_hidden_size)}, got {tuple(fn.shape)}"
+        )
+    if hc_scale.shape != (3,):
+        raise ValueError(
+            f"MHC pre TileLang provider hc_scale shape mismatch: {hc_scale.shape}"
+        )
+    if hc_base.shape != (mhc_mult3,):
+        raise ValueError(
+            f"MHC pre TileLang provider hc_base shape mismatch: {hc_base.shape}"
+        )
+
+    outer_shape = residual.shape[:-2]
+    residual_flat = residual.view(-1, hc_mult, hidden_size)
+    num_tokens = residual_flat.shape[0]
+    x_float = residual_flat.reshape(num_tokens, hc_hidden_size).to(torch.float32)
+    mixes_raw = x_float @ fn.t()
+    sqsum = x_float.square().sum(dim=-1)
+
+    post_mix = torch.empty(
+        num_tokens, hc_mult, 1, dtype=torch.float32, device=residual.device
+    )
+    comb_mix = torch.empty(
+        num_tokens, hc_mult, hc_mult, dtype=torch.float32, device=residual.device
+    )
+    layer_input = torch.empty(
+        num_tokens, hidden_size, dtype=torch.bfloat16, device=residual.device
+    )
+
+    from vllm_musa.deepseek_v4_jit.tilelang_kernels import mhc_pre_mix_kernel
+
+    mhc_pre_mix_kernel(hidden_size, sinkhorn_repeat)(
+        mixes_raw,
+        sqsum,
+        residual_flat,
+        hc_scale,
+        hc_base,
+        post_mix,
+        comb_mix,
+        layer_input,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+    )
+
+    return (
+        post_mix.view(*outer_shape, hc_mult, 1),
+        comb_mix.view(*outer_shape, hc_mult, hc_mult),
+        layer_input.view(*outer_shape, hidden_size),
+    )
 
 
 def _mhc_post_tilelang_provider(

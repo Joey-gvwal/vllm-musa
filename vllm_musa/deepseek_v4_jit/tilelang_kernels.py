@@ -979,3 +979,186 @@ def mhc_post_kernel(hidden_size: int, hidden_block: int = 256, threads: int = 25
         return _kernel
 
     return _mhc_post_kernel()
+
+
+@lru_cache(maxsize=None)
+def mhc_pre_mix_kernel(
+    hidden_size: int,
+    sinkhorn_repeat: int,
+    hidden_block: int = 256,
+    threads: int = 256,
+):
+    hidden_block = math.gcd(hidden_block, hidden_size)
+    if hidden_block <= 0 or hidden_size % hidden_block != 0:
+        raise ValueError(
+            f"invalid MHC pre hidden_block={hidden_block} for hidden={hidden_size}"
+        )
+    if sinkhorn_repeat < 1:
+        raise ValueError(f"sinkhorn_repeat must be >= 1, got {sinkhorn_repeat}")
+
+    hc_hidden_size = 4 * hidden_size
+
+    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    def _mhc_pre_mix_kernel():
+        num_tokens = T.dynamic("num_tokens")
+
+        @T.prim_func
+        def _kernel(
+            mixes_raw: T.Tensor((num_tokens, 24), T.float32),
+            sqsum: T.Tensor((num_tokens,), T.float32),
+            residual: T.Tensor((num_tokens, 4, hidden_size), T.bfloat16),
+            hc_scale: T.Tensor((3,), T.float32),
+            hc_base: T.Tensor((24,), T.float32),
+            post_mix: T.Tensor((num_tokens, 4, 1), T.float32),
+            comb_mix: T.Tensor((num_tokens, 4, 4), T.float32),
+            layer_input: T.Tensor((num_tokens, hidden_size), T.bfloat16),
+            rms_eps: T.float32,
+            hc_pre_eps: T.float32,
+            hc_sinkhorn_eps: T.float32,
+            hc_post_mult_value: T.float32,
+        ):
+            with T.Kernel(
+                num_tokens, hidden_size // hidden_block, threads=threads
+            ) as (token_id, block_id):
+                tx = T.get_thread_binding()
+                pre = T.alloc_shared((4,), T.float32)
+
+                if tx == 0:
+                    rms = T.rsqrt(sqsum[token_id] / float(hc_hidden_size) + rms_eps)
+                    m0 = mixes_raw[token_id, 0] * rms
+                    m1 = mixes_raw[token_id, 1] * rms
+                    m2 = mixes_raw[token_id, 2] * rms
+                    m3 = mixes_raw[token_id, 3] * rms
+                    m4 = mixes_raw[token_id, 4] * rms
+                    m5 = mixes_raw[token_id, 5] * rms
+                    m6 = mixes_raw[token_id, 6] * rms
+                    m7 = mixes_raw[token_id, 7] * rms
+                    m8 = mixes_raw[token_id, 8] * rms
+                    m9 = mixes_raw[token_id, 9] * rms
+                    m10 = mixes_raw[token_id, 10] * rms
+                    m11 = mixes_raw[token_id, 11] * rms
+                    m12 = mixes_raw[token_id, 12] * rms
+                    m13 = mixes_raw[token_id, 13] * rms
+                    m14 = mixes_raw[token_id, 14] * rms
+                    m15 = mixes_raw[token_id, 15] * rms
+                    m16 = mixes_raw[token_id, 16] * rms
+                    m17 = mixes_raw[token_id, 17] * rms
+                    m18 = mixes_raw[token_id, 18] * rms
+                    m19 = mixes_raw[token_id, 19] * rms
+                    m20 = mixes_raw[token_id, 20] * rms
+                    m21 = mixes_raw[token_id, 21] * rms
+                    m22 = mixes_raw[token_id, 22] * rms
+                    m23 = mixes_raw[token_id, 23] * rms
+
+                    pre[0] = T.sigmoid(m0 * hc_scale[0] + hc_base[0]) + hc_pre_eps
+                    pre[1] = T.sigmoid(m1 * hc_scale[0] + hc_base[1]) + hc_pre_eps
+                    pre[2] = T.sigmoid(m2 * hc_scale[0] + hc_base[2]) + hc_pre_eps
+                    pre[3] = T.sigmoid(m3 * hc_scale[0] + hc_base[3]) + hc_pre_eps
+
+                    if block_id == 0:
+                        post_mix[token_id, 0, 0] = (
+                            T.sigmoid(m4 * hc_scale[1] + hc_base[4])
+                            * hc_post_mult_value
+                        )
+                        post_mix[token_id, 1, 0] = (
+                            T.sigmoid(m5 * hc_scale[1] + hc_base[5])
+                            * hc_post_mult_value
+                        )
+                        post_mix[token_id, 2, 0] = (
+                            T.sigmoid(m6 * hc_scale[1] + hc_base[6])
+                            * hc_post_mult_value
+                        )
+                        post_mix[token_id, 3, 0] = (
+                            T.sigmoid(m7 * hc_scale[1] + hc_base[7])
+                            * hc_post_mult_value
+                        )
+
+                        cm = T.alloc_local((16,), T.float32)
+                        row = T.alloc_local((4,), T.float32)
+                        col = T.alloc_local((4,), T.float32)
+                        cm[0] = m8 * hc_scale[2] + hc_base[8]
+                        cm[1] = m9 * hc_scale[2] + hc_base[9]
+                        cm[2] = m10 * hc_scale[2] + hc_base[10]
+                        cm[3] = m11 * hc_scale[2] + hc_base[11]
+                        cm[4] = m12 * hc_scale[2] + hc_base[12]
+                        cm[5] = m13 * hc_scale[2] + hc_base[13]
+                        cm[6] = m14 * hc_scale[2] + hc_base[14]
+                        cm[7] = m15 * hc_scale[2] + hc_base[15]
+                        cm[8] = m16 * hc_scale[2] + hc_base[16]
+                        cm[9] = m17 * hc_scale[2] + hc_base[17]
+                        cm[10] = m18 * hc_scale[2] + hc_base[18]
+                        cm[11] = m19 * hc_scale[2] + hc_base[19]
+                        cm[12] = m20 * hc_scale[2] + hc_base[20]
+                        cm[13] = m21 * hc_scale[2] + hc_base[21]
+                        cm[14] = m22 * hc_scale[2] + hc_base[22]
+                        cm[15] = m23 * hc_scale[2] + hc_base[23]
+
+                        for j in T.serial(0, 4):
+                            base = j * 4
+                            row[j] = T.max(
+                                T.max(cm[base], cm[base + 1]),
+                                T.max(cm[base + 2], cm[base + 3]),
+                            )
+                            for k in T.serial(0, 4):
+                                cm[base + k] = T.exp(cm[base + k] - row[j])
+                            row[j] = (
+                                cm[base]
+                                + cm[base + 1]
+                                + cm[base + 2]
+                                + cm[base + 3]
+                            )
+                            for k in T.serial(0, 4):
+                                cm[base + k] = cm[base + k] / row[j] + hc_sinkhorn_eps
+
+                        for k in T.serial(0, 4):
+                            col[k] = cm[k] + cm[4 + k] + cm[8 + k] + cm[12 + k]
+                            for j in T.serial(0, 4):
+                                cm[j * 4 + k] = cm[j * 4 + k] / (
+                                    col[k] + hc_sinkhorn_eps
+                                )
+
+                        for _ in T.serial(sinkhorn_repeat - 1):
+                            for j in T.serial(0, 4):
+                                base = j * 4
+                                row[j] = (
+                                    cm[base]
+                                    + cm[base + 1]
+                                    + cm[base + 2]
+                                    + cm[base + 3]
+                                )
+                                for k in T.serial(0, 4):
+                                    cm[base + k] = cm[base + k] / (
+                                        row[j] + hc_sinkhorn_eps
+                                    )
+
+                            for k in T.serial(0, 4):
+                                col[k] = (
+                                    cm[k] + cm[4 + k] + cm[8 + k] + cm[12 + k]
+                                )
+                                for j in T.serial(0, 4):
+                                    cm[j * 4 + k] = cm[j * 4 + k] / (
+                                        col[k] + hc_sinkhorn_eps
+                                    )
+
+                        for j, k in T.Parallel(4, 4):
+                            comb_mix[token_id, j, k] = cm[j * 4 + k]
+
+                T.sync_threads()
+
+                hidden_idx = block_id * hidden_block + tx
+                if tx < hidden_block:
+                    value = (
+                        pre[0]
+                        * T.cast(residual[token_id, 0, hidden_idx], T.float32)
+                        + pre[1]
+                        * T.cast(residual[token_id, 1, hidden_idx], T.float32)
+                        + pre[2]
+                        * T.cast(residual[token_id, 2, hidden_idx], T.float32)
+                        + pre[3]
+                        * T.cast(residual[token_id, 3, hidden_idx], T.float32)
+                    )
+                    layer_input[token_id, hidden_idx] = T.cast(value, T.bfloat16)
+
+        return _kernel
+
+    return _mhc_pre_mix_kernel()
