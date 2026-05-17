@@ -42,13 +42,6 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("mxfp4_grouped_gemv", torch::kMUSA, &mxfp4_grouped_gemv);
 
   musa_ops.def(
-      "mxfp4_grouped_gemv_from_tokens(Tensor input, Tensor packed_weight, "
-      "Tensor weight_scale, Tensor expert_ids, Tensor! output, "
-      "Tensor? expert_map) -> ()");
-  musa_ops.impl("mxfp4_grouped_gemv_from_tokens", torch::kMUSA,
-           &mxfp4_grouped_gemv_from_tokens);
-
-  musa_ops.def(
       "fp8_ds_mla_sparse_gather(Tensor cache, Tensor indices, "
       "Tensor? lengths, Tensor! output, Tensor! valid) -> ()");
   musa_ops.impl("fp8_ds_mla_sparse_gather", torch::kMUSA,

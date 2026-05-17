@@ -152,24 +152,6 @@ def mxfp4_grouped_gemv(
     )
 
 
-def mxfp4_grouped_gemv_from_tokens(
-    input: torch.Tensor,
-    packed_weight: torch.Tensor,
-    weight_scale: torch.Tensor,
-    expert_ids: torch.Tensor,
-    output: torch.Tensor,
-    expert_map: torch.Tensor | None = None,
-) -> None:
-    return torch.ops._C_musa_ops.mxfp4_grouped_gemv_from_tokens(
-        input,
-        packed_weight,
-        weight_scale,
-        expert_ids,
-        output,
-        expert_map,
-    )
-
-
 def fp8_ds_mla_sparse_gather(
     cache: torch.Tensor,
     indices: torch.Tensor,

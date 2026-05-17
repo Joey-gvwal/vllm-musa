@@ -310,19 +310,6 @@ def _musa_moe_activation(
     return F.silu(gate) * up
 
 
-def _musa_workspace_2d(
-    workspace: torch.Tensor | None,
-    rows: int,
-    cols: int,
-) -> torch.Tensor | None:
-    if workspace is None or not workspace.is_contiguous():
-        return None
-    view = workspace.reshape(-1, workspace.shape[-1])
-    if view.shape[0] < rows or view.shape[1] != cols:
-        return None
-    return view[:rows]
-
-
 @_musa_timed("mxfp4_moe.grouped_gemv")
 def _musa_mxfp4_grouped_gemv_moe(
     output: torch.Tensor,
@@ -336,8 +323,6 @@ def _musa_mxfp4_grouped_gemv_moe(
     w1_scale: torch.Tensor,
     w2_scale: torch.Tensor,
     apply_router_weight_on_input: bool,
-    gate_up_workspace: torch.Tensor | None = None,
-    flat_out_workspace: torch.Tensor | None = None,
 ) -> None:
     num_tokens, hidden_size = hidden_states.shape
     top_k = topk_ids.shape[1]
@@ -347,51 +332,33 @@ def _musa_mxfp4_grouped_gemv_moe(
     if flat_rows == 0:
         return
 
+    flat_hidden = (
+        hidden_states[:, None, :]
+        .expand(num_tokens, top_k, hidden_size)
+        .reshape(flat_rows, hidden_size)
+        .contiguous()
+    )
     flat_ids = topk_ids.reshape(-1).contiguous()
     flat_weights = topk_weights.reshape(-1, 1).to(hidden_states.dtype)
-    gate_up = _musa_workspace_2d(gate_up_workspace, flat_rows, n)
-    if gate_up is None:
-        gate_up = torch.empty(
-            (flat_rows, n), device=hidden_states.device, dtype=hidden_states.dtype
-        )
-    tokens_op = getattr(
-        getattr(torch.ops, "_C_musa_ops", None), "mxfp4_grouped_gemv_from_tokens", None
+    if apply_router_weight_on_input:
+        flat_hidden = flat_hidden * flat_weights
+
+    gate_up = torch.empty(
+        (flat_rows, n), device=hidden_states.device, dtype=hidden_states.dtype
     )
-    if not apply_router_weight_on_input and tokens_op is not None:
-        musa_ops.mxfp4_grouped_gemv_from_tokens(
-            hidden_states,
-            w1,
-            _musa_mxfp4_scale_bytes(w1_scale),
-            topk_ids.contiguous(),
-            gate_up,
-            expert_map,
-        )
-    else:
-        flat_hidden = (
-            hidden_states[:, None, :]
-            .expand(num_tokens, top_k, hidden_size)
-            .reshape(flat_rows, hidden_size)
-            .contiguous()
-        )
-        if apply_router_weight_on_input:
-            flat_hidden = flat_hidden * flat_weights
-        musa_ops.mxfp4_grouped_gemv(
-            flat_hidden,
-            w1,
-            _musa_mxfp4_scale_bytes(w1_scale),
-            flat_ids,
-            gate_up,
-            expert_map,
-        )
+    musa_ops.mxfp4_grouped_gemv(
+        flat_hidden,
+        w1,
+        _musa_mxfp4_scale_bytes(w1_scale),
+        flat_ids,
+        gate_up,
+        expert_map,
+    )
     intermediate = _musa_moe_activation(gate_up, activation).contiguous()
 
-    flat_out = _musa_workspace_2d(flat_out_workspace, flat_rows, k)
-    if flat_out is None and gate_up.shape[1] == k:
-        flat_out = gate_up
-    if flat_out is None:
-        flat_out = torch.empty(
-            (flat_rows, k), device=hidden_states.device, dtype=hidden_states.dtype
-        )
+    flat_out = torch.empty(
+        (flat_rows, k), device=hidden_states.device, dtype=hidden_states.dtype
+    )
     musa_ops.mxfp4_grouped_gemv(
         intermediate,
         w2,
@@ -401,7 +368,7 @@ def _musa_mxfp4_grouped_gemv_moe(
         expert_map,
     )
     if not apply_router_weight_on_input:
-        flat_out.mul_(flat_weights)
+        flat_out = flat_out * flat_weights
     ops.moe_sum(flat_out.view(num_tokens, top_k, k), output)
 
 
@@ -638,39 +605,8 @@ class MusaMxfp4StandardExperts(_MusaMxfp4ExpertsBase):
         expert_tokens_meta: mk.ExpertTokensMetadata | None,
         apply_router_weight_on_input: bool,
     ) -> None:
-        del global_num_experts, a1q_scale, a2_scale, workspace2
+        del global_num_experts, a1q_scale, a2_scale, workspace13, workspace2
         del expert_tokens_meta
-
-        use_musa_mxfp4_grouped_gemv = (
-            current_platform.is_musa()
-            and _is_mxfp4_scheme(self.quant_config.ocp_mx_scheme)
-            and _musa_mxfp4_grouped_gemv_impl() == "native"
-            and self.quant_config.w1_scale is not None
-            and self.quant_config.w2_scale is not None
-            and self.quant_config.w1_bias is None
-            and self.quant_config.w2_bias is None
-            and getattr(
-                getattr(torch.ops, "_C_musa_ops", None), "mxfp4_grouped_gemv", None
-            )
-            is not None
-        )
-        if use_musa_mxfp4_grouped_gemv:
-            _musa_mxfp4_grouped_gemv_moe(
-                output=output,
-                hidden_states=hidden_states,
-                w1=w1,
-                w2=w2,
-                topk_weights=topk_weights,
-                topk_ids=topk_ids,
-                activation=activation,
-                expert_map=expert_map,
-                w1_scale=self.quant_config.w1_scale,
-                w2_scale=self.quant_config.w2_scale,
-                apply_router_weight_on_input=apply_router_weight_on_input,
-                gate_up_workspace=workspace13,
-                flat_out_workspace=workspace13,
-            )
-            return
 
         expert_out = _musa_torch_fused_moe_fallback(
             hidden_states=hidden_states,
@@ -921,8 +857,6 @@ def fused_experts_impl(
                 w1_scale,
                 w2_scale,
                 apply_router_weight_on_input,
-                gate_up_workspace=curr_intermediate_cache3,
-                flat_out_workspace=curr_intermediate_cache3,
             )
             continue
 
