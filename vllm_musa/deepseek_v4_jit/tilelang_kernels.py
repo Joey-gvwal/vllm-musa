@@ -2,6 +2,7 @@
 """TileLang kernels for DeepSeek-V4 MUSA JIT helpers."""
 
 from functools import lru_cache
+import math
 
 import tilelang
 import tilelang.language as T
@@ -907,3 +908,74 @@ def biased_topk_softplus_sqrt_256_warp_kernel(
                             )
 
     return _biased_topk_softplus_sqrt_256_warp_kernel
+
+
+@lru_cache(maxsize=None)
+def mhc_post_kernel(hidden_size: int, hidden_block: int = 256, threads: int = 256):
+    hidden_block = math.gcd(hidden_block, hidden_size)
+    if hidden_block <= 0 or hidden_size % hidden_block != 0:
+        raise ValueError(
+            f"invalid MHC post hidden_block={hidden_block} for hidden={hidden_size}"
+        )
+
+    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    def _mhc_post_kernel():
+        num_tokens = T.dynamic("num_tokens")
+
+        @T.prim_func
+        def _kernel(
+            x: T.Tensor((num_tokens, hidden_size), T.bfloat16),
+            residual: T.Tensor((num_tokens, 4, hidden_size), T.bfloat16),
+            post_mix: T.Tensor((num_tokens, 4), T.float32),
+            comb_mix: T.Tensor((num_tokens, 4, 4), T.float32),
+            out: T.Tensor((num_tokens, 4, hidden_size), T.bfloat16),
+        ):
+            with T.Kernel(
+                num_tokens, hidden_size // hidden_block, threads=threads
+            ) as (token_id, block_id):
+                tx = T.get_thread_binding()
+                hidden_idx = block_id * hidden_block + tx
+                if tx < hidden_block:
+                    x_value = T.cast(x[token_id, hidden_idx], T.float32)
+                    r0 = T.cast(residual[token_id, 0, hidden_idx], T.float32)
+                    r1 = T.cast(residual[token_id, 1, hidden_idx], T.float32)
+                    r2 = T.cast(residual[token_id, 2, hidden_idx], T.float32)
+                    r3 = T.cast(residual[token_id, 3, hidden_idx], T.float32)
+
+                    acc0 = (
+                        post_mix[token_id, 0] * x_value
+                        + comb_mix[token_id, 0, 0] * r0
+                        + comb_mix[token_id, 1, 0] * r1
+                        + comb_mix[token_id, 2, 0] * r2
+                        + comb_mix[token_id, 3, 0] * r3
+                    )
+                    acc1 = (
+                        post_mix[token_id, 1] * x_value
+                        + comb_mix[token_id, 0, 1] * r0
+                        + comb_mix[token_id, 1, 1] * r1
+                        + comb_mix[token_id, 2, 1] * r2
+                        + comb_mix[token_id, 3, 1] * r3
+                    )
+                    acc2 = (
+                        post_mix[token_id, 2] * x_value
+                        + comb_mix[token_id, 0, 2] * r0
+                        + comb_mix[token_id, 1, 2] * r1
+                        + comb_mix[token_id, 2, 2] * r2
+                        + comb_mix[token_id, 3, 2] * r3
+                    )
+                    acc3 = (
+                        post_mix[token_id, 3] * x_value
+                        + comb_mix[token_id, 0, 3] * r0
+                        + comb_mix[token_id, 1, 3] * r1
+                        + comb_mix[token_id, 2, 3] * r2
+                        + comb_mix[token_id, 3, 3] * r3
+                    )
+
+                    out[token_id, 0, hidden_idx] = T.cast(acc0, T.bfloat16)
+                    out[token_id, 1, hidden_idx] = T.cast(acc1, T.bfloat16)
+                    out[token_id, 2, hidden_idx] = T.cast(acc2, T.bfloat16)
+                    out[token_id, 3, hidden_idx] = T.cast(acc3, T.bfloat16)
+
+        return _kernel
+
+    return _mhc_post_kernel()

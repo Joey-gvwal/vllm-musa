@@ -8,6 +8,7 @@ and measurable. They are not production MHC kernels.
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import os
 
 import torch
 
@@ -103,6 +104,13 @@ def mhc_post_torch_fallback(
     post_layer_mix: torch.Tensor,
     comb_res_mix: torch.Tensor,
 ) -> torch.Tensor:
+    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_POST_IMPL", "torch").lower()
+    if impl in {"tilelang", "jit", "force"}:
+        with _timed_or_noop("mhc.post_tilelang_provider"):
+            return _mhc_post_tilelang_provider(
+                x, residual, post_layer_mix, comb_res_mix
+            )
+
     with _timed_or_noop("mhc.post_torch_fallback"):
         outer_shape = residual.shape[:-2]
         hc = residual.shape[-2]
@@ -115,3 +123,51 @@ def mhc_post_torch_fallback(
         out = torch.einsum("tij,tih->tjh", comb_flat, residual_flat)
         out = out + post_flat * x_flat.unsqueeze(1)
         return out.to(residual.dtype).reshape(*outer_shape, hc, hidden)
+
+
+def _require_contiguous(name: str, tensor: torch.Tensor) -> None:
+    if not tensor.is_contiguous():
+        raise NotImplementedError(
+            f"MHC post TileLang provider requires contiguous {name}"
+        )
+
+
+def _mhc_post_tilelang_provider(
+    x: torch.Tensor,
+    residual: torch.Tensor,
+    post_layer_mix: torch.Tensor,
+    comb_res_mix: torch.Tensor,
+) -> torch.Tensor:
+    assert x.dtype == torch.bfloat16
+    assert residual.dtype == torch.bfloat16
+    assert post_layer_mix.dtype == torch.float32
+    assert comb_res_mix.dtype == torch.float32
+
+    _require_contiguous("x", x)
+    _require_contiguous("residual", residual)
+    _require_contiguous("post_layer_mix", post_layer_mix)
+    _require_contiguous("comb_res_mix", comb_res_mix)
+
+    outer_shape = residual.shape[:-2]
+    hc = residual.shape[-2]
+    hidden = residual.shape[-1]
+    if hc != 4:
+        raise NotImplementedError(
+            f"MHC post TileLang provider only supports hc_mult=4, got {hc}"
+        )
+
+    x_flat = x.view(-1, hidden)
+    residual_flat = residual.view(-1, hc, hidden)
+    post_flat = post_layer_mix.view(-1, hc, 1).squeeze(-1)
+    comb_flat = comb_res_mix.view(-1, hc, hc)
+    if x_flat.shape[0] != residual_flat.shape[0]:
+        raise ValueError(
+            "MHC post TileLang provider token mismatch: "
+            f"x={x_flat.shape}, residual={residual_flat.shape}"
+        )
+
+    from vllm_musa.deepseek_v4_jit.tilelang_kernels import mhc_post_kernel
+
+    out = torch.empty_like(residual_flat)
+    mhc_post_kernel(hidden)(x_flat, residual_flat, post_flat, comb_flat, out)
+    return out.view(*outer_shape, hc, hidden)
