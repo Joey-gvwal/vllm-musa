@@ -11,7 +11,6 @@ import torch
 _MHC_TORCH_IMPLS = {"0", "false", "fallback", "no", "off", "torch"}
 _MHC_TILELANG_IMPLS = {"", "auto", "default", "jit", "tilelang"}
 _MHC_STRICT_TILELANG_IMPLS = {"force", "strict", "tilelang_force"}
-_MHC_LOGITS_IMPLS = {"full", "logits", "tilelang_full", "tilelang_logits"}
 _MHC_PROVIDER_FALLBACK_EXCEPTIONS = (
     AssertionError,
     ImportError,
@@ -30,15 +29,10 @@ def _mhc_try_tilelang(impl: str, tensor: torch.Tensor) -> bool:
         return False
     if impl in _MHC_TORCH_IMPLS:
         return False
-    if (
-        impl in _MHC_TILELANG_IMPLS
-        or impl in _MHC_STRICT_TILELANG_IMPLS
-        or impl in _MHC_LOGITS_IMPLS
-    ):
+    if impl in _MHC_TILELANG_IMPLS or impl in _MHC_STRICT_TILELANG_IMPLS:
         return True
     raise ValueError(
-        "Unsupported MHC provider impl "
-        f"{impl!r}; use tilelang, logits, force, or torch"
+        f"Unsupported MHC provider impl {impl!r}; use tilelang, force, or torch"
     )
 
 
@@ -70,22 +64,6 @@ def mhc_pre_torch_fallback(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     impl = _mhc_impl("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL")
     if _mhc_try_tilelang(impl, residual):
-        if impl in _MHC_LOGITS_IMPLS:
-            try:
-                with _timed_or_noop("mhc.pre_tilelang_logits_provider"):
-                    return _mhc_pre_tilelang_logits_provider(
-                        residual,
-                        fn,
-                        hc_scale,
-                        hc_base,
-                        rms_eps,
-                        hc_pre_eps,
-                        hc_sinkhorn_eps,
-                        hc_post_mult_value,
-                        sinkhorn_repeat,
-                    )
-            except _MHC_PROVIDER_FALLBACK_EXCEPTIONS:
-                raise
         try:
             with _timed_or_noop("mhc.pre_tilelang_mix_provider"):
                 return _mhc_pre_tilelang_mix_provider(
@@ -266,96 +244,6 @@ def _mhc_pre_tilelang_mix_provider(
 
     from vllm_musa.deepseek_v4_jit.tilelang_kernels import mhc_pre_mix_kernel
 
-    mhc_pre_mix_kernel(hidden_size, sinkhorn_repeat)(
-        mixes_raw,
-        sqsum,
-        residual_flat,
-        hc_scale,
-        hc_base,
-        post_mix,
-        comb_mix,
-        layer_input,
-        rms_eps,
-        hc_pre_eps,
-        hc_sinkhorn_eps,
-        hc_post_mult_value,
-    )
-
-    return (
-        post_mix.view(*outer_shape, hc_mult, 1),
-        comb_mix.view(*outer_shape, hc_mult, hc_mult),
-        layer_input.view(*outer_shape, hidden_size),
-    )
-
-
-def _mhc_pre_tilelang_logits_provider(
-    residual: torch.Tensor,
-    fn: torch.Tensor,
-    hc_scale: torch.Tensor,
-    hc_base: torch.Tensor,
-    rms_eps: float,
-    hc_pre_eps: float,
-    hc_sinkhorn_eps: float,
-    hc_post_mult_value: float,
-    sinkhorn_repeat: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    assert residual.dtype == torch.bfloat16
-    assert fn.dtype == torch.float32
-    assert hc_scale.dtype == torch.float32
-    assert hc_base.dtype == torch.float32
-
-    _require_contiguous("residual", residual)
-    _require_contiguous("fn", fn)
-    _require_contiguous("hc_scale", hc_scale)
-    _require_contiguous("hc_base", hc_base)
-
-    hc_mult = residual.shape[-2]
-    hidden_size = residual.shape[-1]
-    if hc_mult != 4:
-        raise NotImplementedError(
-            f"MHC pre logits TileLang provider only supports hc_mult=4, got {hc_mult}"
-        )
-    mhc_mult3 = hc_mult * 2 + hc_mult * hc_mult
-    hc_hidden_size = hc_mult * hidden_size
-    if fn.shape != (mhc_mult3, hc_hidden_size):
-        raise ValueError(
-            "MHC pre logits TileLang provider fn shape mismatch: "
-            f"expected {(mhc_mult3, hc_hidden_size)}, got {tuple(fn.shape)}"
-        )
-    if hc_scale.shape != (3,):
-        raise ValueError(
-            f"MHC pre logits TileLang provider hc_scale shape mismatch: "
-            f"{hc_scale.shape}"
-        )
-    if hc_base.shape != (mhc_mult3,):
-        raise ValueError(
-            f"MHC pre logits TileLang provider hc_base shape mismatch: "
-            f"{hc_base.shape}"
-        )
-
-    outer_shape = residual.shape[:-2]
-    residual_flat = residual.view(-1, hc_mult, hidden_size)
-    num_tokens = residual_flat.shape[0]
-    mixes_raw = torch.empty(
-        num_tokens, mhc_mult3, dtype=torch.float32, device=residual.device
-    )
-    sqsum = torch.empty(num_tokens, dtype=torch.float32, device=residual.device)
-    post_mix = torch.empty(
-        num_tokens, hc_mult, 1, dtype=torch.float32, device=residual.device
-    )
-    comb_mix = torch.empty(
-        num_tokens, hc_mult, hc_mult, dtype=torch.float32, device=residual.device
-    )
-    layer_input = torch.empty(
-        num_tokens, hidden_size, dtype=torch.bfloat16, device=residual.device
-    )
-
-    from vllm_musa.deepseek_v4_jit.tilelang_kernels import (
-        mhc_pre_logits_kernel,
-        mhc_pre_mix_kernel,
-    )
-
-    mhc_pre_logits_kernel(hidden_size)(residual_flat, fn, mixes_raw, sqsum)
     mhc_pre_mix_kernel(hidden_size, sinkhorn_repeat)(
         mixes_raw,
         sqsum,
