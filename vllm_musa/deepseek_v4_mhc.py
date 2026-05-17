@@ -1,16 +1,43 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""DeepSeek-V4 MHC MUSA fallback helpers.
-
-These helpers keep the current torch correctness fallback behavior centralized
-and measurable. They are not production MHC kernels.
-"""
+"""DeepSeek-V4 MHC MUSA fallback and provider helpers."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
 import os
 
 import torch
+
+_MHC_TORCH_IMPLS = {"0", "false", "fallback", "no", "off", "torch"}
+_MHC_TILELANG_IMPLS = {"", "auto", "default", "jit", "tilelang"}
+_MHC_STRICT_TILELANG_IMPLS = {"force", "strict", "tilelang_force"}
+_MHC_PROVIDER_FALLBACK_EXCEPTIONS = (
+    AssertionError,
+    ImportError,
+    NotImplementedError,
+    RuntimeError,
+    ValueError,
+)
+
+
+def _mhc_impl(env_name: str) -> str:
+    return os.getenv(env_name, "tilelang").strip().lower()
+
+
+def _mhc_try_tilelang(impl: str, tensor: torch.Tensor) -> bool:
+    if tensor.device.type != "musa":
+        return False
+    if impl in _MHC_TORCH_IMPLS:
+        return False
+    if impl in _MHC_TILELANG_IMPLS or impl in _MHC_STRICT_TILELANG_IMPLS:
+        return True
+    raise ValueError(
+        f"Unsupported MHC provider impl {impl!r}; use tilelang, force, or torch"
+    )
+
+
+def _mhc_strict_tilelang(impl: str) -> bool:
+    return impl in _MHC_STRICT_TILELANG_IMPLS
 
 
 @contextmanager
@@ -35,20 +62,24 @@ def mhc_pre_torch_fallback(
     hc_post_mult_value: float,
     sinkhorn_repeat: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "torch").lower()
-    if impl in {"tilelang", "jit", "force"}:
-        with _timed_or_noop("mhc.pre_tilelang_mix_provider"):
-            return _mhc_pre_tilelang_mix_provider(
-                residual,
-                fn,
-                hc_scale,
-                hc_base,
-                rms_eps,
-                hc_pre_eps,
-                hc_sinkhorn_eps,
-                hc_post_mult_value,
-                sinkhorn_repeat,
-            )
+    impl = _mhc_impl("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL")
+    if _mhc_try_tilelang(impl, residual):
+        try:
+            with _timed_or_noop("mhc.pre_tilelang_mix_provider"):
+                return _mhc_pre_tilelang_mix_provider(
+                    residual,
+                    fn,
+                    hc_scale,
+                    hc_base,
+                    rms_eps,
+                    hc_pre_eps,
+                    hc_sinkhorn_eps,
+                    hc_post_mult_value,
+                    sinkhorn_repeat,
+                )
+        except _MHC_PROVIDER_FALLBACK_EXCEPTIONS:
+            if _mhc_strict_tilelang(impl):
+                raise
 
     with _timed_or_noop("mhc.pre_torch_fallback"):
         assert residual.dtype == torch.bfloat16
@@ -119,12 +150,16 @@ def mhc_post_torch_fallback(
     post_layer_mix: torch.Tensor,
     comb_res_mix: torch.Tensor,
 ) -> torch.Tensor:
-    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_POST_IMPL", "torch").lower()
-    if impl in {"tilelang", "jit", "force"}:
-        with _timed_or_noop("mhc.post_tilelang_provider"):
-            return _mhc_post_tilelang_provider(
-                x, residual, post_layer_mix, comb_res_mix
-            )
+    impl = _mhc_impl("VLLM_MUSA_DEEPSEEK_V4_MHC_POST_IMPL")
+    if _mhc_try_tilelang(impl, residual):
+        try:
+            with _timed_or_noop("mhc.post_tilelang_provider"):
+                return _mhc_post_tilelang_provider(
+                    x, residual, post_layer_mix, comb_res_mix
+                )
+        except _MHC_PROVIDER_FALLBACK_EXCEPTIONS:
+            if _mhc_strict_tilelang(impl):
+                raise
 
     with _timed_or_noop("mhc.post_torch_fallback"):
         outer_shape = residual.shape[:-2]
