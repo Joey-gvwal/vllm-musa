@@ -1,22 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-import functools
 import os
 
 import torch
 import torch.nn.functional as F
 from vllm import _custom_ops as ops
+from vllm.logger import init_logger
 import vllm.model_executor.layers.fused_moe.modular_kernel as mk
 from vllm.model_executor.layers.fused_moe.activation import MoEActivation
 from vllm.model_executor.layers.fused_moe.config import (
     FusedMoEConfig,
     FusedMoEQuantConfig,
-    _get_config_dtype_str,
-)
-from vllm.model_executor.layers.fused_moe.fused_moe import (
-    _get_config_quant_dtype,
-    try_get_optimal_moe_config,
 )
 from vllm.model_executor.layers.fused_moe.topk_weight_and_reduce import (
     TopKWeightAndReduceDelegate,
@@ -36,9 +31,10 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     kFp8StaticTensorSym,
 )
 from vllm.platforms import current_platform
-from vllm.triton_utils import tl
 
 from vllm_musa import _custom_ops as musa_ops
+
+logger = init_logger(__name__)
 
 _MXFP4_SCHEMES = {
     OCP_MX_Scheme.w_mxfp4,
@@ -67,6 +63,25 @@ _MXFP4_SIGNED_LUT_VALUES = (
 _MXFP4_SIGNED_LUT_CACHE: dict[tuple[str, int | None], torch.Tensor] = {}
 
 
+def _musa_mxfp4_dequant_impl() -> str:
+    return os.getenv("VLLM_MUSA_MXFP4_DEQUANT_IMPL", "native").strip().lower()
+
+
+def _musa_timed(scope_name: str):
+    def decorator(fn):
+        def wrapper(*args, **kwargs):
+            try:
+                from vllm_musa.deepseek_v4_timers import timed
+            except Exception:
+                return fn(*args, **kwargs)
+            with timed(scope_name):
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def _is_mxfp4_scheme(ocp_mx_scheme: str | None) -> bool:
     return ocp_mx_scheme in _MXFP4_SCHEMES
 
@@ -84,6 +99,7 @@ def _musa_mxfp4_signed_lut(device: torch.device) -> torch.Tensor:
     return lut
 
 
+@_musa_timed("mxfp4_moe.torch_fused_moe_fallback")
 def _musa_torch_fused_moe_fallback(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -193,6 +209,7 @@ def _musa_torch_fused_moe_fallback(
     )
 
 
+@_musa_timed("mxfp4_moe.dequant_mxfp4")
 def _dequant_mxfp4_musa(
     x: torch.Tensor, scale: torch.Tensor | None, float_dtype: torch.dtype
 ) -> torch.Tensor:
@@ -200,6 +217,31 @@ def _dequant_mxfp4_musa(
         return dequant_mxfp4(x, scale, float_dtype)
     if scale is None:
         raise ValueError("MXFP4 dequantization requires block scales")
+
+    native_impl = _musa_mxfp4_dequant_impl() == "native"
+    if native_impl and x.dtype == torch.uint8 and x.is_contiguous():
+        native_dequant = getattr(
+            getattr(torch.ops, "_C_musa_ops", None), "mxfp4_dequant", None
+        )
+        if native_dequant is not None:
+            try:
+                scale_bytes = (
+                    scale if scale.dtype == torch.uint8 else scale.view(torch.uint8)
+                )
+            except RuntimeError:
+                scale_bytes = None
+            if (
+                scale_bytes is not None
+                and scale_bytes.is_contiguous()
+                and scale_bytes.numel() * 32 == x.numel() * 2
+            ):
+                out = torch.empty(
+                    (*x.shape[:-1], x.shape[-1] * 2),
+                    dtype=float_dtype,
+                    device=x.device,
+                )
+                native_dequant(x, scale_bytes, out)
+                return out
 
     signed_values = _musa_mxfp4_signed_lut(x.device)
     unpacked = torch.empty(
@@ -582,56 +624,15 @@ def fused_experts_impl(
 
     M = num_tokens
 
-    config_dtype = _get_config_dtype_str(
-        use_fp8_w8a8=use_fp8_w8a8,
-        use_int8_w8a16=use_int8_w8a16,
-        use_int4_w4a16=use_int4_w4a16,
-        ocp_mx_scheme=ocp_mx_scheme,
-        dtype=hidden_states.dtype,
+    intermediate_cache3 = torch.empty(
+        (M, top_k_num, K), device=hidden_states.device, dtype=hidden_states.dtype
     )
 
-    # Note: for use_int8_w8a16 or use_int4_w4a16, the activations are
-    # quantized prior to calling fused_experts.
-    quant_dtype = _get_config_quant_dtype(
-        use_fp8_w8a8=use_fp8_w8a8,
-        use_int8_w8a8=use_int8_w8a8,
-        ocp_mx_scheme=ocp_mx_scheme,
-    )
-
-    get_config_func = functools.partial(
-        try_get_optimal_moe_config,
-        w1.size(),
-        w2.size(),
-        top_k_num,
-        config_dtype,
-        block_shape=block_shape,
-    )
-
-    config = get_config_func(M)
-
-    # We can reuse the memory between these because by the time we need
-    # cache3, we're done with cache1
-    cache13 = torch.empty(
-        M * top_k_num * max(N, K),
-        device=hidden_states.device,
-        dtype=hidden_states.dtype,
-    )
-    intermediate_cache1 = cache13[: M * top_k_num * N].view(M, top_k_num, N)
-    intermediate_cache3 = cache13[: M * top_k_num * K].view(M, top_k_num, K)
-
-    # This needs separate memory since it's used concurrently with cache1
+    # The first GEMV writes activation input to cache2; the second GEMV writes
+    # top-k outputs to cache3 for moe_sum.
     intermediate_cache2 = torch.empty(
         (M * top_k_num, N // 2), device=hidden_states.device, dtype=hidden_states.dtype
     )
-
-    if hidden_states.dtype == torch.bfloat16:
-        compute_type = tl.bfloat16
-    elif hidden_states.dtype == torch.float16:
-        compute_type = tl.float16
-    elif hidden_states.dtype == torch.float32:
-        compute_type = tl.float32
-    else:
-        raise ValueError(f"Unsupported compute_type: {hidden_states.dtype}")
 
     if inplace and not disable_inplace():
         out_hidden_states = hidden_states
@@ -701,6 +702,11 @@ def fused_experts_impl(
     # Due to the implementation of 0.20.0 relying on per_token_group_quant,
     # which is currently not supported by Musa, please refer to setup.py for details.
     # The version used here is 0.18.0
+    logger.info_once(
+        "MUSA fused MoE uses native GEMV block selection; skipping upstream "
+        "Triton MoE JSON config lookup.",
+        scope="global",
+    )
     CHUNK_SIZE = 16384
     M = min(num_tokens, CHUNK_SIZE)
     for chunk in range((num_tokens // CHUNK_SIZE) + 1):
@@ -714,17 +720,11 @@ def fused_experts_impl(
         if tokens_in_chunk == 0:
             break
 
-        if tokens_in_chunk < CHUNK_SIZE and chunk > 0:
-            # Adjust the intermediate cache size and config for the last
-            # chunk. Note that in most cases we only have one chunk
-            # so the cache size and config are already set correctly and
-            # do not need to be adjusted.
-            intermediate_cache1 = intermediate_cache1[:tokens_in_chunk]
-            intermediate_cache2 = intermediate_cache2[
-                : tokens_in_chunk * topk_ids.size(1)
-            ]
-            intermediate_cache3 = intermediate_cache3[:tokens_in_chunk]
-            config = get_config_func(tokens_in_chunk)
+        curr_intermediate_cache2 = intermediate_cache2[
+            : tokens_in_chunk * topk_ids.size(1)
+        ]
+        curr_intermediate_cache3 = intermediate_cache3[:tokens_in_chunk]
+        curr_out_hidden_states = out_hidden_states[begin_chunk_idx:end_chunk_idx]
 
         curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
         curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
@@ -732,7 +732,7 @@ def fused_experts_impl(
         musa_ops.musa_fused_gemv_moe(
             curr_hidden_states,
             w1,
-            intermediate_cache2,
+            curr_intermediate_cache2,
             None,
             w1_scale,
             curr_topk_weights,
@@ -743,9 +743,9 @@ def fused_experts_impl(
             use_swigelu=True,
         )
         musa_ops.musa_fused_gemv_moe(
-            intermediate_cache2,
+            curr_intermediate_cache2,
             w2,
-            intermediate_cache3,
+            curr_intermediate_cache3,
             None,
             w2_scale,
             curr_topk_weights,
@@ -757,8 +757,8 @@ def fused_experts_impl(
         )
         # ========================== END ====================
         ops.moe_sum(
-            intermediate_cache3.view(*intermediate_cache3.size()),
-            out_hidden_states,
+            curr_intermediate_cache3.view(*curr_intermediate_cache3.size()),
+            curr_out_hidden_states,
         )
 
     return out_hidden_states

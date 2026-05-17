@@ -95,6 +95,46 @@ logger = init_logger(__name__)
         assert cos_sin_cache.shape[-1] == rope_dim
         assert cos_sin_cache.dtype == torch.float32
 
+        inv_rope_impl = os.getenv(
+            "VLLM_MUSA_DEEPSEEK_V4_INV_ROPE_FP8_QUANT_IMPL",
+            "auto",
+        ).strip().lower()
+        if inv_rope_impl not in {"torch", "fallback", "0", "off"}:
+            try:
+                from vllm_musa.deepseek_v4_jit.inv_rope_fp8_quant import (
+                    try_tilelang_inv_rope_fp8_quant,
+                )
+
+                handled, result, reason = try_tilelang_inv_rope_fp8_quant(
+                    o,
+                    positions,
+                    cos_sin_cache,
+                    n_groups,
+                    heads_per_group,
+                    nope_dim,
+                    rope_dim,
+                    quant_group_size,
+                    tma_aligned_scales,
+                )
+                if handled:
+                    if not torch.compiler.is_compiling():
+                        logger.warning_once(
+                            "Using opt-in MUSA TileLang "
+                            "fused_inv_rope_fp8_quant path."
+                        )
+                    return result
+                if inv_rope_impl in {"tilelang", "jit", "force"}:
+                    raise NotImplementedError(reason)
+            except Exception as exc:
+                if inv_rope_impl in {"tilelang", "jit", "force"}:
+                    raise
+                logger.warning_once(
+                    "MUSA TileLang fused_inv_rope_fp8_quant path failed; "
+                    "falling back to torch diagnostic path. Error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+
         d = heads_per_group * head_dim
         num_scale_blocks = d // quant_group_size
         chunks_per_head = head_dim // quant_group_size

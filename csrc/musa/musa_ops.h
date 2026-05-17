@@ -37,3 +37,26 @@ void per_token_group_quant_fp8(
     double fp8_max, bool scale_ue8m0,
     bool dummy_is_scale_transposed = false,
     bool dummy_is_tma_aligned = false);
+
+void mxfp4_dequant(
+    const torch::Tensor& x,
+    const torch::Tensor& scale,
+    torch::Tensor& output);
+
+void mxfp4_grouped_gemv(
+    const torch::Tensor& input,
+    const torch::Tensor& packed_weight,
+    const torch::Tensor& weight_scale,
+    const torch::Tensor& expert_ids,
+    torch::Tensor& output,
+    const c10::optional<torch::Tensor>& expert_map);
+
+void fused_deepseek_v4_qnorm_rope_kv_insert(
+    torch::Tensor& q,
+    const torch::Tensor& kv,
+    torch::Tensor& k_cache,
+    const torch::Tensor& slot_mapping,
+    const torch::Tensor& positions,
+    const torch::Tensor& cos_sin_cache,
+    double eps,
+    int64_t block_size);

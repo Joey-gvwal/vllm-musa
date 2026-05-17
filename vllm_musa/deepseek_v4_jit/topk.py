@@ -13,6 +13,8 @@ import torch
 _MAX_TILELANG_TOPK_WIDTH = 2048
 _ROUTER_TOPK_MODES = {
     "auto",
+    "hash",
+    "hash_tilelang",
     "tilelang",
     "jit",
     "warp",
@@ -22,6 +24,7 @@ _ROUTER_TOPK_MODES = {
 }
 _ROUTER_TOPK_DISABLE_MODES = {"", "0", "false", "off", "torch", "fallback"}
 _ROUTER_TOPK_WARP_MODES = {"warp", "warp_tilelang", "tilelang_warp", "fast"}
+_ROUTER_TOPK_HASH_ONLY_MODES = {"hash", "hash_tilelang"}
 _ROUTER_TOPK_AUTO_DISABLED_REASON: str | None = None
 _ROUTER_TOPK_TRACE_REGISTERED = False
 _ROUTER_TOPK_TRACE_TOTAL = 0
@@ -359,6 +362,14 @@ def _is_musa_tensor(tensor: torch.Tensor | None) -> bool:
     )
 
 
+def _index_dtype_name(dtype: torch.dtype) -> str | None:
+    if dtype == torch.int32:
+        return "int32"
+    if dtype == torch.int64:
+        return "int64"
+    return None
+
+
 def _guard_tilelang_sparse_indexer_topk_rows(
     scores: torch.Tensor,
     starts: torch.Tensor,
@@ -449,6 +460,92 @@ def _router_topk_mode() -> str:
     return "auto"
 
 
+def _guard_tilelang_hash_topk_softplus_sqrt(
+    topk_weights: torch.Tensor,
+    topk_indices: torch.Tensor,
+    token_expert_indices: torch.Tensor,
+    gating_output: torch.Tensor,
+    e_score_correction_bias: torch.Tensor | None,
+    input_tokens: torch.Tensor | None,
+    hash_indices_table: torch.Tensor | None,
+    topk: int,
+) -> tuple[bool, str]:
+    if input_tokens is None or hash_indices_table is None:
+        return False, "hash routing requires both input_tokens and hash_indices_table"
+    if e_score_correction_bias is not None:
+        return False, "hash routing does not use correction bias"
+    tensors = (
+        topk_weights,
+        topk_indices,
+        token_expert_indices,
+        gating_output,
+        input_tokens,
+        hash_indices_table,
+    )
+    if not all(_is_musa_tensor(tensor) for tensor in tensors):
+        return False, "all tensors must be on MUSA"
+    devices = {tensor.device for tensor in tensors}
+    if len(devices) != 1:
+        return False, "all tensors must be on the same MUSA device"
+    if gating_output.dtype != torch.float32:
+        return False, f"expected float32 gating_output, got {gating_output.dtype}"
+    if topk_weights.dtype != torch.float32:
+        return False, f"expected float32 topk_weights, got {topk_weights.dtype}"
+    if topk_indices.dtype != torch.int64:
+        return False, f"expected int64 topk_indices, got {topk_indices.dtype}"
+    if token_expert_indices.dtype != torch.int32:
+        return False, (
+            "expected int32 token_expert_indices, got "
+            f"{token_expert_indices.dtype}"
+        )
+    if _index_dtype_name(input_tokens.dtype) is None:
+        return False, f"unsupported input_tokens dtype {input_tokens.dtype}"
+    if _index_dtype_name(hash_indices_table.dtype) is None:
+        return False, f"unsupported hash_indices_table dtype {hash_indices_table.dtype}"
+    if gating_output.dim() != 2:
+        return False, (
+            "expected router logits shape [tokens, experts], got "
+            f"{tuple(gating_output.shape)}"
+        )
+    if input_tokens.dim() != 1:
+        return False, f"input_tokens must be 1D, got {tuple(input_tokens.shape)}"
+    if hash_indices_table.dim() != 2:
+        return False, (
+            "hash_indices_table must be 2D, got "
+            f"{tuple(hash_indices_table.shape)}"
+        )
+    if int(topk) != 6:
+        return False, f"expected DeepSeek-V4-Flash hash topk=6, got {topk}"
+    if input_tokens.shape[0] != gating_output.shape[0]:
+        return False, "input_tokens and gating_output rows must match"
+    if hash_indices_table.shape[1] != int(topk):
+        return False, (
+            "hash_indices_table second dimension must match topk, got "
+            f"{tuple(hash_indices_table.shape)} topk={topk}"
+        )
+    expected_shape = (gating_output.shape[0], int(topk))
+    if tuple(topk_weights.shape) != expected_shape:
+        return False, f"unexpected topk_weights shape {tuple(topk_weights.shape)}"
+    if tuple(topk_indices.shape) != expected_shape:
+        return False, f"unexpected topk_indices shape {tuple(topk_indices.shape)}"
+    if tuple(token_expert_indices.shape) != expected_shape:
+        return False, (
+            "unexpected token_expert_indices shape "
+            f"{tuple(token_expert_indices.shape)}"
+        )
+    for name, tensor in (
+        ("gating_output", gating_output),
+        ("input_tokens", input_tokens),
+        ("hash_indices_table", hash_indices_table),
+        ("topk_weights", topk_weights),
+        ("topk_indices", topk_indices),
+        ("token_expert_indices", token_expert_indices),
+    ):
+        if not tensor.is_contiguous():
+            return False, f"{name} must be contiguous"
+    return True, ""
+
+
 def _guard_tilelang_biased_topk_softplus_sqrt(
     topk_weights: torch.Tensor,
     topk_indices: torch.Tensor,
@@ -522,6 +619,69 @@ def _guard_tilelang_biased_topk_softplus_sqrt(
     return True, ""
 
 
+def _try_tilelang_hash_topk_softplus_sqrt(
+    topk_weights: torch.Tensor,
+    topk_indices: torch.Tensor,
+    token_expert_indices: torch.Tensor,
+    gating_output: torch.Tensor,
+    renormalize: bool,
+    routed_scaling_factor: float,
+    e_score_correction_bias: torch.Tensor | None,
+    input_tokens: torch.Tensor | None,
+    hash_indices_table: torch.Tensor | None,
+    mode: str,
+) -> tuple[bool, str]:
+    global _ROUTER_TOPK_AUTO_DISABLED_REASON
+
+    topk = int(topk_indices.shape[1])
+    supported, reason = _guard_tilelang_hash_topk_softplus_sqrt(
+        topk_weights,
+        topk_indices,
+        token_expert_indices,
+        gating_output,
+        e_score_correction_bias,
+        input_tokens,
+        hash_indices_table,
+        topk,
+    )
+    if not supported:
+        return False, reason
+
+    assert input_tokens is not None
+    assert hash_indices_table is not None
+    try:
+        from vllm_musa.deepseek_v4_jit.tilelang_kernels import (
+            hash_topk_softplus_sqrt_kernel,
+        )
+
+        input_dtype_name = _index_dtype_name(input_tokens.dtype)
+        hash_dtype_name = _index_dtype_name(hash_indices_table.dtype)
+        assert input_dtype_name is not None
+        assert hash_dtype_name is not None
+        kernel = hash_topk_softplus_sqrt_kernel(
+            topk,
+            input_dtype_name,
+            hash_dtype_name,
+            bool(renormalize),
+            float(routed_scaling_factor) != 1.0,
+        )
+        kernel(
+            gating_output,
+            input_tokens,
+            hash_indices_table,
+            topk_weights,
+            topk_indices,
+            token_expert_indices,
+            float(routed_scaling_factor),
+        )
+    except Exception as exc:
+        reason = f"TileLang hash top-k failed: {type(exc).__name__}: {exc}"
+        if mode == "auto":
+            _ROUTER_TOPK_AUTO_DISABLED_REASON = reason
+        return False, reason
+    return True, "tilelang_hash"
+
+
 def try_tilelang_biased_topk_softplus_sqrt(
     topk_weights: torch.Tensor,
     topk_indices: torch.Tensor,
@@ -561,6 +721,27 @@ def try_tilelang_biased_topk_softplus_sqrt(
     if mode == "auto" and _ROUTER_TOPK_AUTO_DISABLED_REASON is not None:
         record(False, _ROUTER_TOPK_AUTO_DISABLED_REASON)
         return False, _ROUTER_TOPK_AUTO_DISABLED_REASON
+
+    if input_tokens is not None or hash_indices_table is not None:
+        used_tilelang, reason = _try_tilelang_hash_topk_softplus_sqrt(
+            topk_weights,
+            topk_indices,
+            token_expert_indices,
+            gating_output,
+            renormalize,
+            routed_scaling_factor,
+            e_score_correction_bias,
+            input_tokens,
+            hash_indices_table,
+            mode,
+        )
+        record(used_tilelang, reason)
+        return used_tilelang, reason
+
+    if mode in _ROUTER_TOPK_HASH_ONLY_MODES:
+        reason = "hash-only router top-k mode skips non-hash path"
+        record(False, reason)
+        return False, reason
 
     topk = int(topk_indices.shape[1])
     supported, reason = _guard_tilelang_biased_topk_softplus_sqrt(

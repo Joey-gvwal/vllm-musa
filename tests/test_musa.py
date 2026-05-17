@@ -259,6 +259,110 @@ class TestMUSAPlatformBase:
         assert "from vllm_musa.deepseek_v4_fallbacks import" in new
         assert "_musa_enable_deepseek_v4_sparse_correctness_fallbacks()" in new
 
+    def test_deepseek_v4_hidden_repeat_workspace_patch_is_opt_in(self, monkeypatch):
+        import importlib.util
+        import torch
+
+        patch_file = (
+            Path(__file__).parents[1]
+            / "vllm_musa"
+            / "patches"
+            / "vllm__model_executor__models__deepseek_v4.patch.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "deepseek_v4_model_patch_hidden_repeat_test", patch_file
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        patches = module.PATCHES
+        patch_source = "\n".join(new for _, new in patches)
+        replacement = next(
+            new for _, new in patches if "_musa_deepseek_v4_hidden_repeat" in new
+        )
+
+        assert "VLLM_MUSA_DEEPSEEK_V4_HIDDEN_REPEAT_IMPL" in patch_source
+        assert "VLLM_MUSA_DEEPSEEK_V4_GRAPH_SAFE_EMBED" in patch_source
+        assert "_musa_deepseek_v4_embedding_workspace" in patch_source
+        assert "self._musa_hidden_repeat_buffer = torch.empty" in patch_source
+        assert "out.copy_(hidden_states.unsqueeze(-2))" in patch_source
+
+        start = replacement.index("def _musa_deepseek_v4_hidden_repeat")
+        end = replacement.index(
+            "\ndef _musa_deepseek_v4_topk_softplus_sqrt_fallback"
+        )
+        namespace = {"os": os, "torch": torch}
+        exec(replacement[start:end], namespace)
+        hidden_repeat = namespace["_musa_deepseek_v4_hidden_repeat"]
+
+        hidden_states = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+        workspace = torch.empty((5, 2, 4), dtype=torch.float32)
+        expected = hidden_states.unsqueeze(-2).repeat(1, 2, 1)
+
+        monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_HIDDEN_REPEAT_IMPL", "workspace")
+        actual = hidden_repeat(hidden_states, workspace, 2)
+        assert torch.equal(actual, expected)
+        assert actual.data_ptr() == workspace[:3].data_ptr()
+
+        monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_HIDDEN_REPEAT_IMPL", "torch")
+        fallback = hidden_repeat(hidden_states, None, 2)
+        assert torch.equal(fallback, expected)
+
+    def test_vocab_parallel_embedding_graph_safe_patch_is_opt_in(self, monkeypatch):
+        import importlib.util
+        import torch
+        import torch.nn.functional as F
+
+        patch_file = (
+            Path(__file__).parents[1]
+            / "vllm_musa"
+            / "patches"
+            / "vllm__model_executor__layers__vocab_parallel_embedding.patch.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "vocab_parallel_embedding_patch_graph_safe_test", patch_file
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        patches = module.PATCHES
+        patch_source = "\n".join(new for _, new in patches)
+        replacement = next(
+            new for _, new in patches if "_musa_deepseek_v4_graph_safe_embedding" in new
+        )
+
+        assert "VLLM_MUSA_DEEPSEEK_V4_GRAPH_SAFE_EMBED" in patch_source
+        assert "torch.gather(weight_view, 1, index_view, out=out)" in patch_source
+        assert "_musa_deepseek_v4_embedding_workspace" in patch_source
+
+        start = replacement.index("def _musa_deepseek_v4_graph_safe_embedding")
+        end = replacement.index("\n\nclass UnquantizedEmbeddingMethod")
+        namespace = {
+            "F": F,
+            "os": os,
+            "torch": torch,
+            "current_platform": SimpleNamespace(is_musa=lambda: True),
+        }
+        exec(replacement[start:end], namespace)
+        graph_safe_embedding = namespace["_musa_deepseek_v4_graph_safe_embedding"]
+
+        weight = torch.arange(24, dtype=torch.float32).reshape(6, 4)
+        workspace = torch.empty((8, 4), dtype=torch.float32)
+        layer = SimpleNamespace(
+            weight=weight,
+            _musa_deepseek_v4_embedding_workspace=workspace,
+        )
+        input_ids = torch.tensor([0, 3, 5], dtype=torch.long)
+        expected = F.embedding(input_ids, weight)
+
+        monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_GRAPH_SAFE_EMBED", raising=False)
+        assert graph_safe_embedding(layer, input_ids) is None
+
+        monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_GRAPH_SAFE_EMBED", "workspace")
+        actual = graph_safe_embedding(layer, input_ids)
+        assert torch.equal(actual, expected)
+        assert actual.data_ptr() == workspace[:3].data_ptr()
+
     def test_turboquant_rejects_k8v4_on_musa(self):
         import torch
         from vllm.platforms.interface import DeviceCapability

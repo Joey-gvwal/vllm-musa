@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """TileLang kernels for DeepSeek-V4 MUSA JIT helpers."""
 
+from functools import lru_cache
+
 import tilelang
 import tilelang.language as T
 
@@ -40,6 +42,107 @@ def _warp_reduce_max(value):
     value = T.max(value, T.tvm_warp_shuffle_down(mask, value, 2, 32, 32))
     value = T.max(value, T.tvm_warp_shuffle_down(mask, value, 1, 32, 32))
     return T.tvm_warp_shuffle(mask, value, 0, 32, 32)
+
+
+def _abs_f32(value):
+    return T.if_then_else(value < 0.0, -value, value)
+
+
+def _index_dtype(dtype_name: str):
+    normalized = dtype_name.strip().lower()
+    if normalized == "int32":
+        return T.int32
+    if normalized == "int64":
+        return T.int64
+    raise ValueError(f"unsupported index dtype {dtype_name!r}")
+
+
+@lru_cache(maxsize=None)
+def inv_rope_fp8_quant_kernel(heads_per_group: int, threads: int = 128):
+    """Return a TileLang kernel for DeepSeek-V4 inverse-RoPE + FP8 quant.
+
+    The kernel writes into storage-shaped buffers [G, T, D] so callers can
+    return the same transposed [T, G, D] contract as upstream vLLM.
+    """
+
+    d = heads_per_group * HIDDEN_SIZE
+    num_scale_blocks = d // 128
+    warps_per_cta = threads // 32
+
+    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    def _inv_rope_fp8_quant_kernel():
+        num_tokens = T.dynamic("num_tokens")
+        num_heads = T.dynamic("num_heads")
+        num_groups = T.dynamic("num_groups")
+        num_positions = T.dynamic("num_positions")
+
+        @T.prim_func
+        def _kernel(
+            o: T.Tensor((num_tokens, num_heads, HIDDEN_SIZE), T.bfloat16),
+            positions: T.Tensor((num_tokens,), T.int64),
+            cos_sin_cache: T.Tensor((num_positions, ROPE_DIM), T.float32),
+            out_u8: T.Tensor((num_groups, num_tokens, d), T.uint8),
+            scale_out: T.Tensor((num_groups, num_tokens, num_scale_blocks), T.float32),
+        ):
+            with T.Kernel(num_tokens, num_groups, num_scale_blocks, threads=threads) as (
+                token_id,
+                group_id,
+                block_id,
+            ):
+                tx = T.get_thread_binding()
+                lane = tx % 32
+                warp = tx // 32
+                warp_max = T.alloc_shared((warps_per_cta,), T.float32)
+                scale_holder = T.alloc_shared((1,), T.float32)
+
+                flat_dim = block_id * 128 + tx
+                head_in_group = flat_dim // HIDDEN_SIZE
+                dim = flat_dim - head_in_group * HIDDEN_SIZE
+                head_id = group_id * heads_per_group + head_in_group
+                pos = positions[token_id]
+
+                value = T.alloc_var(T.float32)
+                value = T.cast(o[token_id, head_id, dim], T.float32)
+                if dim >= NOPE_DIM:
+                    rope_idx = dim - NOPE_DIM
+                    pair_idx = rope_idx // 2
+                    even_col = NOPE_DIM + pair_idx * 2
+                    odd_col = even_col + 1
+                    even = T.cast(o[token_id, head_id, even_col], T.float32)
+                    odd = T.cast(o[token_id, head_id, odd_col], T.float32)
+                    c = cos_sin_cache[pos, pair_idx]
+                    s = cos_sin_cache[pos, HALF_ROPE_DIM + pair_idx]
+                    value = T.if_then_else(
+                        (rope_idx % 2) == 0,
+                        even * c + odd * s,
+                        odd * c - even * s,
+                    )
+
+                local_max = _warp_reduce_max(_abs_f32(value))
+                if lane == 0:
+                    warp_max[warp] = local_max
+                T.sync_threads()
+
+                partial = T.if_then_else(tx < warps_per_cta, warp_max[tx], 0.0)
+                if warp == 0:
+                    block_max = _warp_reduce_max(partial)
+                    if lane == 0:
+                        raw_scale = T.max(block_max / FP8_MAX, 1.0e-10)
+                        scale_holder[0] = T.exp2(T.ceil(T.log2(raw_scale)))
+                T.sync_threads()
+
+                inv_scale = 1.0 / scale_holder[0]
+                quant = T.clamp(value * inv_scale, -FP8_MAX, FP8_MAX)
+                out_u8[group_id, token_id, flat_dim] = T.reinterpret(
+                    "uint8",
+                    T.Cast("float8_e4m3fn", quant),
+                )
+                if tx == 0:
+                    scale_out[group_id, token_id, block_id] = scale_holder[0]
+
+        return _kernel
+
+    return _inv_rope_fp8_quant_kernel()
 
 
 @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
@@ -472,6 +575,64 @@ def sparse_indexer_topk_rows_kernel(max_width: int, topk: int, score_stride: int
                 T.sync_threads()
 
     return _sparse_indexer_topk_rows_kernel
+
+
+@tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+def hash_topk_softplus_sqrt_kernel(
+    topk: int,
+    input_tokens_dtype: str,
+    hash_indices_dtype: str,
+    renormalize: bool,
+    apply_routed_scaling_factor: bool,
+):
+    """Return a graph-friendly DeepSeek-V4 hash-router top-k kernel."""
+
+    num_tokens = T.dynamic("num_tokens")
+    num_experts = T.dynamic("num_experts")
+    vocab_size = T.dynamic("vocab_size")
+    threads = 32
+    tl_input_tokens_dtype = _index_dtype(input_tokens_dtype)
+    tl_hash_indices_dtype = _index_dtype(hash_indices_dtype)
+
+    @T.prim_func
+    def _hash_topk_softplus_sqrt_kernel(
+        gating_output: T.Tensor((num_tokens, num_experts), T.float32),
+        input_tokens: T.Tensor((num_tokens,), tl_input_tokens_dtype),
+        hash_indices_table: T.Tensor((vocab_size, topk), tl_hash_indices_dtype),
+        topk_weights: T.Tensor((num_tokens, topk), T.float32),
+        topk_indices: T.Tensor((num_tokens, topk), T.int64),
+        token_expert_indices: T.Tensor((num_tokens, topk), T.int32),
+        routed_scaling_factor: T.float32,
+    ):
+        with T.Kernel(num_tokens, threads=threads) as token_id:
+            tx = T.get_thread_binding()
+            score = T.alloc_local((1,), dtype=T.float32)
+            expert_id = T.alloc_local((1,), dtype=T.int64)
+            out_score = T.alloc_local((1,), dtype=T.float32)
+            token = input_tokens[token_id]
+
+            score[0] = 0.0
+            expert_id[0] = 0
+            out_score[0] = 0.0
+            if tx < topk:
+                expert_id[0] = T.cast(hash_indices_table[token, tx], T.int64)
+                logit = T.cast(gating_output[token_id, expert_id[0]], T.float32)
+                # Stable sqrt(softplus(x)) to avoid graph replay NaNs on wide logits.
+                softplus = T.max(logit, 0.0) + T.log(1.0 + T.exp(-_abs_f32(logit)))
+                score[0] = T.sqrt(T.max(softplus, 1.0e-20))
+
+            denominator = _warp_reduce_sum(score[0])
+            if tx < topk:
+                out_score[0] = score[0]
+                if renormalize:
+                    out_score[0] = out_score[0] / T.max(denominator, 1.0e-20)
+                if apply_routed_scaling_factor:
+                    out_score[0] = out_score[0] * routed_scaling_factor
+                topk_weights[token_id, tx] = out_score[0]
+                topk_indices[token_id, tx] = expert_id[0]
+                token_expert_indices[token_id, tx] = T.cast(expert_id[0], T.int32)
+
+    return _hash_topk_softplus_sqrt_kernel
 
 
 @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))

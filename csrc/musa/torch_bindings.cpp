@@ -30,6 +30,23 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
       ") -> ()");
   musa_ops.impl("per_token_group_fp8_quant", torch::kMUSA,
            &per_token_group_quant_fp8);
+
+  musa_ops.def(
+      "mxfp4_dequant(Tensor x, Tensor scale, Tensor! output) -> ()");
+  musa_ops.impl("mxfp4_dequant", torch::kMUSA, &mxfp4_dequant);
+
+  musa_ops.def(
+      "mxfp4_grouped_gemv(Tensor input, Tensor packed_weight, "
+      "Tensor weight_scale, Tensor expert_ids, Tensor! output, "
+      "Tensor? expert_map) -> ()");
+  musa_ops.impl("mxfp4_grouped_gemv", torch::kMUSA, &mxfp4_grouped_gemv);
+
+  musa_ops.def(
+      "fused_deepseek_v4_qnorm_rope_kv_insert(Tensor! q, Tensor kv, "
+      "Tensor! k_cache, Tensor slot_mapping, Tensor positions, "
+      "Tensor cos_sin_cache, float eps, int block_size) -> ()");
+  musa_ops.impl("fused_deepseek_v4_qnorm_rope_kv_insert", torch::kMUSA,
+           &fused_deepseek_v4_qnorm_rope_kv_insert);
 #endif
 }
 

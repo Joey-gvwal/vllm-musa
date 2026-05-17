@@ -124,3 +124,51 @@ def musa_fused_gemv(
             eps,
         )
         return output
+
+
+def mxfp4_dequant(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+    output: torch.Tensor,
+) -> None:
+    return torch.ops._C_musa_ops.mxfp4_dequant(x, scale, output)
+
+
+def mxfp4_grouped_gemv(
+    input: torch.Tensor,
+    packed_weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    expert_ids: torch.Tensor,
+    output: torch.Tensor,
+    expert_map: torch.Tensor | None = None,
+) -> None:
+    return torch.ops._C_musa_ops.mxfp4_grouped_gemv(
+        input,
+        packed_weight,
+        weight_scale,
+        expert_ids,
+        output,
+        expert_map,
+    )
+
+
+def fused_deepseek_v4_qnorm_rope_kv_insert(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    k_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    eps: float,
+    block_size: int,
+) -> None:
+    return torch.ops._C_musa_ops.fused_deepseek_v4_qnorm_rope_kv_insert(
+        q,
+        kv,
+        k_cache,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        eps,
+        block_size,
+    )

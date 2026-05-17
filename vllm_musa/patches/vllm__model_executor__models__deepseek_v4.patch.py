@@ -49,6 +49,32 @@ from vllm_musa.deepseek_v4_fallbacks import (
 )
 
 
+def _musa_deepseek_v4_hidden_repeat(
+    hidden_states: torch.Tensor,
+    workspace: torch.Tensor | None,
+    hc_mult: int,
+) -> torch.Tensor:
+    mode = os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_HIDDEN_REPEAT_IMPL", "torch"
+    ).strip().lower()
+    if mode in {"", "torch", "repeat", "default"}:
+        return hidden_states.unsqueeze(-2).repeat(1, hc_mult, 1)
+    if mode in {"workspace", "prealloc", "preallocated", "graph_safe"}:
+        if workspace is None:
+            raise RuntimeError(
+                "VLLM_MUSA_DEEPSEEK_V4_HIDDEN_REPEAT_IMPL=workspace requires "
+                "a preallocated hidden repeat workspace."
+            )
+        num_tokens = hidden_states.shape[0]
+        out = workspace[:num_tokens]
+        out.copy_(hidden_states.unsqueeze(-2))
+        return out
+    raise RuntimeError(
+        "Unsupported VLLM_MUSA_DEEPSEEK_V4_HIDDEN_REPEAT_IMPL="
+        f"{mode!r}; expected torch or workspace."
+    )
+
+
 def _musa_deepseek_v4_topk_softplus_sqrt_fallback(
     topk_weights: torch.Tensor,
     topk_indices: torch.Tensor,
@@ -135,6 +161,87 @@ if (
     _musa_fused_topk_bias_router.vllm_topk_softplus_sqrt = (
         _musa_deepseek_v4_topk_softplus_sqrt_fallback
     )
+""",
+    ),
+    (
+        """        # Pre-hc_head residual stream buffer for the MTP draft. Stable
+        # address (outside the cudagraph pool) so the copy_ in forward()
+        # refreshes it correctly across captured shapes.
+        self._mtp_hidden_buffer = torch.empty(
+            vllm_config.scheduler_config.max_num_batched_tokens,
+            self.hc_dim,
+            dtype=vllm_config.model_config.dtype,
+            device=self.device,
+        )
+""",
+        """        # Pre-hc_head residual stream buffer for the MTP draft. Stable
+        # address (outside the cudagraph pool) so the copy_ in forward()
+        # refreshes it correctly across captured shapes.
+        self._mtp_hidden_buffer = torch.empty(
+            vllm_config.scheduler_config.max_num_batched_tokens,
+            self.hc_dim,
+            dtype=vllm_config.model_config.dtype,
+            device=self.device,
+        )
+        self._musa_hidden_repeat_buffer = None
+        self.embed_tokens._musa_deepseek_v4_embedding_workspace = None
+        _musa_graph_safe_embed_mode = os.getenv(
+            "VLLM_MUSA_DEEPSEEK_V4_GRAPH_SAFE_EMBED", "0"
+        ).strip().lower()
+        if (
+            current_platform.is_musa()
+            or getattr(torch.version, "musa", None) is not None
+        ) and _musa_graph_safe_embed_mode in {
+            "1",
+            "true",
+            "yes",
+            "workspace",
+            "gather",
+            "graph_safe",
+        }:
+            self.embed_tokens._musa_deepseek_v4_embedding_workspace = torch.empty(
+                vllm_config.scheduler_config.max_num_batched_tokens,
+                config.hidden_size,
+                dtype=vllm_config.model_config.dtype,
+                device=self.device,
+            )
+        _musa_hidden_repeat_mode = os.getenv(
+            "VLLM_MUSA_DEEPSEEK_V4_HIDDEN_REPEAT_IMPL", "torch"
+        ).strip().lower()
+        if (
+            current_platform.is_musa()
+            or getattr(torch.version, "musa", None) is not None
+        ) and _musa_hidden_repeat_mode in {
+            "workspace",
+            "prealloc",
+            "preallocated",
+            "graph_safe",
+        }:
+            self._musa_hidden_repeat_buffer = torch.empty(
+                vllm_config.scheduler_config.max_num_batched_tokens,
+                self.hc_mult,
+                config.hidden_size,
+                dtype=vllm_config.model_config.dtype,
+                device=self.device,
+            )
+""",
+    ),
+    (
+        """        hidden_states = self.embed_input_ids(input_ids)
+        hidden_states = hidden_states.unsqueeze(-2).repeat(1, self.hc_mult, 1)
+""",
+        """        hidden_states = self.embed_input_ids(input_ids)
+        if (
+            current_platform.is_musa()
+            or getattr(torch.version, "musa", None) is not None
+        ):
+            hidden_states = _musa_deepseek_v4_hidden_repeat(
+                hidden_states,
+                self._musa_hidden_repeat_buffer,
+                self.hc_mult,
+            )
+        else:
+            hidden_states = hidden_states.unsqueeze(-2).repeat(1, self.hc_mult, 1)
 """,
     ),
     (
