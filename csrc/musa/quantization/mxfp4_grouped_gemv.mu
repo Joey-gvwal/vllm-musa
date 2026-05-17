@@ -103,18 +103,16 @@ __device__ __forceinline__ int64_t local_expert_id(const IdT* expert_ids,
   return static_cast<int64_t>(expert_map[global_expert]);
 }
 
-template <int ColsPerBlock, typename InT, typename OutT, typename IdT,
-          typename MapT>
+template <typename InT, typename OutT, typename IdT, typename MapT>
 __global__ void mxfp4_grouped_gemv_kernel(
     const InT* __restrict__ input, const uint8_t* __restrict__ packed_weight,
     const uint8_t* __restrict__ weight_scale, const IdT* __restrict__ expert_ids,
     OutT* __restrict__ output, const MapT* __restrict__ expert_map,
     int64_t num_routed, int64_t in_dim, int64_t out_dim, int64_t num_experts,
     int64_t global_experts) {
-  const int64_t out_col_base =
-      static_cast<int64_t>(blockIdx.x) * ColsPerBlock;
+  const int64_t out_col = static_cast<int64_t>(blockIdx.x);
   const int64_t row = static_cast<int64_t>(blockIdx.y);
-  if (row >= num_routed || out_col_base >= out_dim) {
+  if (row >= num_routed || out_col >= out_dim) {
     return;
   }
 
@@ -122,73 +120,39 @@ __global__ void mxfp4_grouped_gemv_kernel(
                                          global_experts);
   if (expert < 0 || expert >= num_experts) {
     if (threadIdx.x == 0) {
-      #pragma unroll
-      for (int col = 0; col < ColsPerBlock; ++col) {
-        const int64_t out_col = out_col_base + col;
-        if (out_col < out_dim) {
-          store_from_float(output, row * out_dim + out_col, 0.0f);
-        }
-      }
+      store_from_float(output, row * out_dim + out_col, 0.0f);
     }
     return;
   }
 
-  float accum[ColsPerBlock];
-  int64_t weight_base[ColsPerBlock];
-  int64_t scale_base[ColsPerBlock];
-  #pragma unroll
-  for (int col = 0; col < ColsPerBlock; ++col) {
-    accum[col] = 0.0f;
-    const int64_t out_col = out_col_base + col;
-    weight_base[col] = (expert * out_dim + out_col) * (in_dim / 2);
-    scale_base[col] = (expert * out_dim + out_col) * (in_dim / 32);
-  }
-
+  float accum = 0.0f;
+  const int64_t packed_stride = in_dim / 2;
+  const int64_t scale_stride = in_dim / 32;
+  const int64_t weight_base = (expert * out_dim + out_col) * packed_stride;
+  const int64_t scale_base = (expert * out_dim + out_col) * scale_stride;
   const int64_t input_base = row * in_dim;
 
   for (int64_t k = threadIdx.x; k < in_dim; k += blockDim.x) {
-    const float input_value = load_as_float(input, input_base + k);
-    #pragma unroll
-    for (int col = 0; col < ColsPerBlock; ++col) {
-      const int64_t out_col = out_col_base + col;
-      if (out_col >= out_dim) {
-        continue;
-      }
-      const uint8_t packed = packed_weight[weight_base[col] + k / 2];
-      const uint8_t nibble = (k & 1) == 0 ? (packed & 0x0f) : (packed >> 4);
-      const uint8_t scale = weight_scale[scale_base[col] + k / 32];
-      const float w = mxfp4_e2m1_value(nibble) * e8m0_scale_to_float(scale);
-      accum[col] += input_value * w;
-    }
+    const uint8_t packed = packed_weight[weight_base + k / 2];
+    const uint8_t nibble = (k & 1) == 0 ? (packed & 0x0f) : (packed >> 4);
+    const uint8_t scale = weight_scale[scale_base + k / 32];
+    const float w = mxfp4_e2m1_value(nibble) * e8m0_scale_to_float(scale);
+    accum += load_as_float(input, input_base + k) * w;
   }
 
   extern __shared__ float shared[];
-  #pragma unroll
-  for (int col = 0; col < ColsPerBlock; ++col) {
-    shared[col * blockDim.x + threadIdx.x] = accum[col];
-  }
+  shared[threadIdx.x] = accum;
   __syncthreads();
 
   for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
     if (threadIdx.x < stride) {
-      #pragma unroll
-      for (int col = 0; col < ColsPerBlock; ++col) {
-        shared[col * blockDim.x + threadIdx.x] +=
-            shared[col * blockDim.x + threadIdx.x + stride];
-      }
+      shared[threadIdx.x] += shared[threadIdx.x + stride];
     }
     __syncthreads();
   }
 
   if (threadIdx.x == 0) {
-    #pragma unroll
-    for (int col = 0; col < ColsPerBlock; ++col) {
-      const int64_t out_col = out_col_base + col;
-      if (out_col < out_dim) {
-        store_from_float(output, row * out_dim + out_col,
-                         shared[col * blockDim.x]);
-      }
-    }
+    store_from_float(output, row * out_dim + out_col, shared[0]);
   }
 }
 
@@ -206,18 +170,16 @@ void launch_mxfp4_grouped_gemv(const torch::Tensor& input,
   const int64_t global_experts =
       expert_map == nullptr ? int64_t{0} : expert_map->numel();
 
-  constexpr int kColsPerBlock = 8;
   const dim3 block(256);
-  const dim3 grid(static_cast<unsigned int>(
-                      (out_dim + kColsPerBlock - 1) / kColsPerBlock),
+  const dim3 grid(static_cast<unsigned int>(out_dim),
                   static_cast<unsigned int>(num_routed));
-  const int shmem = static_cast<int>(block.x * kColsPerBlock * sizeof(float));
+  const int shmem = static_cast<int>(block.x * sizeof(float));
   musaStream_t stream = at::musa::getCurrentMUSAStream();
 
   const MapT* map_ptr = expert_map == nullptr
                             ? nullptr
                             : static_cast<const MapT*>(expert_map->data_ptr());
-  mxfp4_grouped_gemv_kernel<kColsPerBlock, InT, OutT, IdT, MapT>
+  mxfp4_grouped_gemv_kernel<InT, OutT, IdT, MapT>
       <<<grid, block, shmem, stream>>>(
           static_cast<const InT*>(input.data_ptr()),
           static_cast<const uint8_t*>(packed_weight.data_ptr()),
