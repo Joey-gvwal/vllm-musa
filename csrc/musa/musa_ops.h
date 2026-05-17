@@ -51,6 +51,14 @@ void mxfp4_grouped_gemv(
     torch::Tensor& output,
     const c10::optional<torch::Tensor>& expert_map);
 
+void mxfp4_grouped_gemv_from_tokens(
+    const torch::Tensor& input,
+    const torch::Tensor& packed_weight,
+    const torch::Tensor& weight_scale,
+    const torch::Tensor& expert_ids,
+    torch::Tensor& output,
+    const c10::optional<torch::Tensor>& expert_map);
+
 void fp8_ds_mla_sparse_gather(
     const torch::Tensor& cache,
     const torch::Tensor& indices,
