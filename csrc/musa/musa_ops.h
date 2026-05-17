@@ -88,6 +88,19 @@ void fp8_ds_mla_sparse_gather(
     torch::Tensor& output,
     torch::Tensor& valid);
 
+void fp8_ds_mla_sparse_attention(
+    const torch::Tensor& q,
+    const torch::Tensor& cache,
+    const torch::Tensor& indices,
+    const c10::optional<torch::Tensor>& lengths,
+    const c10::optional<torch::Tensor>& attn_sink,
+    const c10::optional<torch::Tensor>& extra_cache,
+    const c10::optional<torch::Tensor>& extra_indices,
+    const c10::optional<torch::Tensor>& extra_lengths,
+    torch::Tensor& output,
+    torch::Tensor& lse,
+    double softmax_scale);
+
 void fused_deepseek_v4_qnorm_rope_kv_insert(
     torch::Tensor& q,
     const torch::Tensor& kv,

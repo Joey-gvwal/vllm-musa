@@ -310,6 +310,34 @@ def fp8_ds_mla_sparse_gather(
     )
 
 
+def fp8_ds_mla_sparse_attention(
+    q: torch.Tensor,
+    cache: torch.Tensor,
+    indices: torch.Tensor,
+    lengths: torch.Tensor | None,
+    attn_sink: torch.Tensor | None,
+    extra_cache: torch.Tensor | None,
+    extra_indices: torch.Tensor | None,
+    extra_lengths: torch.Tensor | None,
+    output: torch.Tensor,
+    lse: torch.Tensor,
+    softmax_scale: float,
+) -> None:
+    return torch.ops._C_musa_ops.fp8_ds_mla_sparse_attention(
+        q,
+        cache,
+        indices,
+        lengths,
+        attn_sink,
+        extra_cache,
+        extra_indices,
+        extra_lengths,
+        output,
+        lse,
+        softmax_scale,
+    )
+
+
 def mxfp4_naive_grouped_moe(
     hidden: torch.Tensor,
     w1: torch.Tensor,

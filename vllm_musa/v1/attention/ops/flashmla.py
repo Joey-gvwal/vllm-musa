@@ -36,6 +36,7 @@ _DSV4_TOKEN_SCALE_BYTES = 8
 _DSV4_QUANT_BLOCK_SIZE = 64
 _DSV4_SPARSE_FLASHMLA_IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_SPARSE_FLASHMLA_IMPL"
 _DSV4_SPARSE_FLASHMLA_PROVIDER_MODES = {
+    "native",
     "sglang_tilelang",
     "tilelang",
     "external_sglang",
@@ -61,6 +62,8 @@ def _try_deepseek_v4_sparse_flashmla_provider(
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     impl = os.getenv(_DSV4_SPARSE_FLASHMLA_IMPL_ENV, "torch").strip().lower()
+    if impl == "native":
+        return _try_deepseek_v4_native_sparse_flashmla_provider(**kwargs)
     if impl not in _DSV4_SPARSE_FLASHMLA_PROVIDER_MODES:
         return None
 
@@ -198,6 +201,215 @@ def _reshape_sparse_lengths(
             f"{num_queries} entries, got {lengths.shape}."
         )
     return lengths.reshape(num_queries).to(torch.long)
+
+
+def _reshape_native_sparse_lengths(
+    name: str,
+    lengths: torch.Tensor | None,
+    num_queries: int,
+) -> torch.Tensor | None:
+    if lengths is None:
+        return None
+    if lengths.numel() != num_queries:
+        raise RuntimeError(
+            f"Native sparse FlashMLA provider expected {name} to contain "
+            f"{num_queries} entries, got {lengths.shape}."
+        )
+    reshaped = lengths.reshape(num_queries)
+    if reshaped.dtype not in (torch.int32, torch.int64):
+        raise RuntimeError(
+            f"Native sparse FlashMLA provider expected {name} dtype int32 or "
+            f"int64, got {reshaped.dtype}."
+        )
+    if not reshaped.is_contiguous():
+        raise RuntimeError(
+            f"Native sparse FlashMLA provider requires contiguous {name} to "
+            "avoid hidden graph-unsafe copies."
+        )
+    return reshaped
+
+
+def _require_native_sparse_indices(
+    name: str,
+    indices: torch.Tensor,
+    num_queries: int,
+) -> torch.Tensor:
+    reshaped = _reshape_sparse_indices(name, indices, num_queries)
+    if reshaped.dtype not in (torch.int32, torch.int64):
+        raise RuntimeError(
+            f"Native sparse FlashMLA provider expected {name} dtype int32 or "
+            f"int64, got {reshaped.dtype}."
+        )
+    if not reshaped.is_contiguous():
+        raise RuntimeError(
+            f"Native sparse FlashMLA provider requires contiguous {name} to "
+            "avoid hidden graph-unsafe copies."
+        )
+    return reshaped
+
+
+def _try_deepseek_v4_native_sparse_flashmla_provider(
+    *,
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    block_table: torch.Tensor | None,
+    cache_seqlens: torch.Tensor | None,
+    head_dim_v: int,
+    tile_scheduler_metadata: torch.Tensor,
+    num_splits: torch.Tensor | None = None,
+    softmax_scale: float | None = None,
+    causal: bool = False,
+    is_fp8_kvcache: bool = False,
+    indices: torch.Tensor | None = None,
+    topk_length: torch.Tensor | None = None,
+    attn_sink: torch.Tensor | None = None,
+    extra_k_cache: torch.Tensor | None = None,
+    extra_indices_in_kvcache: torch.Tensor | None = None,
+    extra_topk_length: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    if kwargs:
+        raise TypeError(
+            "Native sparse FlashMLA provider does not support kwargs: "
+            f"{', '.join(sorted(kwargs))}"
+        )
+    if not current_platform.is_musa():
+        return None
+    native_attention = getattr(
+        getattr(torch.ops, "_C_musa_ops", None),
+        "fp8_ds_mla_sparse_attention",
+        None,
+    )
+    if native_attention is None:
+        return None
+    if q.dim() != 4:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider expects q shape [B, S, H, D], "
+            f"got {q.shape}."
+        )
+    if q.dtype != torch.bfloat16:
+        raise RuntimeError(
+            f"Native sparse FlashMLA provider expects bfloat16 q, got {q.dtype}."
+        )
+    if not q.is_contiguous():
+        raise RuntimeError("Native sparse FlashMLA provider requires contiguous q.")
+    if block_table is not None or cache_seqlens is not None:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider only supports the DeepSeek-V4 "
+            "sparse decode contract with block_table=None and cache_seqlens=None."
+        )
+    if tile_scheduler_metadata is None:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider expects tile_scheduler_metadata "
+            "from the upstream call even though the native probe does not use it."
+        )
+    if num_splits is not None:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider does not use num_splits; pass None."
+        )
+    if causal:
+        raise RuntimeError("Native sparse FlashMLA provider does not support causal.")
+    if not is_fp8_kvcache or k_cache.dtype != torch.uint8:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider requires packed fp8_ds_mla uint8 "
+            f"k_cache, got is_fp8_kvcache={is_fp8_kvcache}, dtype={k_cache.dtype}."
+        )
+    if k_cache.dim() != 4 or k_cache.shape[2] != 1 or not k_cache.is_contiguous():
+        raise RuntimeError(
+            "Native sparse FlashMLA provider expects contiguous k_cache shape "
+            f"[blocks, block, 1, bytes], got {k_cache.shape}."
+        )
+    if head_dim_v != _DSV4_FP8_NOPE_DIM + _DSV4_BF16_ROPE_DIM:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider expects head_dim_v=512, got "
+            f"{head_dim_v}."
+        )
+    if q.shape[-1] != head_dim_v:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider currently requires q dim to match "
+            f"head_dim_v=512, got {q.shape[-1]}."
+        )
+    if indices is None:
+        raise RuntimeError("Native sparse FlashMLA provider requires sparse indices.")
+    if extra_k_cache is None and extra_indices_in_kvcache is not None:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider requires extra_k_cache when "
+            "extra_indices_in_kvcache is provided."
+        )
+    if extra_k_cache is not None and extra_indices_in_kvcache is None:
+        raise RuntimeError(
+            "Native sparse FlashMLA provider requires extra_indices_in_kvcache "
+            "when extra_k_cache is provided."
+        )
+    if extra_k_cache is not None and (
+        extra_k_cache.dtype != torch.uint8
+        or extra_k_cache.dim() != 4
+        or extra_k_cache.shape[2] != 1
+        or not extra_k_cache.is_contiguous()
+    ):
+        raise RuntimeError(
+            "Native sparse FlashMLA provider expects contiguous uint8 "
+            f"extra_k_cache with shape [blocks, block, 1, bytes], got "
+            f"dtype={extra_k_cache.dtype}, shape={extra_k_cache.shape}."
+        )
+
+    batch, seq_len, num_heads, _ = q.shape
+    num_queries = batch * seq_len
+    main_indices = _require_native_sparse_indices("indices", indices, num_queries)
+    main_lengths = _reshape_native_sparse_lengths(
+        "topk_length", topk_length, num_queries
+    )
+    extra_indices = None
+    extra_lengths = None
+    if extra_indices_in_kvcache is not None:
+        extra_indices = _require_native_sparse_indices(
+            "extra_indices_in_kvcache", extra_indices_in_kvcache, num_queries
+        )
+        extra_lengths = _reshape_native_sparse_lengths(
+            "extra_topk_length", extra_topk_length, num_queries
+        )
+
+    expected_out_shape = (batch, seq_len, num_heads, head_dim_v)
+    result = out
+    if result is None:
+        result = torch.empty(expected_out_shape, device=q.device, dtype=q.dtype)
+    elif tuple(result.shape) != expected_out_shape:
+        raise RuntimeError(
+            f"Native sparse FlashMLA provider received out shape "
+            f"{tuple(result.shape)}, expected {expected_out_shape}."
+        )
+    if result.dtype != q.dtype or result.device != q.device or not result.is_contiguous():
+        raise RuntimeError(
+            "Native sparse FlashMLA provider requires contiguous out with the "
+            "same dtype and device as q."
+        )
+
+    if attn_sink is not None and (
+        attn_sink.device != q.device
+        or attn_sink.dtype not in (torch.float32, torch.bfloat16)
+        or not attn_sink.is_contiguous()
+    ):
+        raise RuntimeError(
+            "Native sparse FlashMLA provider requires contiguous attn_sink on "
+            "the same device with dtype float32 or bfloat16."
+        )
+
+    lse = torch.empty((batch, num_heads, seq_len), device=q.device, dtype=torch.float32)
+    native_attention(
+        q,
+        k_cache,
+        main_indices,
+        main_lengths,
+        attn_sink,
+        extra_k_cache,
+        extra_indices,
+        extra_lengths,
+        result,
+        lse,
+        softmax_scale if softmax_scale is not None else q.shape[-1] ** (-0.5),
+    )
+    return result, lse
 
 
 def _flatten_mqa_k_cache(name: str, k_cache: torch.Tensor) -> torch.Tensor:
