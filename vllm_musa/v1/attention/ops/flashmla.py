@@ -276,6 +276,13 @@ def _try_deepseek_v4_native_sparse_flashmla_provider(
         )
     if not current_platform.is_musa():
         return None
+    try:
+        # Ensure the extension is loaded before probing torch.ops. Some focused
+        # tests import this wrapper without going through vLLM's usual custom-op
+        # registration path.
+        import vllm_musa._custom_ops  # noqa: F401
+    except Exception:
+        return None
     native_attention = getattr(
         getattr(torch.ops, "_C_musa_ops", None),
         "fp8_ds_mla_sparse_attention",
