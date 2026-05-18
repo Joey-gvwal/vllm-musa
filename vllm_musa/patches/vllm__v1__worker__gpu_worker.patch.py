@@ -27,4 +27,14 @@ PATCHES = [
         'activities=["CPU", "CUDA"],',
         'activities=["CPU", "MUSA"],',
     ),
+    # MUSA graph capture cannot run allocation-producing memory-estimation
+    # captures during engine startup. Skip this estimate like ROCm/XPU while
+    # keeping the real CUDAGraph path controlled by compilation_config.
+    (
+        "not current_platform.is_rocm()\n"
+        "                and self.vllm_config.compilation_config.cudagraph_mode",
+        "not current_platform.is_rocm()\n"
+        '                and not getattr(current_platform, "is_musa", lambda: False)()\n'
+        "                and self.vllm_config.compilation_config.cudagraph_mode",
+    ),
 ]
