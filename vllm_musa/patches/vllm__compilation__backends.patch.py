@@ -13,6 +13,11 @@ MUSA DeepSeek-V4 force-graph diagnostics also showed that early piecewise
 CUDAGraph wrappers can fail on generated Inductor allocations during stream
 capture. Keep upstream behavior by default, but expose a second opt-in gate to
 skip the first N piecewise CUDAGraph wrappers for source-map diagnostics.
+
+The later post-attention graph blocker is operator-local rather than
+index-local, so expose a third default-off diagnostic gate that skips wrapping
+piecewise subgraphs whose FX nodes match a comma-separated list of operator
+name fragments.
 """
 
 PATCHES = [
@@ -77,6 +82,46 @@ PATCHES = [
                 skip_initial_piecewise_cg_count,
             )
         return piecewise_backend
+
+    skip_piecewise_op_env = os.getenv(
+        "VLLM_MUSA_SKIP_PIECEWISE_CUDAGRAPH_OPS", ""
+    ).strip()
+    if (
+        skip_piecewise_op_env
+        and getattr(current_platform, "is_musa", lambda: False)()
+        and getattr(piecewise_backend, "graph", None) is not None
+    ):
+        skip_op_tokens = [
+            token.strip().lower()
+            for token in skip_piecewise_op_env.replace(";", ",").split(",")
+            if token.strip()
+        ]
+        matched_skip_ops = []
+        for node in piecewise_backend.graph.graph.nodes:
+            target = getattr(node, "target", "")
+            target_text = " ".join(
+                str(part).lower()
+                for part in (
+                    getattr(node, "name", ""),
+                    target,
+                    getattr(target, "__name__", ""),
+                    getattr(target, "name", ""),
+                )
+                if part
+            )
+            for token in skip_op_tokens:
+                if token in target_text:
+                    matched_skip_ops.append(token)
+                    break
+        if matched_skip_ops:
+            logger.info(
+                "Skipping piecewise CUDAGraph wrapper %s/%s on MUSA because "
+                "VLLM_MUSA_SKIP_PIECEWISE_CUDAGRAPH_OPS matched %s.",
+                piecewise_compile_index,
+                getattr(piecewise_backend, "total_piecewise_compiles", "?"),
+                sorted(set(matched_skip_ops)),
+            )
+            return piecewise_backend
 
     # We're using Dynamo-based piecewise splitting, so we wrap
     # the whole subgraph with a static graph wrapper.
