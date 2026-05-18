@@ -37,6 +37,17 @@ def _force_mode() -> bool:
     return mode in {"tilelang", "jit", "force"}
 
 
+def _compiler_is_compiling() -> bool:
+    compiler = getattr(torch, "compiler", None)
+    is_compiling = getattr(compiler, "is_compiling", None)
+    if is_compiling is None:
+        return False
+    try:
+        return bool(is_compiling())
+    except Exception:
+        return False
+
+
 def _guard_tilelang_inv_rope_fp8_quant(
     o: torch.Tensor,
     positions: torch.Tensor,
@@ -101,6 +112,13 @@ def try_tilelang_inv_rope_fp8_quant(
         )
     if _AUTO_DISABLED_REASON is not None and not _force_mode():
         return False, None, _AUTO_DISABLED_REASON
+    if _compiler_is_compiling() and not _force_mode():
+        return (
+            False,
+            None,
+            "TileLang inverse-RoPE FP8 quant JIT is not safe during "
+            "torch.compiler tracing",
+        )
 
     supported, reason = _guard_tilelang_inv_rope_fp8_quant(
         o,
