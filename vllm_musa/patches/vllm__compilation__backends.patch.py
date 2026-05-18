@@ -26,4 +26,28 @@ PATCHES = [
             return None
 """,
     ),
+    (
+        """    # We're using Dynamo-based piecewise splitting, so we wrap
+    # the whole subgraph with a static graph wrapper.
+    from .cuda_graph import CUDAGraphOptions
+""",
+        """    skip_first_piecewise_cg = os.getenv(
+        "VLLM_MUSA_SKIP_FIRST_PIECEWISE_CUDAGRAPH", "0"
+    ).strip().lower()
+    if (
+        skip_first_piecewise_cg in {"1", "true", "yes", "on"}
+        and getattr(current_platform, "is_musa", lambda: False)()
+        and is_first_graph
+    ):
+        logger.info_once(
+            "Skipping first piecewise CUDAGraph wrapper on MUSA because "
+            "VLLM_MUSA_SKIP_FIRST_PIECEWISE_CUDAGRAPH is enabled."
+        )
+        return piecewise_backend
+
+    # We're using Dynamo-based piecewise splitting, so we wrap
+    # the whole subgraph with a static graph wrapper.
+    from .cuda_graph import CUDAGraphOptions
+""",
+    ),
 ]
