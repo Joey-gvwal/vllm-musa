@@ -165,6 +165,7 @@ class MUSAPlatformBase(Platform):
             import vllm_musa.kernels  # noqa: F401
         except ImportError as exc:
             from vllm.logger import init_logger
+
             init_logger(__name__).info(
                 "vllm_musa.kernels unavailable (%s); MUSA IR providers "
                 "will not be registered. Upstream providers remain "
@@ -202,9 +203,7 @@ class MUSAPlatformBase(Platform):
         from vllm.config.kernel import IrOpPriorityConfig
 
         cc = vllm_config.compilation_config
-        using_inductor = (
-            cc.backend == "inductor" and cc.mode != CompilationMode.NONE
-        )
+        using_inductor = cc.backend == "inductor" and cc.mode != CompilationMode.NONE
         if using_inductor:
             # Let Inductor fuse the native reference impl. Keep the
             # `musa` custom-op provider out of the priority here — it is
@@ -385,6 +384,7 @@ class MUSAPlatformBase(Platform):
         # have been observed working on torch_musa 2.9.0; values >= 232
         # trigger MUSA-0082's illegal memory access at capture_end.
         import os as _os
+
         try:
             MUSA_SAFE_MAX_CUDAGRAPH_CAPTURE_SIZE = int(
                 _os.getenv("VLLM_MUSA_MAX_CUDAGRAPH_CAPTURE_SIZE", "8")
@@ -393,6 +393,7 @@ class MUSAPlatformBase(Platform):
             MUSA_SAFE_MAX_CUDAGRAPH_CAPTURE_SIZE = 8
         if cudagraph_mode is not None:
             from vllm.config import CUDAGraphMode
+
             if cudagraph_mode != CUDAGraphMode.NONE:
                 max_size = compilation_config.max_cudagraph_capture_size or 0
                 if max_size > MUSA_SAFE_MAX_CUDAGRAPH_CAPTURE_SIZE:
@@ -402,14 +403,16 @@ class MUSAPlatformBase(Platform):
                         "memory access at musa_graph.capture_end on "
                         "torch_musa 2.9.0; investigation pending). "
                         "Override with VLLM_MUSA_MAX_CUDAGRAPH_CAPTURE_SIZE.",
-                        max_size, MUSA_SAFE_MAX_CUDAGRAPH_CAPTURE_SIZE,
+                        max_size,
+                        MUSA_SAFE_MAX_CUDAGRAPH_CAPTURE_SIZE,
                     )
                     compilation_config.max_cudagraph_capture_size = (
                         MUSA_SAFE_MAX_CUDAGRAPH_CAPTURE_SIZE
                     )
                     if compilation_config.cudagraph_capture_sizes:
                         compilation_config.cudagraph_capture_sizes = [
-                            s for s in compilation_config.cudagraph_capture_sizes
+                            s
+                            for s in compilation_config.cudagraph_capture_sizes
                             if s <= MUSA_SAFE_MAX_CUDAGRAPH_CAPTURE_SIZE
                         ]
 
