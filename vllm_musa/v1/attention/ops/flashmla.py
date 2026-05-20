@@ -7,6 +7,8 @@ import torch
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
+import vllm_musa._custom_ops as musa_ops
+
 logger = init_logger(__name__)
 
 try:
@@ -146,6 +148,126 @@ def _reshape_sparse_lengths(
             f"{num_queries} entries, got {lengths.shape}."
         )
     return lengths.reshape(num_queries).to(torch.long)
+
+
+def _native_sparse_flashmla_decode_available() -> bool:
+    try:
+        return hasattr(torch.ops._C_musa_ops, "deepseek_v4_sparse_flashmla_decode")
+    except Exception:
+        return False
+
+
+def _flatten_sparse_indices_for_native(
+    name: str,
+    indices: torch.Tensor | None,
+    num_queries: int,
+) -> torch.Tensor | None:
+    if indices is None:
+        return None
+    if indices.dim() == 3:
+        if indices.shape[0] * indices.shape[1] != num_queries:
+            raise RuntimeError(
+                f"MUSA sparse FlashMLA expected {name} leading dims to "
+                f"contain {num_queries} queries, got {indices.shape}."
+            )
+        return indices.reshape(num_queries, indices.shape[-1]).contiguous()
+    if indices.dim() == 2 and indices.shape[0] == num_queries:
+        return indices.contiguous()
+    raise RuntimeError(
+        f"MUSA sparse FlashMLA expected {name} shape [batch, seq, topk] "
+        f"or [queries, topk], got {indices.shape}."
+    )
+
+
+def _flatten_sparse_lengths_for_native(
+    name: str,
+    lengths: torch.Tensor | None,
+    num_queries: int,
+) -> torch.Tensor | None:
+    if lengths is None:
+        return None
+    if lengths.numel() != num_queries:
+        raise RuntimeError(
+            f"MUSA sparse FlashMLA expected {name} to contain "
+            f"{num_queries} entries, got {lengths.shape}."
+        )
+    return lengths.reshape(num_queries).contiguous()
+
+
+def _native_flash_mla_with_kvcache_sparse_decode(
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    head_dim_v: int,
+    softmax_scale: float | None,
+    causal: bool,
+    is_fp8_kvcache: bool,
+    indices: torch.Tensor | None,
+    topk_length: torch.Tensor | None,
+    attn_sink: torch.Tensor | None,
+    extra_k_cache: torch.Tensor | None,
+    extra_indices_in_kvcache: torch.Tensor | None,
+    extra_topk_length: torch.Tensor | None,
+    out: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    if (
+        causal
+        or not is_fp8_kvcache
+        or indices is None
+        or q.dim() != 4
+        or q.dtype != torch.bfloat16
+        or k_cache.dtype != torch.uint8
+        or head_dim_v != _DSV4_FP8_NOPE_DIM + _DSV4_BF16_ROPE_DIM
+        or q.shape[-1] != _DSV4_FP8_NOPE_DIM + _DSV4_BF16_ROPE_DIM
+        or not _native_sparse_flashmla_decode_available()
+    ):
+        return None
+    if (extra_k_cache is None) != (extra_indices_in_kvcache is None):
+        return None
+    if extra_k_cache is not None and extra_k_cache.dtype != torch.uint8:
+        return None
+
+    batch, seq_len, _, q_dim = q.shape
+    num_queries = batch * seq_len
+    scale = softmax_scale if softmax_scale is not None else q_dim ** (-0.5)
+    flat_indices = _flatten_sparse_indices_for_native(
+        "indices", indices, num_queries
+    )
+    assert flat_indices is not None
+    flat_topk_length = _flatten_sparse_lengths_for_native(
+        "topk_length", topk_length, num_queries
+    )
+    flat_extra_indices = _flatten_sparse_indices_for_native(
+        "extra_indices_in_kvcache", extra_indices_in_kvcache, num_queries
+    )
+    flat_extra_topk_length = _flatten_sparse_lengths_for_native(
+        "extra_topk_length", extra_topk_length, num_queries
+    )
+    sink = attn_sink
+    if sink is not None and sink.dtype != torch.float32:
+        sink = sink.to(torch.float32)
+    if sink is not None:
+        sink = sink.contiguous()
+
+    if out is None:
+        out = torch.empty(
+            (batch, seq_len, q.shape[2], head_dim_v),
+            dtype=q.dtype,
+            device=q.device,
+        )
+
+    logger.info_once("Using MUSA native DeepSeek-V4 sparse FlashMLA decode.")
+    return musa_ops.deepseek_v4_sparse_flashmla_decode(
+        q,
+        k_cache,
+        flat_indices,
+        flat_topk_length,
+        sink,
+        extra_k_cache,
+        flat_extra_indices,
+        flat_extra_topk_length,
+        out,
+        float(scale),
+    )
 
 
 def _flatten_mqa_k_cache(name: str, k_cache: torch.Tensor) -> torch.Tensor:
@@ -455,6 +577,23 @@ def flash_mla_with_kvcache(
         or kwargs
     )
     if has_deepseek_v4_sparse_kwargs:
+        native_result = _native_flash_mla_with_kvcache_sparse_decode(
+            q=q,
+            k_cache=k_cache,
+            head_dim_v=head_dim_v,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            is_fp8_kvcache=is_fp8_kvcache,
+            indices=indices,
+            topk_length=topk_length,
+            attn_sink=attn_sink,
+            extra_k_cache=extra_k_cache,
+            extra_indices_in_kvcache=extra_indices_in_kvcache,
+            extra_topk_length=extra_topk_length,
+            out=out,
+        )
+        if native_result is not None:
+            return native_result
         if _flash_mla_sparse_fwd is None:
             return _torch_flash_mla_with_kvcache_sparse_fallback(
                 q=q,
