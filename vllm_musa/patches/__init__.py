@@ -9,6 +9,7 @@ to ensure compatibility with the MUSA Triton version.
 
 import importlib.util
 import os
+import sys
 from pathlib import Path
 
 from vllm.logger import init_logger
@@ -53,6 +54,56 @@ def _load_patch_config(patch_file: Path) -> list[tuple[str, str]]:
         return []
 
 
+def _resolve_module_origin(module_name: str) -> str | None:
+    """Resolve a module source file without importing the target module."""
+    parts = module_name.split(".")
+    if parts and parts[0] == "vllm":
+        roots: list[Path] = []
+        try:
+            root_spec = importlib.util.find_spec("vllm")
+        except (ModuleNotFoundError, ImportError):
+            root_spec = None
+        if root_spec is not None:
+            if root_spec.submodule_search_locations:
+                roots.extend(Path(p) for p in root_spec.submodule_search_locations)
+            elif root_spec.origin is not None:
+                roots.append(Path(root_spec.origin).parent)
+        for sys_path in sys.path:
+            if not sys_path:
+                sys_path = os.getcwd()
+            candidate_root = Path(sys_path) / "vllm"
+            if candidate_root.is_dir():
+                roots.append(candidate_root)
+
+        seen: set[Path] = set()
+        for root in roots:
+            root = root.resolve()
+            if root in seen:
+                continue
+            seen.add(root)
+            rel = Path(*parts[1:]) if len(parts) > 1 else Path()
+            module_file = (root / rel).with_suffix(".py")
+            if module_file.is_file():
+                return str(module_file)
+            package_file = root / rel / "__init__.py"
+            if package_file.is_file():
+                return str(package_file)
+
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ModuleNotFoundError, ImportError) as e:
+        logger.debug(
+            f"Module {module_name} not found or has import issues: {e}, "
+            "skipping patch (this is expected for version-specific patches "
+            "or when modules are not yet fully initialized)"
+        )
+        return None
+    if spec is None or spec.origin is None:
+        logger.debug(f"Module {module_name} not found, skipping patch")
+        return None
+    return spec.origin
+
+
 def apply_patches():
     """Apply all patches for MUSA compatibility.
 
@@ -66,29 +117,20 @@ def apply_patches():
 
     for module_name, patch_file in patch_files:
         try:
-            # Find the module spec
-            try:
-                spec = importlib.util.find_spec(module_name)
-            except (ModuleNotFoundError, ImportError) as e:
-                # Module doesn't exist in this vLLM version (e.g., vllm.worker.worker
-                # exists in vLLM 0.10.x but not in 0.13.0 where V0 engine was removed)
-                # or has circular import issues during spec discovery
-                logger.debug(
-                    f"Module {module_name} not found or has import issues: {e}, "
-                    "skipping patch (this is expected for version-specific patches "
-                    "or when modules are not yet fully initialized)"
-                )
-                continue
-            if spec is None or spec.origin is None:
-                logger.debug(f"Module {module_name} not found, skipping patch")
+            # Resolve source path without importing the patched module. Several
+            # DeepSeek-V4 modules import MUSA attention helpers during module
+            # import, so importlib.find_spec(module_name) can trip plugin
+            # circularity before the patches that would make the import safe.
+            origin = _resolve_module_origin(module_name)
+            if origin is None:
                 continue
 
             # Read the source file
             try:
-                with open(spec.origin, "r") as f:
+                with open(origin, "r") as f:
                     source = f.read()
             except (IOError, OSError) as e:
-                logger.debug(f"Cannot read {spec.origin}: {e}, skipping patch")
+                logger.debug(f"Cannot read {origin}: {e}, skipping patch")
                 continue
 
             # Load patches from patch file
@@ -141,13 +183,13 @@ def apply_patches():
             import tempfile  # noqa: I001 — local import keeps top-level imports stable
 
             tmp_fd, tmp_path = tempfile.mkstemp(
-                prefix=os.path.basename(spec.origin) + ".",
-                dir=os.path.dirname(spec.origin),
+                prefix=os.path.basename(origin) + ".",
+                dir=os.path.dirname(origin),
             )
             try:
                 with os.fdopen(tmp_fd, "w") as f:
                     f.write(patched_source)
-                os.rename(tmp_path, spec.origin)
+                os.rename(tmp_path, origin)
             except Exception:
                 # Best-effort cleanup on error.
                 try:

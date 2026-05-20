@@ -56,3 +56,8 @@ void silu_and_mul_per_token_group_fp8_quant(
     torch::Tensor& output_q, torch::Tensor& output_s,
     int64_t group_size, double eps, double fp8_min,
     double fp8_max);
+void deepseek_v4_store_sparse_kv(
+    const torch::Tensor& normed,
+    torch::Tensor& kv_cache,
+    const torch::Tensor& slot_mapping,
+    const torch::Tensor& write_mask);

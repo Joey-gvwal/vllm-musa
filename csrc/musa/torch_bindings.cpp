@@ -49,6 +49,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
       "float fp8_max) -> ()");
   musa_ops.impl("silu_and_mul_per_token_group_fp8_quant", torch::kMUSA,
                 &silu_and_mul_per_token_group_fp8_quant);
+
+  musa_ops.def(
+      "deepseek_v4_store_sparse_kv(Tensor normed, Tensor! kv_cache, "
+      "Tensor slot_mapping, Tensor write_mask) -> ()");
+  musa_ops.impl("deepseek_v4_store_sparse_kv", torch::kMUSA,
+                &deepseek_v4_store_sparse_kv);
+
 #endif
 }
 

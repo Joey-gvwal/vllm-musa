@@ -133,6 +133,8 @@ def _musa_deepgemm_fp8_op(
     group_size: int,
     use_deep_gemm_e8m0: bool,
 ) -> torch.Tensor:
+    if not input.is_contiguous():
+        input = input.contiguous()
     q_input, input_scale = per_token_group_quant_fp8(
         input,
         group_size=group_size,

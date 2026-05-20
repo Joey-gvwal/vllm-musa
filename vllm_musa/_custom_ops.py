@@ -154,3 +154,17 @@ def musa_reshape_and_cache_flash_nhd(
         value_cache,
         slot_mapping,
     )
+
+
+def deepseek_v4_store_sparse_kv(
+    normed: torch.Tensor,
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    write_mask: torch.Tensor,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_store_sparse_kv(
+        normed,
+        kv_cache,
+        slot_mapping,
+        write_mask,
+    )
