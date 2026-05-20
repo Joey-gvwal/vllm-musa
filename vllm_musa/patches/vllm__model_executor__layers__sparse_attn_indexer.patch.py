@@ -453,8 +453,10 @@ def _musa_fill_decode_topk_from_indexer_cache_capture(
         torch.full((), float("-inf"), dtype=logits.dtype, device=logits.device),
     )
     indices = torch.topk(logits, topk, dim=-1).indices.to(topk_indices_buffer.dtype)
+    valid_counts = seq_lens[:rows].clamp(min=0, max=topk).unsqueeze(-1)
+    rank_offsets = torch.arange(topk, device=kv_cache.device, dtype=torch.long)
     indices = torch.where(
-        (seq_lens[:rows] > 0).unsqueeze(-1),
+        rank_offsets.unsqueeze(0) < valid_counts,
         indices,
         torch.full_like(indices, -1),
     )
@@ -586,7 +588,7 @@ def _musa_fill_exact_sparse_indexer_indices(
             )
 
     if metadata.num_decodes > 0 and metadata.decode is not None:
-        _musa_fill_decode_topk_from_indexer_cache(
+        _musa_fill_decode_topk_from_indexer_cache_capture(
             q_deq[: metadata.num_decode_tokens],
             kv_cache,
             weights[: metadata.num_decode_tokens],
