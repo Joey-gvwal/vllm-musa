@@ -1,4 +1,5 @@
 #include <optional>
+#include <tuple>
 #include <torch/library.h>
 
 #include "core/scalar_type.hpp"
@@ -92,3 +93,18 @@ void deepseek_v4_store_sparse_kv(
     torch::Tensor& kv_cache,
     const torch::Tensor& slot_mapping,
     const torch::Tensor& write_mask);
+void deepseek_v4_dequantize_and_gather_k_cache(
+    torch::Tensor &out, const torch::Tensor &k_cache,
+    const torch::Tensor &seq_lens,
+    const c10::optional<torch::Tensor> &gather_lens,
+    const torch::Tensor &block_table, int64_t block_size, int64_t offset);
+std::tuple<torch::Tensor, torch::Tensor>
+deepseek_v4_compute_global_topk_indices_and_lens(
+    const torch::Tensor &topk_indices,
+    const torch::Tensor &token_to_req_indices, const torch::Tensor &block_table,
+    int64_t block_size, const torch::Tensor &is_valid_token);
+std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_combine_topk_swa_indices(
+    const torch::Tensor &topk_indices, const torch::Tensor &query_start_loc,
+    const torch::Tensor &seq_lens, const torch::Tensor &gather_lens,
+    int64_t window_size, int64_t compress_ratio, int64_t topk, int64_t M,
+    int64_t N);

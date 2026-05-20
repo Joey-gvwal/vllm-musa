@@ -17,6 +17,7 @@ import torch
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
+import vllm_musa._custom_ops as musa_ops
 
 logger = init_logger(__name__)
 
@@ -58,6 +59,56 @@ def _musa_warn_cache_fallback_once(op_name: str) -> None:
         "the Triton cache/top-k utility in torch; it is a correctness "
         "fallback, not a production backend.",
         op_name,
+    )
+
+
+def _musa_dequantize_and_gather_k_cache_native(
+    out: torch.Tensor,
+    k_cache: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor | None,
+    block_table: torch.Tensor,
+    block_size: int,
+    offset: int,
+) -> None:
+    return musa_ops.deepseek_v4_dequantize_and_gather_k_cache(
+        out, k_cache, seq_lens, gather_lens, block_table, block_size, offset
+    )
+
+
+def _musa_compute_global_topk_indices_and_lens_native(
+    topk_indices: torch.Tensor,
+    token_to_req_indices: torch.Tensor,
+    block_table: torch.Tensor,
+    block_size: int,
+    is_valid_token: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return musa_ops.deepseek_v4_compute_global_topk_indices_and_lens(
+        topk_indices, token_to_req_indices, block_table, block_size, is_valid_token
+    )
+
+
+def _musa_combine_topk_swa_indices_native(
+    topk_indices: torch.Tensor,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor,
+    window_size: int,
+    compress_ratio: int,
+    topk: int,
+    M: int,
+    N: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return musa_ops.deepseek_v4_combine_topk_swa_indices(
+        topk_indices,
+        query_start_loc,
+        seq_lens,
+        gather_lens,
+        window_size,
+        compress_ratio,
+        topk,
+        M,
+        N,
     )
 
 
@@ -244,19 +295,19 @@ def _musa_combine_topk_swa_indices_fallback(
 """,
         """) -> None:
     if _is_musa_tensor(out):
+        if _musa_deepseek_v4_cache_fallback_enabled():
+            _musa_warn_cache_fallback_once("dequantize_and_gather_k_cache")
+            return _musa_dequantize_and_gather_k_cache_fallback(
+                out, k_cache, seq_lens, gather_lens, block_table, block_size, offset
+            )
         if _musa_deepseek_v4_cache_dequant_triton_enabled():
             logger.warning_once(
                 "Using opt-in MUSA Triton DeepSeek-V4 "
                 "dequantize_and_gather_k_cache path."
             )
-        elif _musa_deepseek_v4_cache_fallback_enabled():
-            _musa_warn_cache_fallback_once("dequantize_and_gather_k_cache")
-            return _musa_dequantize_and_gather_k_cache_fallback(
-                out, k_cache, seq_lens, gather_lens, block_table, block_size, offset
-            )
         else:
-            _raise_musa_deepseek_v4_cache_unsupported(
-                "dequantize_and_gather_k_cache"
+            return _musa_dequantize_and_gather_k_cache_native(
+                out, k_cache, seq_lens, gather_lens, block_table, block_size, offset
             )
     TOKEN_FP8_DIM = 448
     TOKEN_BF16_DIM = 64
@@ -276,8 +327,12 @@ def _musa_combine_topk_swa_indices_fallback(
                 block_size,
                 is_valid_token,
             )
-        _raise_musa_deepseek_v4_cache_unsupported(
-            "compute_global_topk_indices_and_lens"
+        return _musa_compute_global_topk_indices_and_lens_native(
+            topk_indices,
+            token_to_req_indices,
+            block_table,
+            block_size,
+            is_valid_token,
         )
     num_tokens = topk_indices.shape[0]
     global_topk_indices = torch.empty_like(topk_indices)
@@ -301,7 +356,17 @@ def _musa_combine_topk_swa_indices_fallback(
                 M,
                 N,
             )
-        _raise_musa_deepseek_v4_cache_unsupported("combine_topk_swa_indices")
+        return _musa_combine_topk_swa_indices_native(
+            topk_indices,
+            query_start_loc,
+            seq_lens,
+            gather_lens,
+            window_size,
+            compress_ratio,
+            topk,
+            M,
+            N,
+        )
     num_tokens = topk_indices.shape[0]
     num_reqs = seq_lens.shape[0]
 """,

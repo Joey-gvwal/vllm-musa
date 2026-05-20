@@ -81,6 +81,28 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("deepseek_v4_store_sparse_kv", torch::kMUSA,
                 &deepseek_v4_store_sparse_kv);
 
+  musa_ops.def(
+      "deepseek_v4_dequantize_and_gather_k_cache(Tensor! out, Tensor k_cache, "
+      "Tensor seq_lens, Tensor? gather_lens, Tensor block_table, int "
+      "block_size, int offset) -> ()");
+  musa_ops.impl("deepseek_v4_dequantize_and_gather_k_cache", torch::kMUSA,
+                &deepseek_v4_dequantize_and_gather_k_cache);
+
+  musa_ops.def(
+      "deepseek_v4_compute_global_topk_indices_and_lens(Tensor topk_indices, "
+      "Tensor token_to_req_indices, Tensor block_table, int block_size, "
+      "Tensor is_valid_token) -> (Tensor, Tensor)");
+  musa_ops.impl("deepseek_v4_compute_global_topk_indices_and_lens",
+                torch::kMUSA,
+                &deepseek_v4_compute_global_topk_indices_and_lens);
+
+  musa_ops.def(
+      "deepseek_v4_combine_topk_swa_indices(Tensor topk_indices, Tensor "
+      "query_start_loc, Tensor seq_lens, Tensor gather_lens, int window_size, "
+      "int compress_ratio, int topk, int M, int N) -> (Tensor, Tensor)");
+  musa_ops.impl("deepseek_v4_combine_topk_swa_indices", torch::kMUSA,
+                &deepseek_v4_combine_topk_swa_indices);
+
 #endif
 }
 
