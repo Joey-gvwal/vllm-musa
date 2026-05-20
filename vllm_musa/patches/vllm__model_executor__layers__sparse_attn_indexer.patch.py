@@ -15,6 +15,7 @@ import vllm.envs as envs
 import torch
 
 import vllm.envs as envs
+from vllm_musa import _custom_ops as _musa_custom_ops
 """,
     ),
     (
@@ -210,6 +211,49 @@ def _musa_fill_recent_sparse_indexer_indices(
 
 def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
     return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
+
+
+def _musa_sparse_indexer_native_decode_enabled() -> bool:
+    return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_NATIVE", "1") == "1"
+
+
+def _musa_try_fill_decode_topk_from_indexer_cache_native(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    decode_metadata,
+    topk_indices_buffer: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> bool:
+    if (
+        not _musa_sparse_indexer_native_decode_enabled()
+        or head_dim != 128
+        or topk_tokens > 512
+        or q_quant.dtype != torch.float8_e4m3fn
+        or weights.dtype != torch.float32
+        or decode_metadata.block_table.shape[1] * kv_cache.shape[1] > 4096
+    ):
+        return False
+
+    seq_lens = decode_metadata.seq_lens.reshape(-1)
+    rows = min(q_quant.shape[0], seq_lens.numel(), topk_indices_buffer.shape[0])
+    topk = min(int(topk_tokens), topk_indices_buffer.shape[1])
+    if rows <= 0 or topk <= 0:
+        return True
+    if decode_metadata.block_table.shape[0] < rows:
+        return False
+
+    _musa_custom_ops.deepseek_v4_indexer_topk_decode(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        seq_lens[:rows],
+        decode_metadata.block_table[:rows],
+        topk_indices_buffer[:rows, :topk],
+        topk,
+    )
+    return True
 
 
 def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Tensor:
@@ -493,19 +537,28 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
         return topk_indices_buffer
 
     topk_indices_buffer[: hidden_states.shape[0]] = -1
-    q_deq = q_quant.to(torch.float32)
-    weights = weights.to(torch.float32)
 
     if metadata.num_decodes > 0 and metadata.decode is not None:
-        _musa_fill_decode_topk_from_indexer_cache_capture(
-            q_deq[: metadata.num_decode_tokens],
+        if not _musa_try_fill_decode_topk_from_indexer_cache_native(
+            q_quant[: metadata.num_decode_tokens],
             kv_cache,
             weights[: metadata.num_decode_tokens],
             metadata.decode,
             topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
             topk_tokens,
             head_dim,
-        )
+        ):
+            q_deq = q_quant.to(torch.float32)
+            weights_fp32 = weights.to(torch.float32)
+            _musa_fill_decode_topk_from_indexer_cache_capture(
+                q_deq[: metadata.num_decode_tokens],
+                kv_cache,
+                weights_fp32[: metadata.num_decode_tokens],
+                metadata.decode,
+                topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
+                topk_tokens,
+                head_dim,
+            )
 
     if metadata.num_prefills > 0:
         _musa_fill_recent_sparse_indexer_indices(
@@ -564,10 +617,12 @@ def _musa_fill_exact_sparse_indexer_indices(
         return topk_indices_buffer
 
     topk_indices_buffer[: hidden_states.shape[0]] = -1
-    q_deq = q_quant.to(torch.float32)
-    weights = weights.to(torch.float32)
+    q_deq = None
+    weights_fp32 = None
 
     if metadata.num_prefills > 0 and metadata.prefill is not None:
+        q_deq = q_quant.to(torch.float32)
+        weights_fp32 = weights.to(torch.float32)
         for chunk in metadata.prefill.chunks:
             k_deq = _musa_gather_indexer_fp8_cache(
                 kv_cache,
@@ -580,7 +635,7 @@ def _musa_fill_exact_sparse_indexer_indices(
             _musa_fill_topk_rows_from_indexer_logits(
                 q_deq[token_start:token_end],
                 k_deq,
-                weights[token_start:token_end],
+                weights_fp32[token_start:token_end],
                 chunk.cu_seqlen_ks,
                 chunk.cu_seqlen_ke,
                 topk_indices_buffer[token_start:token_end, :topk_tokens],
@@ -588,15 +643,28 @@ def _musa_fill_exact_sparse_indexer_indices(
             )
 
     if metadata.num_decodes > 0 and metadata.decode is not None:
-        _musa_fill_decode_topk_from_indexer_cache_capture(
-            q_deq[: metadata.num_decode_tokens],
+        if not _musa_try_fill_decode_topk_from_indexer_cache_native(
+            q_quant[: metadata.num_decode_tokens],
             kv_cache,
             weights[: metadata.num_decode_tokens],
             metadata.decode,
             topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
             topk_tokens,
             head_dim,
-        )
+        ):
+            if q_deq is None:
+                q_deq = q_quant.to(torch.float32)
+            if weights_fp32 is None:
+                weights_fp32 = weights.to(torch.float32)
+            _musa_fill_decode_topk_from_indexer_cache_capture(
+                q_deq[: metadata.num_decode_tokens],
+                kv_cache,
+                weights_fp32[: metadata.num_decode_tokens],
+                metadata.decode,
+                topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
+                topk_tokens,
+                head_dim,
+            )
 
     return topk_indices_buffer
 """,

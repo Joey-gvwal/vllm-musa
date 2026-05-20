@@ -230,6 +230,26 @@ def deepseek_v4_combine_topk_swa_indices(
     )
 
 
+def deepseek_v4_indexer_topk_decode(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_indexer_topk_decode(
+        q_quant,
+        kv_cache,
+        weights,
+        seq_lens,
+        block_table,
+        topk_indices,
+        topk,
+    )
+
+
 def deepseek_v4_sparse_flashmla_decode(
     q: torch.Tensor,
     k_cache: torch.Tensor,

@@ -79,6 +79,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
                 &deepseek_v4_combine_topk_swa_indices);
 
   musa_ops.def(
+      "deepseek_v4_indexer_topk_decode(Tensor q_quant, Tensor kv_cache, "
+      "Tensor weights, Tensor seq_lens, Tensor block_table, Tensor! "
+      "topk_indices, int topk) -> ()");
+  musa_ops.impl("deepseek_v4_indexer_topk_decode", torch::kMUSA,
+                &deepseek_v4_indexer_topk_decode);
+
+  musa_ops.def(
       "deepseek_v4_sparse_flashmla_decode(Tensor q, Tensor k_cache, "
       "Tensor indices, Tensor? topk_length, Tensor? attn_sink, "
       "Tensor? extra_k_cache, Tensor? extra_indices, Tensor? "
