@@ -108,6 +108,11 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_combine_topk_swa_indices(
     const torch::Tensor &seq_lens, const torch::Tensor &gather_lens,
     int64_t window_size, int64_t compress_ratio, int64_t topk, int64_t M,
     int64_t N);
+void deepseek_v4_indexer_topk_decode(
+    const torch::Tensor &q_quant, const torch::Tensor &kv_cache,
+    const torch::Tensor &weights, const torch::Tensor &seq_lens,
+    const torch::Tensor &block_table, torch::Tensor &topk_indices,
+    int64_t topk);
 std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_sparse_flashmla_decode(
     const torch::Tensor &q, const torch::Tensor &k_cache,
     const torch::Tensor &indices,

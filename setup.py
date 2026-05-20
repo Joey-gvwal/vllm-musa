@@ -193,6 +193,7 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/cache_kernels.mu",
     "csrc/musa/attention/deepseek_v4_cache_store.mu",
     "csrc/musa/attention/deepseek_v4_cache_utils.mu",
+    "csrc/musa/attention/deepseek_v4_indexer_topk.mu",
     "csrc/musa/attention/deepseek_v4_sparse_flashmla.mu",
     # XXX (MUSA): The version used here is vllm 0.18.0, located at csrc/quantization/w8a8/fp8.
     # While in version 0.20.0, the path has changed to csrc/libtorch_stable/quantization/w8a8/fp8,
