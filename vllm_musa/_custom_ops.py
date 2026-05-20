@@ -345,3 +345,17 @@ def min_p_sampling_from_probs(
     return _min_p_sampling_from_probs_internal(
         probs, indices, *_to_tensor_scalar_tuple(min_p), deterministic, generator
     )
+
+
+def deepseek_v4_store_sparse_kv(
+    normed: torch.Tensor,
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    write_mask: torch.Tensor,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_store_sparse_kv(
+        normed,
+        kv_cache,
+        slot_mapping,
+        write_mask,
+    )

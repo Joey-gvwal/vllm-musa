@@ -74,6 +74,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
       "top_p_sampling_from_probs(Tensor probs, Tensor! output, Tensor? maybe_indices, Tensor? maybe_top_p_arr, "
       "float top_p_val, bool deterministic, Generator? gen) -> ()");
   musa_ops.impl("top_p_sampling_from_probs", torch::kMUSA, &top_p_sampling_from_probs);
+
+  musa_ops.def(
+      "deepseek_v4_store_sparse_kv(Tensor normed, Tensor! kv_cache, "
+      "Tensor slot_mapping, Tensor write_mask) -> ()");
+  musa_ops.impl("deepseek_v4_store_sparse_kv", torch::kMUSA,
+                &deepseek_v4_store_sparse_kv);
+
 #endif
 }
 
