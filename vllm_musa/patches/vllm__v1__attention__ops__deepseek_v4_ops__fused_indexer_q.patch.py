@@ -36,7 +36,7 @@ def _musa_is_musa_tensor(tensor: torch.Tensor) -> bool:
 
 
 def _musa_fused_indexer_q_triton_enabled() -> bool:
-    return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_Q_TRITON", "0") == "1"
+    return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_Q_TRITON", "1") == "1"
 
 
 def _musa_apply_indexer_gptj_rope(
@@ -172,7 +172,7 @@ def _musa_fused_indexer_q_rope_quant_fallback(
         """    if _musa_is_musa_tensor(index_q):
         if _musa_fused_indexer_q_triton_enabled():
             logger.warning_once(
-                "Using opt-in MUSA Triton DeepSeek-V4 "
+                "Using MUSA Triton DeepSeek-V4 "
                 "fused_indexer_q_rope_quant path."
             )
         elif (
@@ -240,7 +240,7 @@ def _musa_fused_indexer_q_rope_quant_fallback(
         """    if _musa_is_musa_tensor(index_q):
         if _musa_fused_indexer_q_triton_enabled():
             logger.warning_once(
-                "Using opt-in MUSA Triton DeepSeek-V4 "
+                "Using MUSA Triton DeepSeek-V4 "
                 "fused_indexer_q_rope_quant path."
             )
         elif (
