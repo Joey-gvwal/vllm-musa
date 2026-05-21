@@ -281,7 +281,7 @@ def _musa_deepseek_v4_triton_compressor_enabled() -> bool:
     return (
         os.getenv(
             "VLLM_MUSA_DEEPSEEK_V4_COMPRESSOR_TRITON",
-            "0",
+            "1",
         )
         == "1"
     )
