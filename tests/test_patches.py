@@ -158,6 +158,73 @@ class TestSamplerPatch:
             raise AssertionError("topk_topp_sampler patch file was not found")
 
 
+class TestSparseAttnIndexerPatch:
+    """Tests for the MUSA DeepSeek-V4 sparse indexer patch."""
+
+    def test_sparse_indexer_patch_handles_mtp_block_table_rows(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "_musa_decode_block_table_for_token_rows" in new_source
+                assert "repeat_interleave(rows // block_rows, dim=0)" in new_source
+                assert "block_table is None" in new_source
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+    def test_sparse_indexer_patch_removes_stale_duplicate_helpers(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+logger = init_logger(__name__)
+
+
+def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
+    return False
+
+
+def _musa_fill_exact_sparse_indexer_indices_capture():
+    return "current"
+
+
+def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
+    return True
+
+
+def _musa_fill_decode_topk_from_indexer_cache_capture():
+    block_table = decode_metadata.block_table[:rows]
+
+
+def _musa_fill_exact_sparse_indexer_indices(
+    return "entry"
+"""
+                normalized = module.normalize_source(source)
+
+                assert (
+                    normalized.count(
+                        "def _musa_sparse_indexer_is_current_stream_capturing()"
+                    )
+                    == 1
+                )
+                assert "decode_metadata.block_table[:rows]" not in normalized
+                assert "def _musa_fill_exact_sparse_indexer_indices(" in normalized
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+
 class TestDeepGemmPatch:
     """Tests for the MUSA DeepGEMM compatibility patch."""
 
