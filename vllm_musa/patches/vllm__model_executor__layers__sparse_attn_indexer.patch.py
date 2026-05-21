@@ -4,6 +4,30 @@
 Patch sparse-attention indexer with an opt-in MUSA correctness fallback.
 """
 
+
+def normalize_source(source: str) -> str:
+    """Remove stale duplicate MUSA helper blocks from previously patched files."""
+    helper_start = "\ndef _musa_sparse_indexer_is_current_stream_capturing() -> bool:\n"
+    main_entry = "\ndef _musa_fill_exact_sparse_indexer_indices(\n"
+
+    first_start = source.find(helper_start)
+    if first_start < 0:
+        return source
+
+    search_from = first_start + len(helper_start)
+    while True:
+        duplicate_start = source.find(helper_start, search_from)
+        if duplicate_start < 0:
+            return source
+
+        duplicate_end = source.find(main_entry, duplicate_start)
+        if duplicate_end < 0:
+            return source
+
+        source = source[:duplicate_start] + source[duplicate_end:]
+        search_from = first_start + len(helper_start)
+
+
 PATCHES = [
     (
         """import torch
@@ -217,6 +241,20 @@ def _musa_sparse_indexer_native_decode_enabled() -> bool:
     return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_NATIVE", "1") == "1"
 
 
+def _musa_decode_block_table_for_token_rows(
+    block_table: torch.Tensor,
+    rows: int,
+) -> torch.Tensor | None:
+    block_rows = block_table.shape[0]
+    if rows <= 0:
+        return block_table[:0]
+    if block_rows == rows:
+        return block_table[:rows]
+    if block_rows <= 0 or rows % block_rows != 0:
+        return None
+    return block_table.repeat_interleave(rows // block_rows, dim=0)
+
+
 def _musa_try_fill_decode_topk_from_indexer_cache_native(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -241,7 +279,12 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
     topk = min(int(topk_tokens), topk_indices_buffer.shape[1])
     if rows <= 0 or topk <= 0:
         return True
-    if decode_metadata.block_table.shape[0] < rows:
+
+    block_table = _musa_decode_block_table_for_token_rows(
+        decode_metadata.block_table,
+        rows,
+    )
+    if block_table is None:
         return False
 
     _musa_custom_ops.deepseek_v4_indexer_topk_decode(
@@ -249,7 +292,7 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
         kv_cache,
         weights[:rows],
         seq_lens[:rows],
-        decode_metadata.block_table[:rows],
+        block_table,
         topk_indices_buffer[:rows, :topk],
         topk,
     )
@@ -463,7 +506,12 @@ def _musa_fill_decode_topk_from_indexer_cache_capture(
     if rows <= 0 or topk <= 0:
         return
 
-    block_table = decode_metadata.block_table[:rows]
+    block_table = _musa_decode_block_table_for_token_rows(
+        decode_metadata.block_table,
+        rows,
+    )
+    if block_table is None:
+        return
     block_size = kv_cache.shape[1]
     max_positions = block_table.shape[1] * block_size
     topk = min(topk, max_positions)

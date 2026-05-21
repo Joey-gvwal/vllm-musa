@@ -11,6 +11,7 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
+from types import ModuleType
 
 from vllm.logger import init_logger
 
@@ -36,22 +37,55 @@ def _get_patch_files():
     return patch_files
 
 
+def _load_patch_module(patch_file: Path) -> ModuleType | None:
+    """Load a patch module.
+
+    Patch files may define a PATCHES list of (old_str, new_str) tuples and an
+    optional normalize_source(source: str) -> str hook for idempotent cleanup.
+    """
+    spec = importlib.util.spec_from_file_location("patch_config", patch_file)
+    if spec is None or spec.loader is None:
+        return None
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        return module
+    except Exception as e:
+        logger.warning(f"Failed to load patch config from {patch_file}: {e}")
+        return None
+
+
 def _load_patch_config(patch_file: Path) -> list[tuple[str, str]]:
     """Load patch configuration from a patch file.
 
     Patch files should define a PATCHES list of (old_str, new_str) tuples.
     """
-    spec = importlib.util.spec_from_file_location("patch_config", patch_file)
-    if spec is None or spec.loader is None:
+    module = _load_patch_module(patch_file)
+    if module is None:
         return []
+    return getattr(module, "PATCHES", [])
 
-    module = importlib.util.module_from_spec(spec)
+
+def _normalize_source(
+    patch_module: ModuleType,
+    source: str,
+    module_name: str,
+) -> str:
+    normalizer = getattr(patch_module, "normalize_source", None)
+    if not callable(normalizer):
+        return source
     try:
-        spec.loader.exec_module(module)
-        return getattr(module, "PATCHES", [])
+        normalized = normalizer(source)
     except Exception as e:
-        logger.warning(f"Failed to load patch config from {patch_file}: {e}")
-        return []
+        logger.warning(f"Failed to normalize patched source for {module_name}: {e}")
+        return source
+    if not isinstance(normalized, str):
+        logger.warning(
+            "Ignoring non-string normalized source returned for %s", module_name
+        )
+        return source
+    return normalized
 
 
 def _resolve_module_origin(module_name: str) -> str | None:
@@ -133,9 +167,17 @@ def apply_patches():
                 logger.debug(f"Cannot read {origin}: {e}, skipping patch")
                 continue
 
-            # Load patches from patch file
-            patches = _load_patch_config(patch_file)
-            if not patches:
+            # Load patches from patch file. Loading can also install
+            # monkey-patches for patch modules that intentionally use an empty
+            # PATCHES list.
+            patch_module = _load_patch_module(patch_file)
+            if patch_module is None:
+                continue
+            patches = getattr(patch_module, "PATCHES", [])
+
+            patched_source = _normalize_source(patch_module, source, module_name)
+            source_normalized = patched_source != source
+            if not patches and not source_normalized:
                 continue
 
             # Check if any patches are needed.
@@ -146,8 +188,9 @@ def apply_patches():
             # Behaviour-preserving for REPLACEMENT-style patches where `new`
             # differs entirely from `old`.
             needs_patch = any(
-                old in source and new not in source for old, new in patches
-            )
+                old in patched_source and new not in patched_source
+                for old, new in patches
+            ) or source_normalized
             if not needs_patch:
                 logger.debug(f"No patches needed for {module_name}")
                 continue
@@ -158,12 +201,19 @@ def apply_patches():
             # re-apply on every import and accumulate (e.g., MUSA-0088's
             # cuda_communicator.py grew 10 duplicate `elif current_platform.is_musa()`
             # blocks before MUSA-0089 caught it and manual sed -i restored).
-            patched_source = source
             applied_count = 0
             for old, new in patches:
                 if old in patched_source and new not in patched_source:
                     patched_source = patched_source.replace(old, new)
                     applied_count += 1
+            patched_source = _normalize_source(
+                patch_module,
+                patched_source,
+                module_name,
+            )
+            if patched_source == source:
+                logger.debug(f"No source changes produced for {module_name}")
+                continue
 
             # Write back the patched source ATOMICALLY via tempfile + rename.
             # Rationale: vLLM's spawn-based multiproc executor starts N worker
