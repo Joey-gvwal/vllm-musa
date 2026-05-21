@@ -45,6 +45,82 @@ def _warp_reduce_max(value):
     return T.tvm_warp_shuffle(mask, value, 0, 32, 32)
 
 
+@lru_cache(maxsize=None)
+def mhc_pre_split_sinkhorn_kernel(hc_mult: int, sinkhorn_repeat: int):
+    hc_mult3 = hc_mult * (2 + hc_mult)
+
+    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    def _mhc_pre_split_sinkhorn_kernel():
+        num_tokens = T.dynamic("num_tokens")
+
+        @T.prim_func
+        def _kernel(
+            mixes: T.Tensor((num_tokens, hc_mult3), T.float32),
+            hc_scale: T.Tensor((3,), T.float32),
+            hc_base: T.Tensor((hc_mult3,), T.float32),
+            pre_mix: T.Tensor((num_tokens, hc_mult), T.float32),
+            post_mix: T.Tensor((num_tokens, hc_mult), T.float32),
+            comb_mix: T.Tensor((num_tokens, hc_mult * hc_mult), T.float32),
+            hc_pre_eps: T.float32,
+            hc_sinkhorn_eps: T.float32,
+            hc_post_mult_value: T.float32,
+        ):
+            with T.Kernel(num_tokens, threads=64) as token_id:
+                mixes_shared = T.alloc_shared((hc_mult3,), T.float32)
+                T.copy(mixes[token_id, 0], mixes_shared)
+
+                for j in T.Parallel(hc_mult):
+                    pre_mix[token_id, j] = (
+                        T.sigmoid(mixes_shared[j] * hc_scale[0] + hc_base[j])
+                        + hc_pre_eps
+                    )
+                for j in T.Parallel(hc_mult):
+                    post_mix[token_id, j] = (
+                        T.sigmoid(
+                            mixes_shared[j + hc_mult] * hc_scale[1]
+                            + hc_base[j + hc_mult]
+                        )
+                        * hc_post_mult_value
+                    )
+
+                cm = T.alloc_fragment((hc_mult, hc_mult), T.float32)
+                for j, k in T.Parallel(hc_mult, hc_mult):
+                    cm[j, k] = (
+                        mixes_shared[j * hc_mult + k + hc_mult * 2]
+                        * hc_scale[2]
+                        + hc_base[j * hc_mult + k + hc_mult * 2]
+                    )
+
+                row_sum = T.alloc_fragment((hc_mult,), T.float32)
+                col_sum = T.alloc_fragment((hc_mult,), T.float32)
+                row_max = T.alloc_fragment((hc_mult,), T.float32)
+                T.reduce_max(cm, row_max, dim=1)
+                for j, k in T.Parallel(hc_mult, hc_mult):
+                    cm[j, k] = T.exp(cm[j, k] - row_max[j])
+                T.reduce_sum(cm, row_sum, dim=1)
+                for j, k in T.Parallel(hc_mult, hc_mult):
+                    cm[j, k] = cm[j, k] / row_sum[j] + hc_sinkhorn_eps
+
+                T.reduce_sum(cm, col_sum, dim=0)
+                for j, k in T.Parallel(hc_mult, hc_mult):
+                    cm[j, k] = cm[j, k] / (col_sum[k] + hc_sinkhorn_eps)
+
+                for _ in T.serial(sinkhorn_repeat - 1):
+                    T.reduce_sum(cm, row_sum, dim=1)
+                    for j, k in T.Parallel(hc_mult, hc_mult):
+                        cm[j, k] = cm[j, k] / (row_sum[j] + hc_sinkhorn_eps)
+                    T.reduce_sum(cm, col_sum, dim=0)
+                    for j, k in T.Parallel(hc_mult, hc_mult):
+                        cm[j, k] = cm[j, k] / (col_sum[k] + hc_sinkhorn_eps)
+
+                for j, k in T.Parallel(hc_mult, hc_mult):
+                    comb_mix[token_id, j * hc_mult + k] = cm[j, k]
+
+        return _kernel
+
+    return _mhc_pre_split_sinkhorn_kernel()
+
+
 @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
 def qnorm_rope_kernel():
     num_tokens = T.dynamic("num_tokens")
