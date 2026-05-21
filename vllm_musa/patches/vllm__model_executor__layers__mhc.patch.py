@@ -1,8 +1,51 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
-Patch mHC blocks with opt-in MUSA correctness torch fallbacks.
+Patch mHC blocks with MUSA native/JIT helpers.
 """
+
+_MUSA_MHC_PRE_DISPATCH = """    if current_platform.is_musa():
+        from vllm_musa.deepseek_v4_mhc import mhc_pre_musa_fallback
+
+        return mhc_pre_musa_fallback(
+            residual,
+            fn,
+            hc_scale,
+            hc_base,
+            rms_eps,
+            hc_pre_eps,
+            hc_sinkhorn_eps,
+            hc_post_mult_value,
+            sinkhorn_repeat,
+        )
+"""
+
+_MUSA_MHC_PRE_TORCH_GATE = """    if (
+        current_platform.is_musa()
+        and os.getenv("VLLM_MUSA_ENABLE_TORCH_MHC_PRENORM_FALLBACK", "0") == "1"
+    ):
+        from vllm_musa.deepseek_v4_mhc import mhc_pre_torch_fallback
+
+        return mhc_pre_torch_fallback(
+            residual,
+            fn,
+            hc_scale,
+            hc_base,
+            rms_eps,
+            hc_pre_eps,
+            hc_sinkhorn_eps,
+            hc_post_mult_value,
+            sinkhorn_repeat,
+        )
+"""
+
+
+def normalize_source(source: str) -> str:
+    if _MUSA_MHC_PRE_TORCH_GATE not in source:
+        return source
+    if _MUSA_MHC_PRE_DISPATCH in source:
+        return source.replace(_MUSA_MHC_PRE_TORCH_GATE + "\n", "")
+    return source.replace(_MUSA_MHC_PRE_TORCH_GATE, _MUSA_MHC_PRE_DISPATCH)
 
 PATCHES = [
     (
@@ -69,27 +112,15 @@ else:
         """    # Validate shapes
     assert residual.dtype == torch.bfloat16
 """,
-        """    if (
-        current_platform.is_musa()
-        and os.getenv("VLLM_MUSA_ENABLE_TORCH_MHC_PRENORM_FALLBACK", "0") == "1"
-    ):
-        from vllm_musa.deepseek_v4_mhc import mhc_pre_torch_fallback
-
-        return mhc_pre_torch_fallback(
-            residual,
-            fn,
-            hc_scale,
-            hc_base,
-            rms_eps,
-            hc_pre_eps,
-            hc_sinkhorn_eps,
-            hc_post_mult_value,
-            sinkhorn_repeat,
-        )
-
+        _MUSA_MHC_PRE_DISPATCH
+        + """
     # Validate shapes
     assert residual.dtype == torch.bfloat16
 """,
+    ),
+    (
+        _MUSA_MHC_PRE_TORCH_GATE,
+        _MUSA_MHC_PRE_DISPATCH,
     ),
     (
         """def mhc_post(
