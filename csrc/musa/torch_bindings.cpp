@@ -101,6 +101,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("deepseek_v4_sparse_flashmla_decode", torch::kMUSA,
                 &deepseek_v4_sparse_flashmla_decode);
 
+  musa_ops.def(
+      "deepseek_v4_fused_inv_rope_fp8_quant(Tensor o, Tensor positions, "
+      "Tensor cos_sin_cache, int n_groups, int heads_per_group, int nope_dim, "
+      "int rope_dim, int quant_group_size, bool tma_aligned_scales) -> "
+      "(Tensor, Tensor)");
+  musa_ops.impl("deepseek_v4_fused_inv_rope_fp8_quant", torch::kMUSA,
+                &deepseek_v4_fused_inv_rope_fp8_quant);
+
 #endif
 }
 

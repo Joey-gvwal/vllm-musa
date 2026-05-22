@@ -173,6 +173,7 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/attention/deepseek_v4_cache_utils.mu",
     "csrc/musa/attention/deepseek_v4_indexer_topk.mu",
     "csrc/musa/attention/deepseek_v4_sparse_flashmla.mu",
+    "csrc/musa/attention/deepseek_v4_inv_rope_fp8_quant.mu",
     # XXX (MUSA): The version used here is vllm 0.18.0, located at csrc/quantization/w8a8/fp8.
     # While in version 0.20.0, the path has changed to csrc/libtorch_stable/quantization/w8a8/fp8,
     # and depends on two header file from PyTorch 2.11's torch/headeronly/core/ScalarType.h and
