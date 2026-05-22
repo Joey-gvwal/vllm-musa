@@ -344,3 +344,33 @@ def deepseek_v4_topk_softplus_sqrt(
         input_tokens,
         hash_indices_table,
     )
+
+
+def deepseek_v4_mhc_pre(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    post_mix: torch.Tensor,
+    comb_mix: torch.Tensor,
+    layer_input: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_mhc_pre(
+        residual,
+        fn,
+        hc_scale,
+        hc_base,
+        post_mix,
+        comb_mix,
+        layer_input,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )

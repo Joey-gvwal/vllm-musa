@@ -112,3 +112,10 @@ void deepseek_v4_topk_softplus_sqrt(
     const c10::optional<torch::Tensor> &correction_bias,
     const c10::optional<torch::Tensor> &input_ids,
     const c10::optional<torch::Tensor> &hash_indices_table);
+void deepseek_v4_mhc_pre(
+    const torch::Tensor &residual, const torch::Tensor &fn,
+    const torch::Tensor &hc_scale, const torch::Tensor &hc_base,
+    torch::Tensor &post_mix, torch::Tensor &comb_mix,
+    torch::Tensor &layer_input, double rms_eps, double hc_pre_eps,
+    double hc_sinkhorn_eps, double hc_post_mult_value,
+    int64_t sinkhorn_repeat);

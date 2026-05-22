@@ -5,9 +5,9 @@ Patch mHC blocks with MUSA native/JIT helpers.
 """
 
 _MUSA_MHC_PRE_DISPATCH = """    if current_platform.is_musa():
-        from vllm_musa.deepseek_v4_mhc import mhc_pre_musa_fallback
+        from vllm_musa.deepseek_v4_mhc import mhc_pre_musa
 
-        return mhc_pre_musa_fallback(
+        return mhc_pre_musa(
             residual,
             fn,
             hc_scale,
@@ -139,11 +139,18 @@ else:
 ) -> torch.Tensor:
     if (
         current_platform.is_musa()
-        and os.getenv("VLLM_MUSA_ENABLE_TORCH_MHC_PRENORM_FALLBACK", "0") == "1"
+        and (
+            os.getenv("VLLM_MUSA_ENABLE_DEEPSEEK_V4_MHC_MUSA_IMPL", "1") == "1"
+            or os.getenv(
+                "VLLM_MUSA_ENABLE_TORCH_MHC_PRENORM_FALLBACK",
+                "0",
+            )
+            == "1"
+        )
     ):
-        from vllm_musa.deepseek_v4_mhc import mhc_post_musa_fallback
+        from vllm_musa.deepseek_v4_mhc import mhc_post_musa
 
-        return mhc_post_musa_fallback(x, residual, post_layer_mix, comb_res_mix)
+        return mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
 
     out = torch.empty_like(residual)
 """,

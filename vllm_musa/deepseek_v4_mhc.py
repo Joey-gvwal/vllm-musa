@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""DeepSeek-V4 MHC helpers for MUSA fallback paths."""
+"""DeepSeek-V4 MHC helpers for MUSA runtime and diagnostic paths."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import os
 import torch
 
 
-def mhc_pre_musa_fallback(
+def mhc_pre_musa(
     residual: torch.Tensor,
     fn: torch.Tensor,
     hc_scale: torch.Tensor,
@@ -20,7 +20,19 @@ def mhc_pre_musa_fallback(
     hc_post_mult_value: float,
     sinkhorn_repeat: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "tilelang").lower()
+    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "native").lower()
+    if impl in {"native", "musa", "mu"}:
+        return _mhc_pre_native_provider(
+            residual,
+            fn,
+            hc_scale,
+            hc_base,
+            rms_eps,
+            hc_pre_eps,
+            hc_sinkhorn_eps,
+            hc_post_mult_value,
+            sinkhorn_repeat,
+        )
     if impl in {"torch", "fallback"}:
         return mhc_pre_torch_fallback(
             residual,
@@ -46,6 +58,30 @@ def mhc_pre_musa_fallback(
             sinkhorn_repeat,
         )
     raise ValueError(f"unsupported DeepSeek-V4 MHC pre impl: {impl!r}")
+
+
+def mhc_pre_musa_fallback(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return mhc_pre_musa(
+        residual,
+        fn,
+        hc_scale,
+        hc_base,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )
 
 
 def mhc_pre_torch_fallback(
@@ -111,6 +147,84 @@ def mhc_pre_torch_fallback(
         post_mix.reshape(*outer_shape, hc_mult, 1),
         comb_mix.reshape(*outer_shape, hc_mult, hc_mult),
         layer_input.reshape(*outer_shape, hidden_size),
+    )
+
+
+def _mhc_pre_native_provider(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert residual.dtype == torch.bfloat16
+    assert fn.dtype == torch.float32
+    assert hc_scale.dtype == torch.float32
+    assert hc_base.dtype == torch.float32
+
+    _require_contiguous("residual", residual)
+    _require_contiguous("fn", fn)
+    _require_contiguous("hc_scale", hc_scale)
+    _require_contiguous("hc_base", hc_base)
+
+    hc_mult = residual.shape[-2]
+    hidden_size = residual.shape[-1]
+    if hc_mult != 4:
+        raise NotImplementedError(
+            f"MHC pre native provider only supports hc_mult=4, got {hc_mult}"
+        )
+    hc_mult3 = hc_mult * (2 + hc_mult)
+    hc_hidden_size = hc_mult * hidden_size
+    if fn.shape != (hc_mult3, hc_hidden_size):
+        raise ValueError(
+            "MHC pre native provider fn mismatch: "
+            f"fn={fn.shape}, expected={(hc_mult3, hc_hidden_size)}"
+        )
+    if hc_scale.shape != (3,) or hc_base.shape != (hc_mult3,):
+        raise ValueError(
+            "MHC pre native provider scale/base mismatch: "
+            f"hc_scale={hc_scale.shape}, hc_base={hc_base.shape}"
+        )
+
+    outer_shape = residual.shape[:-2]
+    residual_flat = residual.view(-1, hc_mult, hidden_size)
+    num_tokens = residual_flat.shape[0]
+    post_mix = torch.empty(
+        (num_tokens, hc_mult), dtype=torch.float32, device=residual.device
+    )
+    comb_mix = torch.empty(
+        (num_tokens, hc_mult, hc_mult),
+        dtype=torch.float32,
+        device=residual.device,
+    )
+    layer_input = torch.empty(
+        (num_tokens, hidden_size), dtype=torch.bfloat16, device=residual.device
+    )
+
+    from vllm_musa import _custom_ops as _musa_custom_ops
+
+    _musa_custom_ops.deepseek_v4_mhc_pre(
+        residual_flat,
+        fn,
+        hc_scale,
+        hc_base,
+        post_mix,
+        comb_mix,
+        layer_input,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )
+    return (
+        post_mix.view(*outer_shape, hc_mult, 1),
+        comb_mix.view(*outer_shape, hc_mult, hc_mult),
+        layer_input.view(*outer_shape, hidden_size),
     )
 
 
@@ -203,16 +317,27 @@ def _mhc_pre_tilelang_provider(
     )
 
 
-def mhc_post_musa_fallback(
+def mhc_post_musa(
     x: torch.Tensor,
     residual: torch.Tensor,
     post_layer_mix: torch.Tensor,
     comb_res_mix: torch.Tensor,
 ) -> torch.Tensor:
     impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_POST_IMPL", "tilelang").lower()
-    if impl in {"tilelang", "jit"}:
+    if impl in {"tilelang", "jit", "native", "musa", "mu"}:
         return _mhc_post_tilelang_provider(x, residual, post_layer_mix, comb_res_mix)
-    return mhc_post_torch_fallback(x, residual, post_layer_mix, comb_res_mix)
+    if impl in {"torch", "fallback"}:
+        return mhc_post_torch_fallback(x, residual, post_layer_mix, comb_res_mix)
+    raise ValueError(f"unsupported DeepSeek-V4 MHC post impl: {impl!r}")
+
+
+def mhc_post_musa_fallback(
+    x: torch.Tensor,
+    residual: torch.Tensor,
+    post_layer_mix: torch.Tensor,
+    comb_res_mix: torch.Tensor,
+) -> torch.Tensor:
+    return mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
 
 
 def mhc_post_torch_fallback(
