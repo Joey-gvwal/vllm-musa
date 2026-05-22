@@ -511,3 +511,27 @@ def deepseek_v4_fused_inv_rope_fp8_quant(
         quant_group_size,
         tma_aligned_scales,
     )
+
+
+def deepseek_v4_topk_softplus_sqrt(
+    topk_weights: torch.Tensor,
+    topk_indices: torch.Tensor,
+    token_expert_indices: torch.Tensor,
+    gating_output: torch.Tensor,
+    renormalize: bool = False,
+    routed_scaling_factor: float = 1.0,
+    e_score_correction_bias: torch.Tensor | None = None,
+    input_tokens: torch.Tensor | None = None,
+    hash_indices_table: torch.Tensor | None = None,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_topk_softplus_sqrt(
+        topk_weights,
+        topk_indices,
+        token_expert_indices,
+        gating_output,
+        renormalize,
+        routed_scaling_factor,
+        e_score_correction_bias,
+        input_tokens,
+        hash_indices_table,
+    )

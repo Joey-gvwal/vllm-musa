@@ -47,6 +47,7 @@ from vllm.model_executor.layers.fused_moe.router.fused_topk_bias_router import (
 from vllm_musa.deepseek_v4_fallbacks import (
     enable_deepseek_v4_sparse_correctness_fallbacks as _musa_enable_deepseek_v4_sparse_correctness_fallbacks,
 )
+from vllm_musa import _custom_ops as _musa_ops
 
 
 def _musa_deepseek_v4_topk_softplus_sqrt_fallback(
@@ -90,15 +91,43 @@ def _musa_deepseek_v4_topk_softplus_sqrt_fallback(
     return topk_weights, topk_indices
 
 
+def _musa_deepseek_v4_topk_softplus_sqrt_native(
+    topk_weights: torch.Tensor,
+    topk_indices: torch.Tensor,
+    token_expert_indices: torch.Tensor,
+    gating_output: torch.Tensor,
+    renormalize: bool = False,
+    e_score_correction_bias: torch.Tensor | None = None,
+    input_tokens: torch.Tensor | None = None,
+    hash_indices_table: torch.Tensor | None = None,
+    routed_scaling_factor: float = 1.0,
+) -> tuple[torch.Tensor, ...]:
+    _musa_ops.deepseek_v4_topk_softplus_sqrt(
+        topk_weights,
+        topk_indices,
+        token_expert_indices,
+        gating_output,
+        renormalize,
+        routed_scaling_factor,
+        e_score_correction_bias,
+        input_tokens,
+        hash_indices_table,
+    )
+    return topk_weights, topk_indices
+
+
 if current_platform.is_musa() or getattr(torch.version, "musa", None) is not None:
     _musa_enable_deepseek_v4_sparse_correctness_fallbacks()
 
-if (
-    current_platform.is_musa() or getattr(torch.version, "musa", None) is not None
-) and os.getenv("VLLM_MUSA_ENABLE_TORCH_TOPK_SOFTPLUS_SQRT_FALLBACK", "0") == "1":
-    _musa_fused_topk_bias_router.vllm_topk_softplus_sqrt = (
-        _musa_deepseek_v4_topk_softplus_sqrt_fallback
-    )
+if current_platform.is_musa() or getattr(torch.version, "musa", None) is not None:
+    if os.getenv("VLLM_MUSA_ENABLE_TORCH_TOPK_SOFTPLUS_SQRT_FALLBACK", "0") == "1":
+        _musa_fused_topk_bias_router.vllm_topk_softplus_sqrt = (
+            _musa_deepseek_v4_topk_softplus_sqrt_fallback
+        )
+    else:
+        _musa_fused_topk_bias_router.vllm_topk_softplus_sqrt = (
+            _musa_deepseek_v4_topk_softplus_sqrt_native
+        )
 
 
 """,
