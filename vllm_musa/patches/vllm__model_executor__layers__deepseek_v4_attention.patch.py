@@ -163,6 +163,12 @@ def _musa_deepseek_v4_use_native_sparse_kv_store(k_cache: torch.Tensor) -> bool:
     return True
 
 
+def _musa_deepseek_v4_qnorm_rope_kv_insert_mode() -> str:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_IMPL", "native"
+    ).strip().lower()
+
+
 def _musa_deepseek_v4_apply_gptj_rope(
     x: torch.Tensor,
     positions: torch.Tensor,
@@ -266,6 +272,46 @@ def _musa_deepseek_v4_quant_insert(
     k_cache_2d[block_idx.unsqueeze(1), rope_offsets] = rope_bytes
 
 
+def _musa_try_native_deepseek_v4_qnorm_rope_kv_insert(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    k_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    eps: float,
+    block_size: int,
+) -> bool:
+    mode = _musa_deepseek_v4_qnorm_rope_kv_insert_mode()
+    if mode in {"torch", "fallback", "0", "off", "tilelang", "jit"}:
+        return False
+
+    try:
+        from vllm_musa import _custom_ops as _musa_custom_ops
+
+        _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
+            q,
+            kv,
+            k_cache,
+            slot_mapping,
+            positions,
+            cos_sin_cache,
+            eps,
+            block_size,
+        )
+    except Exception as exc:
+        if mode == "auto":
+            logger.warning_once(
+                "MUSA native DeepSeek-V4 QNorm/RoPE/KV insert path did not "
+                "handle this call; trying the next provider. Reason: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return False
+        raise
+    return True
+
+
 def _musa_try_tilelang_deepseek_v4_qnorm_rope_kv_insert(
     q: torch.Tensor,
     kv: torch.Tensor,
@@ -320,6 +366,17 @@ def _musa_fused_deepseek_v4_qnorm_rope_kv_insert_fallback(
     k_cache_2d = (
         k_cache.view(k_cache.shape[0], -1) if k_cache.dim() >= 3 else k_cache
     )
+    if _musa_try_native_deepseek_v4_qnorm_rope_kv_insert(
+        q,
+        kv,
+        k_cache,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        eps,
+        block_size,
+    ):
+        return
     if _musa_try_tilelang_deepseek_v4_qnorm_rope_kv_insert(
         q,
         kv,
@@ -331,6 +388,12 @@ def _musa_fused_deepseek_v4_qnorm_rope_kv_insert_fallback(
         block_size,
     ):
         return
+    mode = _musa_deepseek_v4_qnorm_rope_kv_insert_mode()
+    if mode not in {"torch", "fallback", "0", "off", "auto"}:
+        raise RuntimeError(
+            "MUSA DeepSeek-V4 QNorm/RoPE/KV insert has no enabled provider "
+            f"for mode={mode!r}"
+        )
     q_float = q.to(torch.float32)
     variance = q_float.pow(2).mean(dim=-1, keepdim=True)
     q_float = q_float * torch.rsqrt(variance + eps)

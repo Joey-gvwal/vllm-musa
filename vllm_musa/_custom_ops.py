@@ -170,6 +170,28 @@ def deepseek_v4_store_sparse_kv(
     )
 
 
+def deepseek_v4_qnorm_rope_kv_insert(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    eps: float,
+    cache_block_size: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_qnorm_rope_kv_insert(
+        q,
+        kv,
+        kv_cache,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        eps,
+        cache_block_size,
+    )
+
+
 def deepseek_v4_dequantize_and_gather_k_cache(
     out: torch.Tensor,
     k_cache: torch.Tensor,

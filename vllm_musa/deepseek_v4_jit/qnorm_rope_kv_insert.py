@@ -138,7 +138,7 @@ def try_tilelang_qnorm_rope_kv_insert(
     """Try the TileLang path and report whether it handled the call."""
     global _AUTO_DISABLED_REASON
     mode = (
-        os.environ.get("VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_IMPL", "torch")
+        os.environ.get("VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_IMPL", "native")
         .strip()
         .lower()
     )
