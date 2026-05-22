@@ -142,6 +142,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("deepseek_v4_topk_softplus_sqrt", torch::kMUSA,
                 &deepseek_v4_topk_softplus_sqrt);
 
+  musa_ops.def(
+      "deepseek_v4_mhc_pre(Tensor residual, Tensor fn, Tensor hc_scale, "
+      "Tensor hc_base, Tensor! post_mix, Tensor! comb_mix, Tensor! "
+      "layer_input, float rms_eps, float hc_pre_eps, float hc_sinkhorn_eps, "
+      "float hc_post_mult_value, int sinkhorn_repeat) -> ()");
+  musa_ops.impl("deepseek_v4_mhc_pre", torch::kMUSA,
+                &deepseek_v4_mhc_pre);
+
 #endif
 }
 
