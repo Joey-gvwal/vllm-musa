@@ -109,6 +109,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
   musa_ops.impl("deepseek_v4_fused_inv_rope_fp8_quant", torch::kMUSA,
                 &deepseek_v4_fused_inv_rope_fp8_quant);
 
+  musa_ops.def(
+      "deepseek_v4_topk_softplus_sqrt(Tensor! topk_weights, Tensor! "
+      "topk_indices, Tensor! token_expert_indices, Tensor gating_output, bool "
+      "renormalize, float routed_scaling_factor, Tensor? correction_bias, "
+      "Tensor? input_ids, Tensor? hash_indices_table) -> ()");
+  musa_ops.impl("deepseek_v4_topk_softplus_sqrt", torch::kMUSA,
+                &deepseek_v4_topk_softplus_sqrt);
+
 #endif
 }
 
