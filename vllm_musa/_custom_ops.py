@@ -487,3 +487,27 @@ def deepseek_v4_sparse_flashmla_decode(
         out,
         softmax_scale,
     )
+
+
+def deepseek_v4_fused_inv_rope_fp8_quant(
+    o: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    n_groups: int,
+    heads_per_group: int,
+    nope_dim: int,
+    rope_dim: int,
+    quant_group_size: int,
+    tma_aligned_scales: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant(
+        o,
+        positions,
+        cos_sin_cache,
+        n_groups,
+        heads_per_group,
+        nope_dim,
+        rope_dim,
+        quant_group_size,
+        tma_aligned_scales,
+    )

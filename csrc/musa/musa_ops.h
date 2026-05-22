@@ -131,3 +131,8 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_sparse_flashmla_decode(
     const c10::optional<torch::Tensor> &extra_indices,
     const c10::optional<torch::Tensor> &extra_topk_length, torch::Tensor &out,
     double softmax_scale);
+std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
+    const torch::Tensor &o, const torch::Tensor &positions,
+    const torch::Tensor &cos_sin_cache, int64_t n_groups,
+    int64_t heads_per_group, int64_t nope_dim, int64_t rope_dim,
+    int64_t quant_group_size, bool tma_aligned_scales);

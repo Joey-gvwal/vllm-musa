@@ -132,10 +132,18 @@ def _musa_fused_inv_rope_fp8_quant_triton_enabled() -> bool:
             )
             != "1"
         ):
-            raise NotImplementedError(
-                "DeepSeek-V4 fused_inv_rope_fp8_quant is not implemented for "
-                "MUSA yet. A MUSA-safe inverse-RoPE, FP8 quantization, and "
-                "scale-layout path is required before model execution can proceed."
+            from vllm_musa import _custom_ops as _musa_custom_ops
+
+            return _musa_custom_ops.deepseek_v4_fused_inv_rope_fp8_quant(
+                o,
+                positions,
+                cos_sin_cache,
+                n_groups,
+                heads_per_group,
+                nope_dim,
+                rope_dim,
+                quant_group_size,
+                tma_aligned_scales,
             )
         from vllm.utils.deep_gemm import get_tma_aligned_size
 
@@ -253,6 +261,32 @@ def _musa_fused_inv_rope_fp8_quant_triton_enabled() -> bool:
 """,
     ),
 ]
+
+
+def normalize_source(source: str) -> str:
+    """Upgrade stale patched sources from the old Torch-only MUSA fallback."""
+    stale_raise = """            raise NotImplementedError(
+                "DeepSeek-V4 fused_inv_rope_fp8_quant is not implemented for "
+                "MUSA yet. A MUSA-safe inverse-RoPE, FP8 quantization, and "
+                "scale-layout path is required before model execution can proceed."
+            )
+"""
+    native_return = """            from vllm_musa import _custom_ops as _musa_custom_ops
+
+            return _musa_custom_ops.deepseek_v4_fused_inv_rope_fp8_quant(
+                o,
+                positions,
+                cos_sin_cache,
+                n_groups,
+                heads_per_group,
+                nope_dim,
+                rope_dim,
+                quant_group_size,
+                tma_aligned_scales,
+            )
+"""
+    return source.replace(stale_raise, native_return)
+
 
 RELOAD_AFTER_PATCH = [
     "__TARGET_MODULE__",
