@@ -93,6 +93,15 @@ void deepseek_v4_store_sparse_kv(
     torch::Tensor& kv_cache,
     const torch::Tensor& slot_mapping,
     const torch::Tensor& write_mask);
+void deepseek_v4_qnorm_rope_kv_insert(
+    torch::Tensor& q,
+    const torch::Tensor& kv,
+    torch::Tensor& kv_cache,
+    const torch::Tensor& slot_mapping,
+    const torch::Tensor& positions,
+    const torch::Tensor& cos_sin_cache,
+    double eps,
+    int64_t cache_block_size);
 void deepseek_v4_dequantize_and_gather_k_cache(
     torch::Tensor &out, const torch::Tensor &k_cache,
     const torch::Tensor &seq_lens,
