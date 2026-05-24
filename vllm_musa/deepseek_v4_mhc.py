@@ -20,7 +20,9 @@ def mhc_pre_musa(
     hc_post_mult_value: float,
     sinkhorn_repeat: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "native").lower()
+    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "auto").lower()
+    if impl == "auto":
+        impl = _select_mhc_pre_auto_impl(residual)
     if impl in {"native", "musa", "mu"}:
         return _mhc_pre_native_provider(
             residual,
@@ -58,6 +60,24 @@ def mhc_pre_musa(
             sinkhorn_repeat,
         )
     raise ValueError(f"unsupported DeepSeek-V4 MHC pre impl: {impl!r}")
+
+
+def _select_mhc_pre_auto_impl(residual: torch.Tensor) -> str:
+    max_tilelang_tokens = int(
+        os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS", "16")
+    )
+    if max_tilelang_tokens <= 0:
+        return "native"
+    hc_mult = residual.shape[-2]
+    hidden_size = residual.shape[-1]
+    num_tokens = residual.numel() // (hc_mult * hidden_size)
+    if (
+        hc_mult == 4
+        and hidden_size in {4096, 7168}
+        and num_tokens <= max_tilelang_tokens
+    ):
+        return "tilelang"
+    return "native"
 
 
 def mhc_pre_musa_fallback(

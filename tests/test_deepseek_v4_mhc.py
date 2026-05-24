@@ -12,10 +12,13 @@ def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text()
 
 
-def test_mhc_pre_defaults_to_native_provider():
+def test_mhc_pre_defaults_to_auto_provider():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 
-    assert 'VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "native"' in source
+    assert 'VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "auto"' in source
+    assert "def _select_mhc_pre_auto_impl(" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS" in source
+    assert "hidden_size in {4096, 7168}" in source
     assert "def _mhc_pre_native_provider(" in source
     assert "deepseek_v4_mhc_pre(" in source
     assert "mhc_pre_torch_fallback(" in source
