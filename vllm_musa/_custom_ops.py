@@ -192,6 +192,22 @@ def deepseek_v4_qnorm_rope_kv_insert(
     )
 
 
+def deepseek_v4_fused_q_kv_rmsnorm(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    q_weight: torch.Tensor,
+    kv_weight: torch.Tensor,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops._C_musa_ops.deepseek_v4_fused_q_kv_rmsnorm(
+        q,
+        kv,
+        q_weight,
+        kv_weight,
+        eps,
+    )
+
+
 def deepseek_v4_dequantize_and_gather_k_cache(
     out: torch.Tensor,
     k_cache: torch.Tensor,
@@ -267,6 +283,32 @@ def deepseek_v4_indexer_topk_decode(
         weights,
         seq_lens,
         block_table,
+        topk_indices,
+        topk,
+    )
+
+
+def deepseek_v4_indexer_topk_prefill(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    block_table: torch.Tensor,
+    cu_seq_lens: torch.Tensor,
+    token_to_seq: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_indexer_topk_prefill(
+        q_quant,
+        kv_cache,
+        weights,
+        block_table,
+        cu_seq_lens,
+        token_to_seq,
+        cu_seqlen_ks,
+        cu_seqlen_ke,
         topk_indices,
         topk,
     )

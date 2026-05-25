@@ -4,28 +4,156 @@
 Patch sparse-attention indexer with an opt-in MUSA correctness fallback.
 """
 
+_PREFILL_NATIVE_HELPER = """
+
+def _musa_try_fill_prefill_topk_from_indexer_cache_native(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    chunk,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> bool:
+    if (
+        not _musa_sparse_indexer_native_decode_enabled()
+        or head_dim != 128
+        or topk_tokens > 512
+        or q_quant.dtype != torch.float8_e4m3fn
+        or kv_cache.dtype != torch.uint8
+        or weights.dtype != torch.float32
+        or int(chunk.total_seq_lens) > 4096
+    ):
+        return False
+
+    rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
+    topk = min(int(topk_tokens), topk_indices.shape[1])
+    if rows <= 0 or topk <= 0:
+        return True
+
+    _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk.block_table,
+        chunk.cu_seq_lens,
+        chunk.token_to_seq,
+        chunk.cu_seqlen_ks[:rows],
+        chunk.cu_seqlen_ke[:rows],
+        topk_indices[:rows, :topk],
+        topk,
+    )
+    return True
+"""
+
 
 def normalize_source(source: str) -> str:
     """Remove stale duplicate MUSA helper blocks from previously patched files."""
     helper_start = "\ndef _musa_sparse_indexer_is_current_stream_capturing() -> bool:\n"
     main_entry = "\ndef _musa_fill_exact_sparse_indexer_indices(\n"
+    stale_forward = """        elif (
+            current_platform.is_musa()
+            and os.getenv(
+                "VLLM_MUSA_ENABLE_TORCH_SPARSE_ATTN_INDEXER_FALLBACK",
+                "0",
+            )
+            == "1"
+        ):
+            try:
+                return _musa_fill_exact_sparse_indexer_indices(
+                    hidden_states,
+                    self.k_cache.prefix,
+                    self.k_cache.kv_cache,
+                    q_quant,
+                    weights,
+                    self.topk_tokens,
+                    self.head_dim,
+                    self.topk_indices_buffer,
+                    self.use_fp4_cache,
+                )
+            except NotImplementedError:
+                return _musa_fill_recent_sparse_indexer_indices(
+                    hidden_states,
+                    self.k_cache.prefix,
+                    self.topk_tokens,
+                    self.topk_indices_buffer,
+                )
+"""
+    native_forward = """        elif (
+            current_platform.is_musa()
+            and (
+                os.getenv(
+                    "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL",
+                    "1",
+                )
+                == "1"
+                or os.getenv(
+                    "VLLM_MUSA_ENABLE_TORCH_SPARSE_ATTN_INDEXER_FALLBACK",
+                    "0",
+                )
+                == "1"
+            )
+        ):
+            try:
+                return _musa_fill_exact_sparse_indexer_indices(
+                    hidden_states,
+                    self.k_cache.prefix,
+                    self.k_cache.kv_cache,
+                    q_quant,
+                    weights,
+                    self.topk_tokens,
+                    self.head_dim,
+                    self.topk_indices_buffer,
+                    self.use_fp4_cache,
+                )
+            except NotImplementedError:
+                return _musa_fill_recent_sparse_indexer_indices(
+                    hidden_states,
+                    self.k_cache.prefix,
+                    self.topk_tokens,
+                    self.topk_indices_buffer,
+                )
+"""
+    source = source.replace(stale_forward, native_forward)
 
     first_start = source.find(helper_start)
-    if first_start < 0:
-        return source
-
-    search_from = first_start + len(helper_start)
-    while True:
-        duplicate_start = source.find(helper_start, search_from)
-        if duplicate_start < 0:
-            return source
-
-        duplicate_end = source.find(main_entry, duplicate_start)
-        if duplicate_end < 0:
-            return source
-
-        source = source[:duplicate_start] + source[duplicate_end:]
+    if first_start >= 0:
         search_from = first_start + len(helper_start)
+        while True:
+            duplicate_start = source.find(helper_start, search_from)
+            if duplicate_start < 0:
+                break
+
+            duplicate_end = source.find(main_entry, duplicate_start)
+            if duplicate_end < 0:
+                break
+
+            source = source[:duplicate_start] + source[duplicate_end:]
+            search_from = first_start + len(helper_start)
+
+    for default in ("0", "1"):
+        source = source.replace(
+            f"""def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
+    return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "{default}") == "1"
+""",
+            """def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
+    return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
+""",
+        )
+
+    if (
+        "_musa_try_fill_prefill_topk_from_indexer_cache_native(" in source
+        and "def _musa_try_fill_prefill_topk_from_indexer_cache_native" not in source
+    ):
+        source = source.replace(
+            "\n\ndef _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int)"
+            " -> torch.Tensor:\n",
+            _PREFILL_NATIVE_HELPER
+            + "\n\ndef _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int)"
+            " -> torch.Tensor:\n",
+        )
+
+    return source
 
 
 PATCHES = [
@@ -234,6 +362,9 @@ def _musa_fill_recent_sparse_indexer_indices(
 
 
 def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
+    # The exact graph decode path is still diagnostic: it removes the recent
+    # window approximation, but regresses DeepSeek-V4-Flash-Base graph+MTP TPS
+    # at long context until the exact provider is fully optimized.
     return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
 
 
@@ -294,6 +425,46 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
         seq_lens[:rows],
         block_table,
         topk_indices_buffer[:rows, :topk],
+        topk,
+    )
+    return True
+
+
+def _musa_try_fill_prefill_topk_from_indexer_cache_native(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    chunk,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> bool:
+    if (
+        not _musa_sparse_indexer_native_decode_enabled()
+        or head_dim != 128
+        or topk_tokens > 512
+        or q_quant.dtype != torch.float8_e4m3fn
+        or kv_cache.dtype != torch.uint8
+        or weights.dtype != torch.float32
+        or int(chunk.total_seq_lens) > 4096
+    ):
+        return False
+
+    rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
+    topk = min(int(topk_tokens), topk_indices.shape[1])
+    if rows <= 0 or topk <= 0:
+        return True
+
+    _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk.block_table,
+        chunk.cu_seq_lens,
+        chunk.token_to_seq,
+        chunk.cu_seqlen_ks[:rows],
+        chunk.cu_seqlen_ke[:rows],
+        topk_indices[:rows, :topk],
         topk,
     )
     return True
@@ -669,17 +840,29 @@ def _musa_fill_exact_sparse_indexer_indices(
     weights_fp32 = None
 
     if metadata.num_prefills > 0 and metadata.prefill is not None:
-        q_deq = q_quant.to(torch.float32)
-        weights_fp32 = weights.to(torch.float32)
         for chunk in metadata.prefill.chunks:
+            token_start = int(chunk.token_start)
+            token_end = int(chunk.token_end)
+            if _musa_try_fill_prefill_topk_from_indexer_cache_native(
+                q_quant[token_start:token_end],
+                kv_cache,
+                weights[token_start:token_end],
+                chunk,
+                topk_indices_buffer[token_start:token_end, :topk_tokens],
+                topk_tokens,
+                head_dim,
+            ):
+                continue
+            if q_deq is None:
+                q_deq = q_quant.to(torch.float32)
+            if weights_fp32 is None:
+                weights_fp32 = weights.to(torch.float32)
             k_deq = _musa_gather_indexer_fp8_cache(
                 kv_cache,
                 chunk.block_table,
                 chunk.cu_seq_lens,
                 head_dim,
             )
-            token_start = int(chunk.token_start)
-            token_end = int(chunk.token_end)
             _musa_fill_topk_rows_from_indexer_logits(
                 q_deq[token_start:token_end],
                 k_deq,
@@ -726,11 +909,18 @@ def _musa_fill_exact_sparse_indexer_indices(
 """,
         """        elif (
             current_platform.is_musa()
-            and os.getenv(
-                "VLLM_MUSA_ENABLE_TORCH_SPARSE_ATTN_INDEXER_FALLBACK",
-                "0",
+            and (
+                os.getenv(
+                    "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL",
+                    "1",
+                )
+                == "1"
+                or os.getenv(
+                    "VLLM_MUSA_ENABLE_TORCH_SPARSE_ATTN_INDEXER_FALLBACK",
+                    "0",
+                )
+                == "1"
             )
-            == "1"
         ):
             try:
                 return _musa_fill_exact_sparse_indexer_indices(
@@ -755,7 +945,7 @@ def _musa_fill_exact_sparse_indexer_indices(
             raise NotImplementedError(
                 "SparseAttnIndexer native forward is only implemented for "
                 "CUDA, ROCm and XPU platforms."
-        )
+            )
 """,
     ),
 ]
