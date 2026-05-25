@@ -158,6 +158,53 @@ class TestSamplerPatch:
             raise AssertionError("topk_topp_sampler patch file was not found")
 
 
+class TestRejectionSamplerPatch:
+    """Tests for the MUSA speculative rejection-sampler patch."""
+
+    def test_rejection_sampler_random_path_uses_target_token_fallback(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.sample.rejection_sampler":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK" in new_source
+                assert "_musa_sample_first_target_token" in new_source
+                assert "not sampling_metadata.all_greedy" in new_source
+                assert "sampling_metadata.max_num_logprobs is None" in new_source
+                assert "PLACEHOLDER_TOKEN_ID" in new_source
+                break
+        else:
+            raise AssertionError("rejection_sampler patch file was not found")
+
+
+class TestGPUModelRunnerPatch:
+    """Tests for MUSA GPU model runner speculative guards."""
+
+    def test_model_runner_skips_musa_random_drafter(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.worker.gpu_model_runner":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK" in new_source
+                assert "current_platform.is_musa()" in new_source
+                assert "not self.input_batch.sampling_metadata.all_greedy" in (
+                    new_source
+                )
+                assert "input_fits_in_drafter = False" in new_source
+                break
+        else:
+            raise AssertionError("gpu_model_runner patch file was not found")
+
+
 class TestSparseAttnIndexerPatch:
     """Tests for the MUSA DeepSeek-V4 sparse indexer patch."""
 

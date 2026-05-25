@@ -20,7 +20,36 @@ Gated via VLLM_MUSA_DRAFT_COPY_DEFAULT_STREAM=1 (default OFF).
 Enable only when running with VLLM_MUSA_EAGLE_RUNNER=1.
 """
 
-PATCHES: list = []  # Monkey-patch only.
+PATCHES = [
+    (
+        """            # Decide whether to run the drafter or zero out draft tokens.
+            input_fits_in_drafter = spec_decode_common_attn_metadata is not None and (
+                spec_decode_common_attn_metadata.max_seq_len + self.num_spec_tokens
+                <= self.effective_drafter_max_model_len
+            )
+""",
+        """            # Decide whether to run the drafter or zero out draft tokens.
+            input_fits_in_drafter = spec_decode_common_attn_metadata is not None and (
+                spec_decode_common_attn_metadata.max_seq_len + self.num_spec_tokens
+                <= self.effective_drafter_max_model_len
+            )
+            if (
+                current_platform.is_musa()
+                and not self.input_batch.sampling_metadata.all_greedy
+                and __import__("os").environ.get(
+                    "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK",
+                    "1",
+                ).lower()
+                not in ("0", "false", "no", "off")
+            ):
+                # The MUSA random rejection-sampling kernel is not
+                # correctness-stable yet. Do not run the drafter for
+                # non-greedy requests; the target model already sampled one
+                # correct token for this step.
+                input_fits_in_drafter = False
+""",
+    ),
+]
 
 import logging
 import os
