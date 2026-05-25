@@ -37,6 +37,111 @@ scope at the `rejection_sample()` insertion point.
 """
 
 PATCHES = [
+    (
+        """def rejection_sample(
+""",
+        """def _musa_spec_decode_random_fallback_enabled() -> bool:
+    value = __import__("os").environ.get(
+        "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK",
+        "1",
+    )
+    if value.lower() in ("0", "false", "no", "off"):
+        return False
+    try:
+        from vllm.platforms import current_platform
+
+        return current_platform.is_musa()
+    except Exception:
+        return False
+
+
+def _musa_sample_first_target_token(
+    sampler: Sampler,
+    target_logits: torch.Tensor,
+    metadata: SpecDecodeMetadata,
+    sampling_metadata: SamplingMetadata,
+) -> torch.Tensor | None:
+    # MUSA random rejection sampling is not correctness-stable yet. Preserve
+    # the distribution by sampling only the first target-token logits and
+    # returning placeholders for all speculative positions, effectively
+    # disabling speculative acceptance for non-greedy requests.
+    if any(num_tokens <= 0 for num_tokens in metadata.num_draft_tokens):
+        return None
+
+    starts: list[int] = []
+    offset = 0
+    for num_tokens in metadata.num_draft_tokens:
+        starts.append(offset)
+        offset += num_tokens
+
+    start_indices = torch.tensor(
+        starts,
+        dtype=torch.long,
+        device=target_logits.device,
+    )
+    first_target_logits = target_logits.index_select(0, start_indices)
+    sampled, _ = sampler.sample(first_target_logits, sampling_metadata)
+
+    output_token_ids = torch.full(
+        (len(metadata.num_draft_tokens), metadata.max_spec_len + 1),
+        PLACEHOLDER_TOKEN_ID,
+        dtype=torch.int32,
+        device=target_logits.device,
+    )
+    output_token_ids[:, 0] = sampled.to(torch.int32)
+    return output_token_ids
+
+
+def rejection_sample(
+""",
+    ),
+    (
+        """        target_logits = self.apply_logits_processors(
+            target_logits, sampling_metadata, metadata
+        )
+        # [num_tokens, vocab_size]
+        # NOTE(woosuk): `target_logits` can be updated in place inside the
+        # `apply_sampling_constraints` function.
+        target_logits = apply_sampling_constraints(
+            target_logits,
+            metadata.cu_num_draft_tokens,
+            sampling_metadata,
+        )
+
+        output_token_ids = rejection_sample(
+""",
+        """        target_logits = self.apply_logits_processors(
+            target_logits, sampling_metadata, metadata
+        )
+        if (
+            not sampling_metadata.all_greedy
+            and sampling_metadata.max_num_logprobs is None
+            and _musa_spec_decode_random_fallback_enabled()
+        ):
+            output_token_ids = _musa_sample_first_target_token(
+                self.sampler,
+                target_logits,
+                metadata,
+                sampling_metadata,
+            )
+            if output_token_ids is not None:
+                return SamplerOutput(
+                    sampled_token_ids=output_token_ids,
+                    logprobs_tensors=None,
+                )
+
+        # [num_tokens, vocab_size]
+        # NOTE(woosuk): `target_logits` can be updated in place inside the
+        # `apply_sampling_constraints` function.
+        target_logits = apply_sampling_constraints(
+            target_logits,
+            metadata.cu_num_draft_tokens,
+            sampling_metadata,
+        )
+
+        output_token_ids = rejection_sample(
+""",
+    ),
     # 1 + dummy: call site -- is_greedy as int32 + synthetic dummy tensor.
     (
         """    if sampling_metadata.all_greedy:
