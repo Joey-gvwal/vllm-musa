@@ -178,6 +178,37 @@ class TestSparseAttnIndexerPatch:
         else:
             raise AssertionError("sparse_attn_indexer patch file was not found")
 
+    def test_sparse_indexer_prefill_uses_musa_native_before_torch_path(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert 'VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0"' in (
+                    new_source
+                )
+                assert "_musa_try_fill_prefill_topk_from_indexer_cache_native" in (
+                    new_source
+                )
+                assert "deepseek_v4_indexer_topk_prefill" in new_source
+                assert (
+                    new_source.index(
+                        "_musa_try_fill_prefill_topk_from_indexer_cache_native"
+                    )
+                    < new_source.index("_musa_gather_indexer_fp8_cache")
+                )
+                assert (
+                    "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL"
+                    in new_source
+                )
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
     def test_sparse_indexer_patch_removes_stale_duplicate_helpers(self):
         from vllm_musa.patches import _get_patch_files, _load_patch_module
 
@@ -223,6 +254,68 @@ def _musa_fill_exact_sparse_indexer_indices(
                 break
         else:
             raise AssertionError("sparse_attn_indexer patch file was not found")
+
+    def test_sparse_indexer_patch_upgrades_partial_prefill_native_helper(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
+    return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
+
+
+def _musa_fill_exact_sparse_indexer_indices():
+    if _musa_try_fill_prefill_topk_from_indexer_cache_native():
+        return "native"
+
+
+def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Tensor:
+    return kv_cache[block_id].view(torch.uint8).flatten()
+"""
+                normalized = module.normalize_source(source)
+
+                assert 'VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0"' in (
+                    normalized
+                )
+                assert (
+                    "def _musa_try_fill_prefill_topk_from_indexer_cache_native"
+                    in normalized
+                )
+                assert "deepseek_v4_indexer_topk_prefill" in normalized
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+
+class TestSparseSWAPatch:
+    """Tests for the MUSA DeepSeek-V4 sparse SWA metadata patch."""
+
+    def test_sparse_swa_patch_builds_token_metadata_on_device(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.attention.backends.mla.sparse_swa":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "_compute_token_to_req_and_valid_kernel" in new_source
+                assert "token_to_req_indices.copy_(x, non_blocking=True)" not in (
+                    new_source
+                )
+                assert "torch.repeat_interleave(torch.arange(num_reqs), query_lens)" not in (
+                    new_source
+                )
+                assert "slot >= 0" in new_source
+                break
+        else:
+            raise AssertionError("sparse_swa patch file was not found")
 
 
 class TestDeepGemmPatch:

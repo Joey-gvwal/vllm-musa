@@ -4,6 +4,35 @@
 Patch DeepSeek-V4 attention to use MUSA sparse FlashMLA backend shims.
 """
 
+
+def normalize_source(source: str) -> str:
+    """Remove stale MUSA-3044 prewarm WIP from already-patched vLLM sources."""
+    source = source.replace(
+        """from vllm_musa.v1.attention.ops.flashmla import (
+    flash_mla_sparse_fwd,
+    flash_mla_with_kvcache,
+    prewarm_flash_mla_sparse_prefill,
+)
+""",
+        """from vllm_musa.v1.attention.ops.flashmla import (
+    flash_mla_sparse_fwd,
+    flash_mla_with_kvcache,
+)
+""",
+    )
+    source = source.replace(
+        """        prewarm_flash_mla_sparse_prefill(
+            num_heads=self.padded_heads,
+            device=self.attn_sink.device,
+            sm_scale=self.scale,
+            attn_sink=self.attn_sink,
+        )
+""",
+        "",
+    )
+    return source
+
+
 PATCHES = [
     (
         """from dataclasses import dataclass

@@ -102,6 +102,12 @@ void deepseek_v4_qnorm_rope_kv_insert(
     const torch::Tensor& cos_sin_cache,
     double eps,
     int64_t cache_block_size);
+std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_q_kv_rmsnorm(
+    const torch::Tensor& q,
+    const torch::Tensor& kv,
+    const torch::Tensor& q_weight,
+    const torch::Tensor& kv_weight,
+    double eps);
 void deepseek_v4_dequantize_and_gather_k_cache(
     torch::Tensor &out, const torch::Tensor &k_cache,
     const torch::Tensor &seq_lens,
@@ -122,6 +128,12 @@ void deepseek_v4_indexer_topk_decode(
     const torch::Tensor &weights, const torch::Tensor &seq_lens,
     const torch::Tensor &block_table, torch::Tensor &topk_indices,
     int64_t topk);
+void deepseek_v4_indexer_topk_prefill(
+    const torch::Tensor &q_quant, const torch::Tensor &kv_cache,
+    const torch::Tensor &weights, const torch::Tensor &block_table,
+    const torch::Tensor &cu_seq_lens, const torch::Tensor &token_to_seq,
+    const torch::Tensor &cu_seqlen_ks, const torch::Tensor &cu_seqlen_ke,
+    torch::Tensor &topk_indices, int64_t topk);
 std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_sparse_flashmla_decode(
     const torch::Tensor &q, const torch::Tensor &k_cache,
     const torch::Tensor &indices,
