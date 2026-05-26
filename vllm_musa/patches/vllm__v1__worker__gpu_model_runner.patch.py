@@ -1,39 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""MUSA-0203: backport of vllm-project/vllm#34880 - gpu_model_runner.py.
+"""MUSA DeepSeek/MTP source patches for gpu_model_runner.py.
 
-Wires the caller-side path that makes the draft model's CUDAGraphWrapper(FULL)
-actually capture entries during boot (instead of failing at request time with
-``validate_cudagraph_capturing_enabled``).
+The base patch is MUSA-0203, a backport of vllm-project/vllm#34880 that makes
+the draft model's CUDAGraphWrapper(FULL) capture entries during boot.
 
-Three changes:
-  1. Add ``supports_sd_full_graph`` flag (True for Eagle + padded drafter).
-  2. ``_dummy_run`` captures ``spec_decode_cm`` from ``_build_attention_metadata``
-     and passes it to ``drafter.dummy_run`` as ``common_attn_metadata``.
-  3. ``_dummy_run`` extends the ``use_cudagraphs`` predicate so FULL captures
-     are enabled when ``supports_sd_full_graph``.
-
-The later MUSA-3046 random-sampling guard is kept as an additional source patch
-in this file so it composes with the upstream MUSA-0203 backport.
-
-Skipped from PR #34880 (lower-priority, not strictly required to make the
-draft FULL capture path engage on MUSA's BS=1 SOTA workload):
-  - ``ExecuteModelState.batch_desc`` stash + ``propose_draft_token_ids``
-    target_model_batch_desc threading. Our llm_base_proposer.patch.py
-    derives ``uniform_decode`` locally from common_attn_metadata.max_query_len
-    instead of taking it as an external arg.
-  - ``input_batch.num_reqs_padded`` setter at execute_model.
-  - ``_capture_cudagraphs`` clear_graphs cleanup.
-  - ``_build_attn_group_metadata`` supports_sd_full_graph short-circuit
-    (only matters for unpadded drafter batch, which we don't use).
+The later DeepSeek-V4 MTP guards are kept as additional source patch tuples so
+they compose with the upstream MUSA-0203 backport:
+  - MUSA-3046: skip the drafter for non-greedy MUSA requests.
+  - MUSA-3049: suppress stale drafts after partial rejection and keep
+    DeepSeek-V4 MTP graph capture default-off for token parity.
 
 History: this filename previously held the MUSA-0109
 ``VLLM_MUSA_DRAFT_COPY_DEFAULT_STREAM`` default-stream workaround that targeted
-the now-deleted EagleFullLoopRunner (MUSA-0203 cleanup). That patch is no
-longer reachable.
+the now-deleted EagleFullLoopRunner. That monkey patch is no longer reachable.
 """
 
-# ---- Hunk 1: __init__ - initialize supports_sd_full_graph = False ----
+# ---- MUSA-0203 / PR #34880: initialize supports_sd_full_graph = False ----
 _OLD_INIT_FLAG = """        self.use_aux_hidden_state_outputs = False
         # Set up speculative decoding."""
 
@@ -43,7 +26,7 @@ _NEW_INIT_FLAG = """        self.use_aux_hidden_state_outputs = False
         self.supports_sd_full_graph = False
         # Set up speculative decoding."""
 
-# ---- Hunk 2: __init__ - set the flag for Eagle proposers ----
+# ---- MUSA-0203 / PR #34880: set the flag for Eagle proposers ----
 _OLD_EAGLE_INIT = """            elif self.speculative_config.use_eagle():
                 self.drafter = EagleProposer(self.vllm_config, self.device, self)
                 if self.speculative_config.method == "eagle3":
@@ -63,23 +46,18 @@ _NEW_EAGLE_INIT = """            elif self.speculative_config.use_eagle():
                     not self.speculative_config.disable_padded_drafter_batch
                 )"""
 
-# ---- Hunk 3a: _dummy_run - declare spec_decode_cm None at function top ----
-# The assignment to spec_decode_cm happens inside an `if force_attention or
-# cudagraph_runtime_mode == CUDAGraphMode.FULL:` block. When that branch
-# doesn't fire (PIECEWISE without force_attention) the variable was never
-# assigned, but the drafter.dummy_run call always references it:
-# UnboundLocalError. Match PR #34880's declaration at the top of _dummy_run.
+# ---- MUSA-0203 / PR #34880: declare spec_decode_cm None ----
 _OLD_ATTN_DECL = """        attn_metadata: PerLayerAttnMetadata | None = None"""
 
 _NEW_ATTN_DECL = """        attn_metadata: PerLayerAttnMetadata | None = None
         spec_decode_cm: 'CommonAttentionMetadata | None' = None"""
 
-# ---- Hunk 3b: _dummy_run - capture spec_decode_cm from _build_attention_metadata ----
+# ---- MUSA-0203 / PR #34880: capture spec_decode_cm ----
 _OLD_BUILD_ATTN = """                attn_metadata, _ = self._build_attention_metadata("""
 
 _NEW_BUILD_ATTN = """                attn_metadata, spec_decode_cm = self._build_attention_metadata("""
 
-# ---- Hunk 4: _dummy_run - extend use_cudagraphs predicate ----
+# ---- MUSA-0203 / PR #34880: extend use_cudagraphs predicate ----
 _OLD_USE_CG = """                # Eagle currently only supports PIECEWISE cudagraphs.
                 # Therefore only use cudagraphs if the main model uses PIECEWISE
                 # NOTE(lucas): this is a hack, need to clean up.
@@ -111,7 +89,7 @@ _NEW_USE_CG = """                # MUSA-0203 / PR #34880: Eagle now supports FUL
                     )
                 ) and not self.speculative_config.enforce_eager"""
 
-# ---- Hunk 5: _dummy_run - pass common_attn_metadata to drafter.dummy_run ----
+# ---- MUSA-0203 / PR #34880: pass common_attn_metadata to drafter ----
 _OLD_DRAFTER_CALL = """                self.drafter.dummy_run(
                     num_tokens,
                     use_cudagraphs=use_cudagraphs,
@@ -176,6 +154,94 @@ _NEW_MUSA_RANDOM_DRAFTER_FITS = """            # Decide whether to run the draft
                 input_fits_in_drafter = False
 """
 
+# ---- MUSA-3049: suppress stale drafts after partial DeepSeek-V4 rejection ----
+_OLD_DEEPSEEK_MTP_BOOKKEEPING = """        if propose_drafts_after_bookkeeping:
+            # ngram and other speculative decoding methods use the sampled
+            # tokens on the CPU, so they are run after bookkeeping.
+            propose_draft_token_ids(valid_sampled_token_ids)
+"""
+
+_NEW_DEEPSEEK_MTP_BOOKKEEPING = """        if (
+            spec_config is not None
+            and current_platform.is_musa()
+            and spec_config.method == "mtp"
+            and spec_decode_metadata is not None
+            and not spec_config.disable_padded_drafter_batch
+            and hasattr(self.get_model(), "get_mtp_target_hidden_states")
+        ):
+            # DeepSeek V4 MTP consumes the target pre-hc_head residual. After
+            # a rejection, the verifier recovers a target token but the drafter
+            # may already have generated next-step drafts from the pre-recovery
+            # residual. Bookkeeping has already materialized valid sampled
+            # token IDs on CPU, so suppress those drafts here without adding a
+            # graph-unsafe D2H sync inside the decode/capture path.
+            max_valid_count = self.num_spec_tokens + 1
+            if any(
+                0 < len(tokens) < max_valid_count
+                for tokens in valid_sampled_token_ids
+            ):
+                self._draft_token_ids = [
+                    [] for _ in self.input_batch.req_ids
+                ]
+                self._draft_token_req_ids = self.input_batch.req_ids.copy()
+
+        if propose_drafts_after_bookkeeping:
+            # ngram and other speculative decoding methods use the sampled
+            # tokens on the CPU, so they are run after bookkeeping.
+            propose_draft_token_ids(valid_sampled_token_ids)
+"""
+
+# ---- MUSA-3049: keep DeepSeek-V4 MTP graph capture opt-in ----
+_OLD_DEEPSEEK_MTP_GRAPH_MODE = """        cudagraph_mode = self.compilation_config.resolve_cudagraph_mode_and_sizes(
+            min_cg_support,
+            min_cg_attn_backend,
+            self.uniform_decode_query_len,
+            self.parallel_config.tensor_parallel_size,
+            self.kv_cache_config,
+            self.max_num_reqs,
+            is_profiling=is_profiling,
+        )
+"""
+
+_NEW_DEEPSEEK_MTP_GRAPH_MODE = """        if (
+            current_platform.is_musa()
+            and self.speculative_config is not None
+            and self.speculative_config.method == "mtp"
+            and getattr(self.model_config.hf_config, "model_type", None)
+            == "deepseek_v4"
+            and __import__("os").environ.get(
+                "VLLM_MUSA_DEEPSEEK_V4_MTP_ALLOW_CUDAGRAPH",
+                "0",
+            ).lower()
+            not in ("1", "true", "yes", "on")
+        ):
+            # DeepSeek V4 MTP verifier rows need the eager/prefill metadata
+            # path on MUSA for greedy token parity. Capturing the verifier
+            # shape as a FULL_DECODE_ONLY graph currently trips a MUSA graph
+            # replay failure before output parsing. Keep graph+MTP service
+            # commands correctness-safe by falling back to eager MTP unless a
+            # diagnostic run explicitly opts into the graph path.
+            if self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE:
+                logger.warning(
+                    "Disabling CUDA Graph for DeepSeek V4 MTP on MUSA. "
+                    "Set VLLM_MUSA_DEEPSEEK_V4_MTP_ALLOW_CUDAGRAPH=1 "
+                    "only for diagnostic graph replay runs."
+                )
+            self.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
+            self.compilation_config.cudagraph_capture_sizes = []
+            self.compilation_config.max_cudagraph_capture_size = 0
+
+        cudagraph_mode = self.compilation_config.resolve_cudagraph_mode_and_sizes(
+            min_cg_support,
+            min_cg_attn_backend,
+            self.uniform_decode_query_len,
+            self.parallel_config.tensor_parallel_size,
+            self.kv_cache_config,
+            self.max_num_reqs,
+            is_profiling=is_profiling,
+        )
+"""
+
 PATCHES = [
     (_OLD_INIT_FLAG, _NEW_INIT_FLAG),
     (_OLD_EAGLE_INIT, _NEW_EAGLE_INIT),
@@ -185,4 +251,6 @@ PATCHES = [
     (_OLD_USE_CG, _NEW_USE_CG),
     (_OLD_DRAFTER_CALL, _NEW_DRAFTER_CALL),
     (_OLD_MUSA_RANDOM_DRAFTER_FITS, _NEW_MUSA_RANDOM_DRAFTER_FITS),
+    (_OLD_DEEPSEEK_MTP_BOOKKEEPING, _NEW_DEEPSEEK_MTP_BOOKKEEPING),
+    (_OLD_DEEPSEEK_MTP_GRAPH_MODE, _NEW_DEEPSEEK_MTP_GRAPH_MODE),
 ]
