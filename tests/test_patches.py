@@ -338,6 +338,65 @@ def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Te
         else:
             raise AssertionError("sparse_attn_indexer patch file was not found")
 
+    def test_sparse_indexer_patch_removes_shadowed_exact_torch_fallback(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+def _musa_fill_exact_sparse_indexer_indices():
+    if metadata.num_prefills > 0 and metadata.prefill is not None:
+        for chunk in metadata.prefill.chunks:
+            if _musa_try_fill_prefill_topk_from_indexer_cache_native(
+                q_quant[token_start:token_end],
+                kv_cache,
+                weights[token_start:token_end],
+                chunk,
+                topk_indices_buffer[token_start:token_end, :topk_tokens],
+                topk_tokens,
+                head_dim,
+            ):
+                continue
+            k_deq = _musa_gather_indexer_fp8_cache()
+    return topk_indices_buffer
+
+
+def _musa_fill_exact_sparse_indexer_indices():
+    if metadata.num_prefills > 0 and metadata.prefill is not None:
+        q_deq = q_quant.to(torch.float32)
+        weights_fp32 = weights.to(torch.float32)
+        for chunk in metadata.prefill.chunks:
+            k_deq = _musa_gather_indexer_fp8_cache()
+            _musa_fill_topk_rows_from_indexer_logits()
+    return topk_indices_buffer
+"""
+                normalized = module.normalize_source(source)
+
+                assert (
+                    normalized.count(
+                        "def _musa_fill_exact_sparse_indexer_indices()"
+                    )
+                    == 1
+                )
+                assert (
+                    "_musa_try_fill_prefill_topk_from_indexer_cache_native"
+                    in normalized
+                )
+                assert "q_deq = q_quant.to(torch.float32)" not in normalized
+                assert (
+                    normalized.index(
+                        "_musa_try_fill_prefill_topk_from_indexer_cache_native"
+                    )
+                    < normalized.index("_musa_gather_indexer_fp8_cache")
+                )
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
 
 class TestSparseSWAPatch:
     """Tests for the MUSA DeepSeek-V4 sparse SWA metadata patch."""
