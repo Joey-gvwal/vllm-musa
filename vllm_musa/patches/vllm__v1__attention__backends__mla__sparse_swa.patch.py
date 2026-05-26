@@ -86,30 +86,4 @@ def _compute_token_to_req_and_valid_kernel(
 def _compute_swa_indices_and_lens_kernel(
 """,
     ),
-    (
-        """        self.decode_threshold = (
-            self.reorder_batch_threshold + self.num_speculative_tokens
-        )
-""",
-        """        self.decode_threshold = (
-            self.reorder_batch_threshold + self.num_speculative_tokens
-        )
-        if (
-            __import__(
-                "vllm.platforms", fromlist=["current_platform"]
-            ).current_platform.is_musa()
-            and self.num_speculative_tokens > 0
-            and getattr(
-                self.vllm_config.model_config.hf_config,
-                "model_type",
-                None,
-            ) == "deepseek_v4"
-        ):
-            # MUSA sparse decode for DeepSeek V4 MTP verifier rows
-            # (query_len > 1) is not greedy-token-parity safe. Keep only the
-            # ordinary single-token decode path classified as decode so the
-            # verifier rows use the prefill metadata path.
-            self.decode_threshold = self.reorder_batch_threshold
-""",
-    ),
 ]
