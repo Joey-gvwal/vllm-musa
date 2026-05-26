@@ -4,6 +4,8 @@
 Patch sparse-attention indexer with an opt-in MUSA correctness fallback.
 """
 
+import ast
+
 _PREFILL_NATIVE_HELPER = """
 
 def _musa_try_fill_prefill_topk_from_indexer_cache_native(
@@ -45,6 +47,47 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     )
     return True
 """
+
+
+def _remove_shadowed_exact_fill_definitions(source: str) -> str:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+
+    lines = source.splitlines(keepends=True)
+    exact_defs = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_musa_fill_exact_sparse_indexer_indices"
+        and node.end_lineno is not None
+    ]
+    if len(exact_defs) <= 1:
+        return source
+
+    def function_source(node: ast.FunctionDef) -> str:
+        return "".join(lines[node.lineno - 1 : node.end_lineno])
+
+    native_defs = [
+        node
+        for node in exact_defs
+        if "_musa_try_fill_prefill_topk_from_indexer_cache_native("
+        in function_source(node)
+    ]
+    if not native_defs:
+        return source
+
+    keep = native_defs[-1]
+    remove_ranges = [
+        (node.lineno - 1, node.end_lineno)
+        for node in exact_defs
+        if node is not keep
+    ]
+    for start, end in sorted(remove_ranges, reverse=True):
+        del lines[start:end]
+
+    return "".join(lines)
 
 
 def normalize_source(source: str) -> str:
@@ -152,6 +195,8 @@ def normalize_source(source: str) -> str:
             + "\n\ndef _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int)"
             " -> torch.Tensor:\n",
         )
+
+    source = _remove_shadowed_exact_fill_definitions(source)
 
     return source
 
