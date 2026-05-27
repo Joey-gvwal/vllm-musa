@@ -115,7 +115,8 @@ __global__ void deepseek_v4_indexer_topk_decode_kernel(
             dot += dequant_fp8_e4m3(q_ptr[dim * q_stride2]) *
                    dequant_fp8_e4m3(k_ptr[dim]);
           }
-          accum += dot * weights[row * weights_stride0 + head * weights_stride1];
+          accum += fmaxf(dot, 0.0f) *
+                   weights[row * weights_stride0 + head * weights_stride1];
         }
         score = accum * k_scale;
       }
@@ -242,8 +243,8 @@ __global__ void deepseek_v4_indexer_topk_prefill_kernel(
               dot += dequant_fp8_e4m3(q_ptr[dim * q_stride2]) *
                      dequant_fp8_e4m3(k_ptr[dim]);
             }
-            accum += dot * weights[row * weights_stride0 +
-                                   head * weights_stride1];
+            accum += fmaxf(dot, 0.0f) *
+                     weights[row * weights_stride0 + head * weights_stride1];
           }
           score = accum * k_scale;
         }

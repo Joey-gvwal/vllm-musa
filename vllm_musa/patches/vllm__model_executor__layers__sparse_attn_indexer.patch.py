@@ -640,6 +640,7 @@ def _musa_sparse_indexer_logits(
     # q is FP8-dequantized without an explicit q scale; the FP8 q scale is
     # already folded into weights by fused_indexer_q_rope_quant.
     per_head = torch.einsum("h d, n d -> h n", q.to(torch.float32), k)
+    per_head = per_head.clamp_min(0.0)
     return (per_head * weights.to(torch.float32).unsqueeze(-1)).sum(dim=0)
 
 
@@ -752,6 +753,7 @@ def _musa_fill_decode_topk_from_indexer_cache_capture(
     q_rows = q_deq[:rows].to(torch.float32)
     weight_rows = weights[:rows].to(torch.float32)
     per_head = torch.einsum("r h d, r n d -> r h n", q_rows, gathered)
+    per_head = per_head.clamp_min(0.0)
     logits = (per_head * weight_rows.unsqueeze(-1)).sum(dim=1)
 
     valid = local_pos.unsqueeze(0) < seq_lens[:rows].unsqueeze(-1)
