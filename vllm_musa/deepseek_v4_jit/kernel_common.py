@@ -7,42 +7,236 @@ import os
 from typing import Any
 
 
-_TILELANG_MUSA_OPT_FLAGS = [
+_TILELANG_MUSA_OPT1_DEVICE_COMPILE_FLAGS = [
     "-fmusa-flush-denormals-to-zero",
     "-fno-signed-zeros",
     "-mllvm",
     "-mtgpu-opt-level=1",
 ]
 
+_TILELANG_MUSA_LS_DEVICE_COMPILE_FLAGS = [
+    *_TILELANG_MUSA_OPT1_DEVICE_COMPILE_FLAGS,
+    "-mllvm",
+    "-mtgpu-load-store-opt=1",
+    "-mllvm",
+    "-mtgpu-fold-global-ldst=1",
+    "-mllvm",
+    "-mtgpu-load-cluster-mutation=1",
+    "-mllvm",
+    "-mtgpu-store-cluster-mutation=1",
+    "-mllvm",
+    "-mtgpu-memory-sched-mutation=1",
+]
 
-def _tilelang_musa_pass_configs(tilelang):
+_TILELANG_MUSA_DSA_DEVICE_COMPILE_FLAGS = [
+    "-fmusa-flush-denormals-to-zero",
+    "-fno-signed-zeros",
+    "-fno-strict-aliasing",
+    "-mllvm",
+    "-misched=mtgpu-max-ilp",
+    "-mllvm",
+    "-mtgpu-if-convert=1",
+    "-mllvm",
+    "-mtgpu-tiny-offset-hint=1",
+    "-mllvm",
+    "-misched-recompute-slotindex=1",
+    "-mllvm",
+    "-mtgpu-combine-fop-instr=1",
+]
+
+_TILELANG_MUSA_DSA_FULL_DEVICE_COMPILE_FLAGS = [
+    *_TILELANG_MUSA_DSA_DEVICE_COMPILE_FLAGS,
+    "-mllvm",
+    "-mtgpu-combine-instr-with-burst=1",
+    "-mllvm",
+    "-mtgpu-load-cluster-mutation=1",
+    "-mllvm",
+    "--num-dwords-of-load-in-mutation=64",
+]
+
+
+def _tilelang_musa_compile_profile_flags(
+    default_profile: str | None = None,
+) -> list[str] | None:
+    profile = os.environ.get(
+        "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", ""
+    ).strip().lower()
+    if profile == "" and default_profile is not None:
+        profile = default_profile.strip().lower()
+    if profile in {"", "default", "none", "0"}:
+        return None
+    if profile == "opt1":
+        return _TILELANG_MUSA_OPT1_DEVICE_COMPILE_FLAGS
+    if profile == "ls":
+        return _TILELANG_MUSA_LS_DEVICE_COMPILE_FLAGS
+    if profile == "dsa":
+        return _TILELANG_MUSA_DSA_DEVICE_COMPILE_FLAGS
+    if profile == "dsa_full":
+        return _TILELANG_MUSA_DSA_FULL_DEVICE_COMPILE_FLAGS
+    raise ValueError(
+        "Unsupported VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE="
+        f"{profile!r}; expected one of default,opt1,ls,dsa,dsa_full"
+    )
+
+
+def _add_pass_config(
+    pass_configs: dict[Any, Any],
+    tilelang,
+    key_name: str,
+    value: Any,
+) -> None:
+    key = getattr(tilelang.PassConfigKey, key_name, None)
+    if key is not None:
+        pass_configs[key] = value
+
+
+def _tilelang_musa_pass_configs(tilelang, *, compile_profile: str | None = None):
     """Return optional MUSA pass configs without requiring a specific TileLang build."""
-    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG") != "1":
+    old_pass_config = os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG")
+    default_profile = "opt1" if old_pass_config == "1" else compile_profile
+    compile_flags = _tilelang_musa_compile_profile_flags(default_profile)
+    if old_pass_config != "1" and compile_flags is None:
         return None
 
     pass_configs = {}
-    for key_name, value in (
-        ("TL_ENABLE_MUSA_BURST", True),
-        ("TL_ENABLE_REDUCE_BURST", True),
-        ("TL_DEVICE_COMPILE_FLAGS", _TILELANG_MUSA_OPT_FLAGS),
+    if old_pass_config == "1":
+        _add_pass_config(pass_configs, tilelang, "TL_ENABLE_MUSA_BURST", True)
+        _add_pass_config(pass_configs, tilelang, "TL_ENABLE_REDUCE_BURST", True)
+    if (
+        os.environ.get(
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_AGGRESSIVE_PASS_CONFIG"
+        ) == "1"
     ):
-        key = getattr(tilelang.PassConfigKey, key_name, None)
-        if key is not None:
-            pass_configs[key] = value
+        _add_pass_config(
+            pass_configs, tilelang, "TL_DISABLE_THREAD_STORAGE_SYNC", True
+        )
+        _add_pass_config(pass_configs, tilelang, "TL_DISABLE_SAFE_MEMORY_ACCESS", True)
+        _add_pass_config(pass_configs, tilelang, "TL_ENABLE_LOWER_LDGSTG", True)
+        _add_pass_config(
+            pass_configs, tilelang, "TL_ENABLE_LOWER_LDGSTG_PREDICATED", True
+        )
+    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_INDEX_PROMOTION") == "1":
+        _add_pass_config(
+            pass_configs, tilelang, "TL_DISABLE_INDEX_TYPE_PROMOTION", True
+        )
+    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS") == "1":
+        _add_pass_config(pass_configs, tilelang, "TL_DISABLE_HOST_ASSERTS", True)
+    if compile_flags is not None:
+        _add_pass_config(
+            pass_configs, tilelang, "TL_DEVICE_COMPILE_FLAGS", compile_flags
+        )
     return pass_configs or None
 
 
-def _tilelang_jit(tilelang, name: str, pass_configs=None):
+def _tilelang_musa_burst_reduce_pass_configs(
+    tilelang,
+    *,
+    compile_profile: str | None = None,
+):
+    pass_configs = {}
+    _add_pass_config(pass_configs, tilelang, "TL_ENABLE_MUSA_BURST", True)
+    _add_pass_config(pass_configs, tilelang, "TL_ENABLE_REDUCE_BURST", True)
+    compile_flags = _tilelang_musa_compile_profile_flags(compile_profile)
+    if compile_flags is not None:
+        _add_pass_config(
+            pass_configs, tilelang, "TL_DEVICE_COMPILE_FLAGS", compile_flags
+        )
+    return pass_configs or None
+
+
+def _tilelang_musa_aggressive_pass_configs(
+    tilelang,
+    *,
+    disable_index_promotion: bool = True,
+    compile_profile: str | None = None,
+):
+    pass_configs = _tilelang_musa_burst_reduce_pass_configs(
+        tilelang,
+        compile_profile=compile_profile,
+    ) or {}
+    _add_pass_config(pass_configs, tilelang, "TL_DISABLE_THREAD_STORAGE_SYNC", True)
+    _add_pass_config(pass_configs, tilelang, "TL_DISABLE_SAFE_MEMORY_ACCESS", True)
+    _add_pass_config(pass_configs, tilelang, "TL_ENABLE_LOWER_LDGSTG", True)
+    _add_pass_config(pass_configs, tilelang, "TL_ENABLE_LOWER_LDGSTG_PREDICATED", True)
+    if disable_index_promotion:
+        _add_pass_config(
+            pass_configs, tilelang, "TL_DISABLE_INDEX_TYPE_PROMOTION", True
+        )
+    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS") == "1":
+        _add_pass_config(pass_configs, tilelang, "TL_DISABLE_HOST_ASSERTS", True)
+    return pass_configs or None
+
+
+def _tilelang_musa_dsa_pass_configs(
+    tilelang,
+    *,
+    full: bool = False,
+    disable_index_promotion: bool = True,
+):
+    pass_configs = _tilelang_musa_aggressive_pass_configs(
+        tilelang,
+        disable_index_promotion=disable_index_promotion,
+    ) or {}
+    flags = (
+        _TILELANG_MUSA_DSA_FULL_DEVICE_COMPILE_FLAGS
+        if full
+        else _TILELANG_MUSA_DSA_DEVICE_COMPILE_FLAGS
+    )
+    _add_pass_config(pass_configs, tilelang, "TL_DEVICE_COMPILE_FLAGS", flags)
+    return pass_configs or None
+
+
+def _tilelang_jit(
+    tilelang,
+    name: str,
+    pass_configs=None,
+    *,
+    target: str | None = "musa",
+):
     if pass_configs is None:
         pass_configs = _tilelang_musa_pass_configs(tilelang)
-    try:
-        if pass_configs is None:
-            return tilelang.jit()
-        return tilelang.jit(pass_configs=pass_configs)
-    except TypeError as exc:
-        if "pass_configs" not in str(exc):
-            raise
-        return tilelang.jit()
+    base_kwargs = {}
+    if target is not None:
+        base_kwargs["target"] = target
+    if name:
+        base_kwargs["name"] = name
+    if pass_configs is not None:
+        base_kwargs["pass_configs"] = pass_configs
+    candidate_keys = (
+        ("target", "name", "pass_configs"),
+        ("target", "pass_configs"),
+        ("target", "name"),
+        ("target",),
+        ("name", "pass_configs"),
+        ("pass_configs",),
+        ("name",),
+        (),
+    )
+    candidates = [
+        {key: base_kwargs[key] for key in keys if key in base_kwargs}
+        for keys in candidate_keys
+    ]
+
+    seen = set()
+    last_error: TypeError | None = None
+    for kwargs in candidates:
+        key = tuple(sorted(kwargs))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            return tilelang.jit(**kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            if not any(
+                text in message
+                for text in ("name", "pass_configs", "target", "unexpected")
+            ):
+                raise
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return tilelang.jit()
 
 
 def _patch_tilelang_musa_wrapper() -> bool:
