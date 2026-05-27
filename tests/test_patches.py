@@ -252,6 +252,7 @@ class TestSparseAttnIndexerPatch:
                     "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL"
                     in new_source
                 )
+                assert "per_head = per_head.clamp_min(0.0)" in new_source
                 break
         else:
             raise AssertionError("sparse_attn_indexer patch file was not found")
