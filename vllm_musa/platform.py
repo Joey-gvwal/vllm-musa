@@ -57,6 +57,21 @@ def _is_qwen3_moe_fp8_model(model_config: Any | None) -> bool:
     return False
 
 
+def _is_deepseek_v4_model(model_config: Any | None) -> bool:
+    if model_config is None:
+        return False
+
+    hf_config = getattr(model_config, "hf_config", None)
+    model_type = getattr(hf_config, "model_type", None)
+    if model_type == "deepseek_v4":
+        return True
+
+    architectures = getattr(model_config, "architectures", None)
+    if architectures is None and hf_config is not None:
+        architectures = getattr(hf_config, "architectures", None)
+    return any("DeepseekV4" in str(arch) for arch in architectures or ())
+
+
 @cache
 def _get_backend_priorities(
     use_mla: bool,
@@ -345,6 +360,14 @@ class MUSAPlatformBase(Platform):
 
         parallel_config = vllm_config.parallel_config
         model_config = vllm_config.model_config
+
+        if _is_deepseek_v4_model(model_config):
+            if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV") is None:
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] = "1"
+                logger.info(
+                    "Enabling DeepSeek-V4 MUSA fused-MoE GEMV dispatcher "
+                    "(set VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV=0 to disable)."
+                )
 
         if parallel_config.worker_cls == "auto":
             parallel_config.worker_cls = "vllm_musa.worker.MTGPUWorker"
