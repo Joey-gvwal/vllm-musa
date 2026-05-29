@@ -1041,10 +1041,14 @@ class TestScaledMMKernelPatch:
         ).read_text()
 
         assert "torch.ops.vllm.musa_deepgemm_fp8_op" in source
+        assert "torch.ops.vllm.musa_fp8_small_m_gemv_op" in source
         assert "direct_register_custom_op(" in source
         assert '"musa_deepgemm_fp8_op"' in source
+        assert '"musa_fp8_small_m_gemv_op"' in source
         assert "_musa_deepgemm_fp8_op_fake" in source
+        assert "_musa_fp8_small_m_gemv_op_fake" in source
         assert "VLLM_MUSA_DEEPGEMM_ROW_MAJOR_ACT_SCALES" in source
+        assert "VLLM_MUSA_FP8_SMALL_M_GEMV" in source
 
     def test_musa_deepgemm_row_major_scale_gate(self, monkeypatch):
         from vllm_musa.model_executor.kernels.linear.scaled_mm import deep_gemm
