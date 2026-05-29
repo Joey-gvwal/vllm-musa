@@ -318,11 +318,18 @@ def _musa_try_native_deepseek_v4_qnorm_rope_kv_insert(
     try:
         from vllm_musa import _custom_ops as _musa_custom_ops
 
+        native_slot_mapping = slot_mapping
+        if slot_mapping.shape[0] > q.shape[0]:
+            # Graph+MTP warmup may carry padded cache slots while q/kv only
+            # contain active rows. Match the torch fallback's cache-store
+            # contract by bounding stores to the active q/kv row count.
+            native_slot_mapping = slot_mapping[: q.shape[0]].contiguous()
+
         _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
             q,
             kv,
             k_cache,
-            slot_mapping,
+            native_slot_mapping,
             positions,
             cos_sin_cache,
             eps,
@@ -754,6 +761,65 @@ def _musa_deepseek_v4_fp8_einsum_fallback(
             self.eps,
             swa_metadata.block_size,
         )
+""",
+    ),
+    (
+        """        _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
+            q,
+            kv,
+            k_cache,
+            slot_mapping,
+            positions,
+            cos_sin_cache,
+            eps,
+            block_size,
+        )
+""",
+        """        native_slot_mapping = slot_mapping
+        if slot_mapping.shape[0] > q.shape[0]:
+            # Graph+MTP warmup may carry padded cache slots while q/kv only
+            # contain active rows. Match the torch fallback's cache-store
+            # contract by bounding stores to the active q/kv row count.
+            native_slot_mapping = slot_mapping[: q.shape[0]].contiguous()
+
+        _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
+            q,
+            kv,
+            k_cache,
+            native_slot_mapping,
+            positions,
+            cos_sin_cache,
+            eps,
+            block_size,
+        )
+""",
+    ),
+    (
+        """        swa_indices = swa_metadata.decode_swa_indices
+        swa_lens = swa_metadata.decode_swa_lens
+
+        # We treat queries in the same seq as different queries
+        # and later we only attend by generated indices.
+        # q arrives pre-padded to self.padded_heads by the outer wrapper.
+        q = q.unsqueeze(1)
+""",
+        """        active_decode_tokens = q.shape[0]
+        if topk_indices is not None:
+            topk_indices = topk_indices[:active_decode_tokens]
+        if topk_lens is not None:
+            topk_lens = topk_lens[:active_decode_tokens]
+
+        swa_indices = swa_metadata.decode_swa_indices
+        swa_lens = swa_metadata.decode_swa_lens
+        if swa_indices is not None:
+            swa_indices = swa_indices[:active_decode_tokens]
+        if swa_lens is not None:
+            swa_lens = swa_lens[:active_decode_tokens]
+
+        # We treat queries in the same seq as different queries
+        # and later we only attend by generated indices.
+        # q arrives pre-padded to self.padded_heads by the outer wrapper.
+        q = q.unsqueeze(1)
 """,
     ),
     (

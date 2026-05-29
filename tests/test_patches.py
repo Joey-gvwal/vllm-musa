@@ -205,6 +205,116 @@ class TestGPUModelRunnerPatch:
             raise AssertionError("gpu_model_runner patch file was not found")
 
 
+class TestLLMBaseProposerPatch:
+    """Tests for MUSA LLM base proposer speculative guards."""
+
+    def test_draft_full_wrapper_is_musa_opt_in(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.spec_decode.llm_base_proposer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert (
+                    'draft_full_wrap_default = "0" if current_platform.is_musa()'
+                    in new_source
+                )
+                assert 'VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default' in (
+                    new_source
+                )
+                assert "self.model = CUDAGraphWrapper(" in new_source
+                break
+        else:
+            raise AssertionError("llm_base_proposer patch file was not found")
+
+    def test_draft_full_wrapper_normalizer_updates_old_default(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.spec_decode.llm_base_proposer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP (default ON since the
+        # query_start_loc in-place hunk fixed the captured-replay stale
+        # data_ptr issue). Set to "0" to disable for debugging.
+        import os as _os
+        cudagraph_mode = self.compilation_config.cudagraph_mode
+        if (
+            _os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1") == "1"
+            and cudagraph_mode.has_full_cudagraphs()
+"""
+                normalized = module.normalize_source(source)
+
+                assert '_os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1")' not in (
+                    normalized
+                )
+                assert (
+                    'draft_full_wrap_default = "0" if current_platform.is_musa()'
+                    in normalized
+                )
+                assert 'VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default' in (
+                    normalized
+                )
+                break
+        else:
+            raise AssertionError("llm_base_proposer patch file was not found")
+
+
+class TestDeepSeekV4AttentionPatch:
+    """Tests for the MUSA DeepSeek-V4 attention patch."""
+
+    def test_qnorm_rope_native_path_trims_padded_slot_mapping(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.deepseek_v4_attention":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "native_slot_mapping = slot_mapping" in new_source
+                assert "slot_mapping.shape[0] > q.shape[0]" in new_source
+                assert "slot_mapping[: q.shape[0]].contiguous()" in new_source
+                assert "native_slot_mapping," in new_source
+                assert new_source.count("native_slot_mapping = slot_mapping") >= 2
+                break
+        else:
+            raise AssertionError("deepseek_v4_attention patch file was not found")
+
+    def test_custom_ops_wrapper_trims_padded_slot_mapping(self):
+        source = (Path(__file__).parents[1] / "vllm_musa/_custom_ops.py").read_text()
+
+        assert "def deepseek_v4_qnorm_rope_kv_insert(" in source
+        assert "slot_mapping.shape[0] > q.shape[0]" in source
+        assert "slot_mapping[: q.shape[0]].contiguous()" in source
+
+    def test_decode_flashmla_path_trims_padded_sparse_metadata(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.deepseek_v4_attention":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "active_decode_tokens = q.shape[0]" in new_source
+                assert "topk_indices[:active_decode_tokens]" in new_source
+                assert "topk_lens[:active_decode_tokens]" in new_source
+                assert "swa_indices[:active_decode_tokens]" in new_source
+                assert "swa_lens[:active_decode_tokens]" in new_source
+                break
+        else:
+            raise AssertionError("deepseek_v4_attention patch file was not found")
+
+
 class TestSparseAttnIndexerPatch:
     """Tests for the MUSA DeepSeek-V4 sparse indexer patch."""
 

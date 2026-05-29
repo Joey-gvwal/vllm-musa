@@ -34,6 +34,36 @@ When upstream PR #34880 merges (or v0.20.0-dev rebases onto it), this
 patch's anchors will stop matching and the file should be deleted.
 """
 
+
+def normalize_source(source: str) -> str:
+    """Upgrade already-persisted MUSA draft FULL-wrapper patched sources."""
+    return source.replace(
+        """        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP (default ON since the
+        # query_start_loc in-place hunk fixed the captured-replay stale
+        # data_ptr issue). Set to "0" to disable for debugging.
+        import os as _os
+        cudagraph_mode = self.compilation_config.cudagraph_mode
+        if (
+            _os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1") == "1"
+            and cudagraph_mode.has_full_cudagraphs()
+""",
+        """        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP. Default OFF on MUSA after the
+        # v0.20.0-dev rebase because the wrapped DeepSeek-V4 MTP draft model
+        # can fail graph memory profiling; set to "1" to re-enable for
+        # diagnostics after the draft FULL graph path is fixed.
+        import os as _os
+        cudagraph_mode = self.compilation_config.cudagraph_mode
+        draft_full_wrap_default = "0" if current_platform.is_musa() else "1"
+        if (
+            _os.environ.get(
+                "VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default
+            )
+            == "1"
+            and cudagraph_mode.has_full_cudagraphs()
+""",
+    )
+
+
 # ---- Hunk 1: import CUDAGraphWrapper + BatchDescriptor ----
 _OLD_IMPORTS = """from vllm.distributed.parallel_state import get_pp_group
 from vllm.forward_context import set_forward_context"""
@@ -102,13 +132,18 @@ _NEW_LOAD_MODEL = """self.model = self._get_model()
         # CUDAGraphWrapper when target uses FULL captures. CUDAGraphWrapper
         # is a no-op when the runtime mode at call time doesn't match FULL,
         # so this is safe when target is PIECEWISE-only.
-        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP (default ON since the
-        # query_start_loc in-place hunk fixed the captured-replay stale
-        # data_ptr issue). Set to "0" to disable for debugging.
+        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP. Default OFF on MUSA after the
+        # v0.20.0-dev rebase because the wrapped DeepSeek-V4 MTP draft model
+        # can fail graph memory profiling; set to "1" to re-enable for
+        # diagnostics after the draft FULL graph path is fixed.
         import os as _os
         cudagraph_mode = self.compilation_config.cudagraph_mode
+        draft_full_wrap_default = "0" if current_platform.is_musa() else "1"
         if (
-            _os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1") == "1"
+            _os.environ.get(
+                "VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default
+            )
+            == "1"
             and cudagraph_mode.has_full_cudagraphs()
             and not self.vllm_config.parallel_config.use_ubatching
             and not self.speculative_config.disable_padded_drafter_batch
