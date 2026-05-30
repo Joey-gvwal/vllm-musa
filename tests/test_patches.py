@@ -3,6 +3,7 @@
 """Tests for the MUSA platform patches module."""
 
 import importlib
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -1000,6 +1001,60 @@ class TestMUSAPlatformDefaults:
         assert vllm_config.compilation_config.cudagraph_mode == CUDAGraphMode.PIECEWISE
         assert vllm_config.compilation_config.max_cudagraph_capture_size == 512
         assert vllm_config.compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8]
+
+    def test_deepseek_v4_defaults_moe_gemv_block32x8(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV", None)
+            os.environ.pop("VLLM_MUSA_GEMV_MOE_BLOCK", None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] == "1"
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
+
+    def test_deepseek_v4_preserves_user_moe_gemv_block(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {"VLLM_MUSA_GEMV_MOE_BLOCK": "16x8"}):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
+
+    def test_deepseek_v4_preserves_empty_user_moe_gemv_block(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {"VLLM_MUSA_GEMV_MOE_BLOCK": ""}):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == ""
+
+    def test_non_deepseek_v4_does_not_default_moe_gemv_block(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["Qwen3ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_GEMV_MOE_BLOCK", None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase

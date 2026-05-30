@@ -34,6 +34,8 @@ logger = init_logger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _QWEN3_MOE_FP8_MAX_CUDAGRAPH_CAPTURE_SIZE = 64
+_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV = "VLLM_MUSA_GEMV_MOE_BLOCK"
+_DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK = "32x8"
 
 
 def _is_qwen3_moe_fp8_model(model_config: Any | None) -> bool:
@@ -367,6 +369,16 @@ class MUSAPlatformBase(Platform):
                 logger.info(
                     "Enabling DeepSeek-V4 MUSA fused-MoE GEMV dispatcher "
                     "(set VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV=0 to disable)."
+                )
+            if _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV not in os.environ:
+                os.environ[_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV] = (
+                    _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK
+                )
+                logger.info(
+                    "Defaulting DeepSeek-V4 MUSA GEMV/MoE block selector to "
+                    "%s=%s (set it explicitly to override).",
+                    _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV,
+                    _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK,
                 )
 
         if parallel_config.worker_cls == "auto":
