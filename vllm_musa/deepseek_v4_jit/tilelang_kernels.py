@@ -23,6 +23,16 @@ SCALE_DIM = NOPE_DIM // 64
 TOKEN_VALUE_BYTES = NOPE_DIM + ROPE_DIM * 2
 TOKEN_SCALE_BYTES = SCALE_DIM + 1
 FP8_MAX = 448.0
+_MHC_TILELANG_COMPILE_PROFILE_ENV = (
+    "VLLM_MUSA_DEEPSEEK_V4_TILELANG_MHC_COMPILE_PROFILE"
+)
+
+
+def _mhc_tilelang_pass_configs():
+    return _tilelang_musa_pass_configs(
+        tilelang,
+        override_profile_env=_MHC_TILELANG_COMPILE_PROFILE_ENV,
+    )
 
 
 def _warp_reduce_sum(value):
@@ -49,7 +59,7 @@ def _warp_reduce_max(value):
 def mhc_pre_split_sinkhorn_kernel(hc_mult: int, sinkhorn_repeat: int):
     hc_mult3 = hc_mult * (2 + hc_mult)
 
-    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    @tilelang.jit(target="musa", pass_configs=_mhc_tilelang_pass_configs())
     def _mhc_pre_split_sinkhorn_kernel():
         num_tokens = T.dynamic("num_tokens")
 
@@ -322,7 +332,7 @@ def mhc_post_kernel(hidden_size: int, hidden_block: int = 256, threads: int = 25
             f"invalid MHC post hidden_block={hidden_block} for hidden={hidden_size}"
         )
 
-    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    @tilelang.jit(target="musa", pass_configs=_mhc_tilelang_pass_configs())
     def _mhc_post_kernel():
         num_tokens = T.dynamic("num_tokens")
 

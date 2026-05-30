@@ -5,6 +5,9 @@
 from vllm_musa.deepseek_v4_jit import kernel_common
 
 
+_MHC_COMPILE_PROFILE_ENV = "VLLM_MUSA_DEEPSEEK_V4_TILELANG_MHC_COMPILE_PROFILE"
+
+
 class _PassConfigKey:
     TL_ENABLE_MUSA_BURST = "burst"
     TL_ENABLE_REDUCE_BURST = "reduce_burst"
@@ -72,6 +75,55 @@ def test_compile_profile_and_aggressive_switches(monkeypatch):
     assert configs["lower_ldgstg"] is True
     assert configs["lower_ldgstg_predicated"] is True
     assert configs["disable_index_promotion"] is True
+
+
+def test_mhc_compile_profile_override_wins_over_global(monkeypatch):
+    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", raising=False)
+    monkeypatch.setenv(
+        "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", "dsa_full"
+    )
+    monkeypatch.setenv(_MHC_COMPILE_PROFILE_ENV, "opt1")
+
+    configs = kernel_common._tilelang_musa_pass_configs(
+        _TileLangStub(),
+        override_profile_env=_MHC_COMPILE_PROFILE_ENV,
+    )
+
+    assert "-mtgpu-opt-level=1" in configs["compile_flags"]
+    assert "-mtgpu-combine-instr-with-burst=1" not in configs["compile_flags"]
+
+
+def test_mhc_compile_profile_override_can_disable_global(monkeypatch):
+    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", raising=False)
+    monkeypatch.setenv(
+        "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", "dsa_full"
+    )
+    monkeypatch.setenv(_MHC_COMPILE_PROFILE_ENV, "default")
+
+    configs = kernel_common._tilelang_musa_pass_configs(
+        _TileLangStub(),
+        override_profile_env=_MHC_COMPILE_PROFILE_ENV,
+    )
+
+    assert configs is None
+
+
+def test_mhc_compile_profile_override_validates_profile(monkeypatch):
+    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", raising=False)
+    monkeypatch.setenv(
+        "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", "dsa_full"
+    )
+    monkeypatch.setenv(_MHC_COMPILE_PROFILE_ENV, "bogus")
+
+    try:
+        kernel_common._tilelang_musa_pass_configs(
+            _TileLangStub(),
+            override_profile_env=_MHC_COMPILE_PROFILE_ENV,
+        )
+    except ValueError as exc:
+        assert _MHC_COMPILE_PROFILE_ENV in str(exc)
+    else:
+        raise AssertionError("invalid MHC TileLang profile did not fail")
 
 
 def test_explicit_dsa_profile_helper(monkeypatch):

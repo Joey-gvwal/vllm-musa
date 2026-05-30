@@ -53,14 +53,22 @@ _TILELANG_MUSA_DSA_FULL_DEVICE_COMPILE_FLAGS = [
     "-mllvm",
     "--num-dwords-of-load-in-mutation=64",
 ]
+_TILELANG_COMPILE_PROFILE_ENV = "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE"
 
 
 def _tilelang_musa_compile_profile_flags(
     default_profile: str | None = None,
+    *,
+    override_profile_env: str | None = None,
 ) -> list[str] | None:
-    profile = os.environ.get(
-        "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", ""
-    ).strip().lower()
+    profile_env = _TILELANG_COMPILE_PROFILE_ENV
+    profile = ""
+    if override_profile_env is not None and override_profile_env in os.environ:
+        profile = os.environ.get(override_profile_env, "").strip().lower()
+        if profile != "":
+            profile_env = override_profile_env
+    if profile == "":
+        profile = os.environ.get(_TILELANG_COMPILE_PROFILE_ENV, "").strip().lower()
     if profile == "" and default_profile is not None:
         profile = default_profile.strip().lower()
     if profile in {"", "default", "none", "0"}:
@@ -74,7 +82,7 @@ def _tilelang_musa_compile_profile_flags(
     if profile == "dsa_full":
         return _TILELANG_MUSA_DSA_FULL_DEVICE_COMPILE_FLAGS
     raise ValueError(
-        "Unsupported VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE="
+        f"Unsupported {profile_env}="
         f"{profile!r}; expected one of default,opt1,ls,dsa,dsa_full"
     )
 
@@ -90,11 +98,19 @@ def _add_pass_config(
         pass_configs[key] = value
 
 
-def _tilelang_musa_pass_configs(tilelang, *, compile_profile: str | None = None):
+def _tilelang_musa_pass_configs(
+    tilelang,
+    *,
+    compile_profile: str | None = None,
+    override_profile_env: str | None = None,
+):
     """Return optional MUSA pass configs without requiring a specific TileLang build."""
     old_pass_config = os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG")
     default_profile = "opt1" if old_pass_config == "1" else compile_profile
-    compile_flags = _tilelang_musa_compile_profile_flags(default_profile)
+    compile_flags = _tilelang_musa_compile_profile_flags(
+        default_profile,
+        override_profile_env=override_profile_env,
+    )
     if old_pass_config != "1" and compile_flags is None:
         return None
 
