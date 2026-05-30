@@ -39,6 +39,15 @@ _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK = "32x8"
 _DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV = (
     "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"
 )
+_DEEPSEEK_V4_TP8_PROFILE_ENV = "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE"
+_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_PROFILE = "balanced_long_prefill"
+_DEEPSEEK_V4_TP8_PROFILE_DEFAULTS = {
+    _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV: "16x8",
+    "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X": "256",
+    _DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV: "256",
+    "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE": "dsa_full",
+    "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "2048",
+}
 
 
 def _is_qwen3_moe_fp8_model(model_config: Any | None) -> bool:
@@ -88,6 +97,52 @@ def _deepseek_v4_flashmla_sparse_block_size(model_config: Any | None) -> int:
     raise ValueError(
         f"{_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV} must be 64 or 256, "
         f"got {value!r}"
+    )
+
+
+def _apply_deepseek_v4_tp8_profile(
+    model_config: Any | None,
+    tensor_parallel_size: int | None,
+) -> None:
+    profile = os.getenv(_DEEPSEEK_V4_TP8_PROFILE_ENV)
+    if profile is None:
+        return
+
+    profile = profile.strip()
+    if not profile or not _is_deepseek_v4_model(model_config):
+        return
+    if profile != _DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_PROFILE:
+        raise ValueError(
+            f"{_DEEPSEEK_V4_TP8_PROFILE_ENV} must be "
+            f"{_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_PROFILE!r}, "
+            f"got {profile!r}"
+        )
+    if tensor_parallel_size != 8:
+        logger.info(
+            "Ignoring %s=%s because tensor_parallel_size=%s; the profile is "
+            "validated only for DeepSeek-V4 TP8.",
+            _DEEPSEEK_V4_TP8_PROFILE_ENV,
+            profile,
+            tensor_parallel_size,
+        )
+        return
+
+    applied = []
+    preserved = []
+    for env_name, default_value in _DEEPSEEK_V4_TP8_PROFILE_DEFAULTS.items():
+        if env_name in os.environ:
+            preserved.append(env_name)
+            continue
+        os.environ[env_name] = default_value
+        applied.append(f"{env_name}={default_value}")
+
+    logger.info(
+        "Applied DeepSeek-V4 TP8 profile %s=%s; set defaults: %s; preserved "
+        "explicit envs: %s.",
+        _DEEPSEEK_V4_TP8_PROFILE_ENV,
+        profile,
+        ", ".join(applied) if applied else "none",
+        ", ".join(preserved) if preserved else "none",
     )
 
 
@@ -381,6 +436,10 @@ class MUSAPlatformBase(Platform):
         model_config = vllm_config.model_config
 
         if _is_deepseek_v4_model(model_config):
+            _apply_deepseek_v4_tp8_profile(
+                model_config,
+                getattr(parallel_config, "tensor_parallel_size", None),
+            )
             if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV") is None:
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] = "1"
                 logger.info(
