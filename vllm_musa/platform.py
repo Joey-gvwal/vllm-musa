@@ -36,6 +36,9 @@ _R = TypeVar("_R")
 _QWEN3_MOE_FP8_MAX_CUDAGRAPH_CAPTURE_SIZE = 64
 _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV = "VLLM_MUSA_GEMV_MOE_BLOCK"
 _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK = "32x8"
+_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV = (
+    "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"
+)
 
 
 def _is_qwen3_moe_fp8_model(model_config: Any | None) -> bool:
@@ -72,6 +75,20 @@ def _is_deepseek_v4_model(model_config: Any | None) -> bool:
     if architectures is None and hf_config is not None:
         architectures = getattr(hf_config, "architectures", None)
     return any("DeepseekV4" in str(arch) for arch in architectures or ())
+
+
+def _deepseek_v4_flashmla_sparse_block_size(model_config: Any | None) -> int:
+    value = os.getenv(_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV)
+    if value is None or not _is_deepseek_v4_model(model_config):
+        return 64
+
+    value = value.strip()
+    if value in ("64", "256"):
+        return int(value)
+    raise ValueError(
+        f"{_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV} must be 64 or 256, "
+        f"got {value!r}"
+    )
 
 
 @cache
@@ -429,10 +446,17 @@ class MUSAPlatformBase(Platform):
                 if not use_flashmla_sparse:
                     use_flashmla_sparse = True
 
-                if use_flashmla_sparse and cache_config.block_size != 64:
-                    cache_config.block_size = 64
+                sparse_block_size = _deepseek_v4_flashmla_sparse_block_size(
+                    model_config
+                )
+                if (
+                    use_flashmla_sparse
+                    and cache_config.block_size != sparse_block_size
+                ):
+                    cache_config.block_size = sparse_block_size
                     logger.info(
-                        "Forcing kv cache block size to 64 for FlashMLASparse backend."
+                        "Forcing kv cache block size to %d for FlashMLASparse backend.",
+                        sparse_block_size,
                     )
 
         scheduler_config = vllm_config.scheduler_config

@@ -897,6 +897,10 @@ class TestMUSAPlatformDefaults:
         cudagraph_capture_sizes=None,
         cudagraph_mode=None,
         tensor_parallel_size=1,
+        use_mla=False,
+        index_topk=None,
+        attention_backend=None,
+        cache_block_size=16,
     ):
         from types import SimpleNamespace
 
@@ -904,23 +908,26 @@ class TestMUSAPlatformDefaults:
             architectures=architectures,
             quantization_config=quantization_config,
         )
+        if index_topk is not None:
+            hf_config.index_topk = index_topk
         return SimpleNamespace(
             model_config=SimpleNamespace(
                 architectures=architectures,
                 hf_config=hf_config,
                 quantization=quantization,
-                use_mla=False,
+                use_mla=use_mla,
                 is_mm_prefix_lm=False,
             ),
             parallel_config=SimpleNamespace(
                 tensor_parallel_size=tensor_parallel_size,
                 worker_cls="auto",
             ),
-            cache_config=SimpleNamespace(block_size=16),
+            cache_config=SimpleNamespace(block_size=cache_block_size),
             scheduler_config=SimpleNamespace(
                 is_multimodal_model=False,
                 disable_chunked_mm_input=False,
             ),
+            attention_config=SimpleNamespace(backend=attention_backend),
             compilation_config=SimpleNamespace(
                 custom_ops=[],
                 cudagraph_mode=cudagraph_mode,
@@ -1055,6 +1062,93 @@ class TestMUSAPlatformDefaults:
             MUSAPlatformBase.check_and_update_config(vllm_config)
 
             assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
+
+    def test_deepseek_v4_flashmla_sparse_defaults_block64(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=16,
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE", None)
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
+
+    def test_deepseek_v4_flashmla_sparse_preserves_explicit_block64(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "64"},
+        ):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
+
+    def test_deepseek_v4_flashmla_sparse_allows_block256_opt_in(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "256"},
+        ):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 256
+
+    def test_deepseek_v4_flashmla_sparse_rejects_invalid_block_size(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "128"},
+        ):
+            with pytest.raises(ValueError, match="must be 64 or 256"):
+                MUSAPlatformBase.check_and_update_config(vllm_config)
+
+    def test_non_deepseek_v4_flashmla_sparse_ignores_block256_opt_in(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["OtherSparseMLAForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "256"},
+        ):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
