@@ -5,7 +5,7 @@ Patch for vllm.distributed.device.communicators.custom_all_reduce.
 """
 
 PATCHES = [
-    # Patch CustomAllreduce.max_size
+    # Patch CustomAllreduce.max_size.
     (
         "max_size=8192 * 1024,",
         "max_size=16 * 8192 * 1024,",
@@ -15,7 +15,7 @@ PATCHES = [
         "if cuda_visible_devices:",
         "if cuda_visible_devices and current_platform.is_cuda():",
     ),
-    # Patch CustomAllreduce enable musa's custom_allreduce
+    # Patch CustomAllreduce enable musa's custom_allreduce.
     (
         "if not current_platform.is_rocm() and not _can_p2p(rank, world_size):",
         "if not current_platform.is_rocm() and not current_platform.is_musa() and not _can_p2p(rank, world_size):",
@@ -28,7 +28,7 @@ PATCHES = [
     # MUSA-0062 (torch 2.7.1): removed MUSA-0052's `world_size > 2` CAR
     # gate, re-enabling custom_all_reduce on MUSA for TP>2. The
     # compile-path safety (Inductor lowering past the Python alignment
-    # gate) was handled at the kernel level — see generated/musa0062/.
+    # gate) was handled at the kernel level; see generated/musa0062/.
     #
     # MUSA-0069 (torch >= 2.9): added a torch-version-aware `world_size
     # > 2` disable because the kernel rejected non-vector-aligned

@@ -10,7 +10,6 @@ import shlex
 import shutil
 from pathlib import Path
 
-
 FALSE_VALUES = {"0", "false", "off", "no"}
 WRAPPER_SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
@@ -191,7 +190,9 @@ def _write_musa_compiler_wrapper(wrapper_dir: Path, real_mcc: str) -> Path:
     return wrapper
 
 
-def _link_ccache_wrapper(wrapper_dir: Path, compiler_name: str, ccache_bin: str) -> None:
+def _link_ccache_wrapper(
+    wrapper_dir: Path, compiler_name: str, ccache_bin: str
+) -> None:
     wrapper = wrapper_dir / compiler_name
     try:
         if wrapper.exists() or wrapper.is_symlink():
@@ -199,12 +200,10 @@ def _link_ccache_wrapper(wrapper_dir: Path, compiler_name: str, ccache_bin: str)
         wrapper.symlink_to(ccache_bin)
     except OSError:
         # Some filesystems disallow symlinks; a tiny exec wrapper is good enough.
-        real_compiler = _resolve_executable(
-            compiler_name, excluded_dirs=(wrapper_dir,)
-        )
+        real_compiler = _resolve_executable(compiler_name, excluded_dirs=(wrapper_dir,))
         wrapper.write_text(
             "#!/usr/bin/env bash\n"
-            f"exec {shlex.quote(ccache_bin)} {shlex.quote(real_compiler)} \"$@\"\n",
+            f'exec {shlex.quote(ccache_bin)} {shlex.quote(real_compiler)} "$@"\n',
             encoding="utf-8",
         )
         wrapper.chmod(0o755)

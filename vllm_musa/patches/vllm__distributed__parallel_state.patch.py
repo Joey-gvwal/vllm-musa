@@ -169,9 +169,7 @@ if _ENABLED:
             if not _is_musa():
                 return _orig_load_model(self, target_model)
             tp1 = _get_draft_tp1_group()
-            _log.info(
-                "MUSA-0124: constructing draft model under TP=1 context"
-            )
+            _log.info("MUSA-0124: constructing draft model under TP=1 context")
             with patch_tensor_parallel_group(tp1):
                 return _orig_load_model(self, target_model)
 
@@ -200,6 +198,5 @@ if _ENABLED:
         )
 else:
     _log.debug(
-        "MUSA-0124: draft-TP=1 patch dormant (set VLLM_MUSA_DRAFT_TP1=1 "
-        "to enable)"
+        "MUSA-0124: draft-TP=1 patch dormant (set VLLM_MUSA_DRAFT_TP1=1 " "to enable)"
     )

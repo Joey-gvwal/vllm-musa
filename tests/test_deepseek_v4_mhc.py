@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""Source-level checks for DeepSeek-V4 MHC MUSA dispatch."""
+
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _read(path: str) -> str:
+    return (REPO_ROOT / path).read_text()
+
+
+def test_mhc_pre_defaults_to_auto_provider():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+
+    assert 'VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "auto"' in source
+    assert "def _select_mhc_pre_auto_impl(" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS" in source
+    assert "hidden_size in {4096, 7168}" in source
+    assert "def _mhc_pre_native_provider(" in source
+    assert "deepseek_v4_mhc_pre(" in source
+    assert "mhc_pre_torch_fallback(" in source
+    assert source.index("def _mhc_pre_native_provider(") < source.index(
+        "def _mhc_pre_tilelang_provider("
+    )
+    assert '"deepgemm_big_fuse"' in source
+    assert 'if impl == "auto":' in source
+    assert "impl = _select_mhc_pre_auto_impl(residual)" in source
+
+
+def test_mhc_pre_custom_op_is_registered():
+    source = _read("vllm_musa/_custom_ops.py")
+    bindings = _read("csrc/musa/torch_bindings.cpp")
+    headers = _read("csrc/musa/musa_ops.h")
+    setup = _read("setup.py")
+
+    assert "def deepseek_v4_mhc_pre(" in source
+    assert "torch.ops._C_musa_ops.deepseek_v4_mhc_pre" in source
+    assert "deepseek_v4_mhc_pre(Tensor residual" in bindings
+    assert "&deepseek_v4_mhc_pre" in bindings
+    assert "void deepseek_v4_mhc_pre(" in headers
+    assert "csrc/musa/mhc/deepseek_v4_mhc_pre.mu" in setup
+
+
+def test_mhc_patch_uses_musa_provider_by_default():
+    source = _read("vllm_musa/patches/vllm__model_executor__layers__mhc.patch.py")
+
+    assert "from vllm_musa.deepseek_v4_mhc import mhc_pre_musa" in source
+    assert "from vllm_musa.deepseek_v4_mhc import mhc_post_musa" in source
+    assert "VLLM_MUSA_ENABLE_DEEPSEEK_V4_MHC_MUSA_IMPL" in source
+    assert (
+        'VLLM_MUSA_ENABLE_TORCH_MHC_PRENORM_FALLBACK",\n                "0"' in source
+    )
+
+
+def test_mhc_pre_deepgemm_big_fuse_is_default_off():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+
+    assert "def _mhc_pre_deepgemm_big_fuse_provider(" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DECODE_PRENORM_IMPL" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DEEPGEMM_SPLIT_K" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_HIDDEN_BLOCK" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_PASS_CONFIG" in source
+    assert 'impl in {"deepgemm_big_fuse", "deepgemm-big-fuse"}' in source
+    assert "return _mhc_pre_deepgemm_big_fuse_provider(" in source
+    assert 'return "native"' in source
+    assert 'return "deepgemm_big_fuse"' not in source
+
+
+def test_mhc_pre_decode_prenorm_tilelang_selector_is_default_off():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+
+    assert "def _select_mhc_pre_big_fuse_prenorm_impl(" in source
+    assert 'os.getenv(_MHC_PRE_DECODE_PRENORM_IMPL_ENV, "deepgemm")' in source
+    assert 'impl in {"", "0", "false", "off", "deepgemm"}' in source
+    assert 'impl in {"1", "true", "on", "auto", "tilelang"}' in source
+    assert "hc_hidden_size == 16384 and num_tokens <= 64" in source
+    assert 'return "tilelang"' in source
+    assert 'return "deepgemm"' in source
+
+
+def test_mhc_pre_deepgemm_big_fuse_shape_guards_and_splitk():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+    kernels = _read("vllm_musa/deepseek_v4_jit/tilelang_kernels.py")
+
+    assert "def select_mhc_prenorm_split_k(" in source
+    assert "if hc_hidden_size == 16384:" in source
+    assert "if num_tokens <= 64:" in source
+    assert "return 64" in source
+    assert "return 16 if num_tokens <= 1024 else 8" in source
+    assert "hc_mult != 4" in source
+    assert "fn.shape != (hc_mult3, hc_hidden_size)" in source
+    assert "hidden_size % hidden_block != 0" in source
+    assert "hc_hidden_size % split_k != 0" in source
+    assert "tf32_hc_prenorm_gemm" in source
+    assert "mhc_pre_big_fuse_decode_split_kernel" in source
+    assert "mhc_pre_big_fuse_kernel" in source
+    assert "def mhc_pre_big_fuse_kernel(" in kernels
+    assert "def mhc_pre_big_fuse_decode_split_kernel(" in kernels
+
+
+def test_mhc_pre_decode_prenorm_tilelang_partials_path_exists():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+    kernels = _read("vllm_musa/deepseek_v4_jit/tilelang_kernels.py")
+
+    assert "def _mhc_prenorm_gemm_sqrsum_tilelang_decode_partials(" in source
+    assert "num_tokens > 64 or hc_hidden_size != 16384" in source
+    assert "split_size % 128 != 0" in source
+    assert "mhc_prenorm_splitk_x_tme_cast_kernel" in source
+    assert "fn.float().contiguous()" in source
+    assert "def mhc_prenorm_splitk_x_tme_cast_kernel(" in kernels
+    assert "TL_ENABLE_MUSA_TMA_PREFETCH" in kernels
+    assert "T.alloc_barrier" in kernels
+    assert "with T.ws(" in kernels
+    assert "T.gemm(" in kernels

@@ -34,6 +34,34 @@ logger = init_logger(__name__)
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _QWEN3_MOE_FP8_MAX_CUDAGRAPH_CAPTURE_SIZE = 64
+_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV = "VLLM_MUSA_GEMV_MOE_BLOCK"
+_DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK = "32x8"
+_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV = (
+    "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"
+)
+_DEEPSEEK_V4_TP8_PROFILE_ENV = "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE"
+_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_PROFILE = "balanced_long_prefill"
+_DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_PROFILE = "aggressive_long_prefill"
+_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_DEFAULTS = {
+    _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV: "16x8",
+    "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X": "256",
+    _DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV: "256",
+    "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE": "dsa_full",
+    "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS": "1",
+    "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "2048",
+}
+_DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_DEFAULTS = {
+    **_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_DEFAULTS,
+    "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL": "deepgemm_big_fuse",
+}
+_DEEPSEEK_V4_TP8_PROFILE_DEFAULTS = {
+    _DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_PROFILE: (
+        _DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_DEFAULTS
+    ),
+    _DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_PROFILE: (
+        _DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_DEFAULTS
+    ),
+}
 
 
 def _is_qwen3_moe_fp8_model(model_config: Any | None) -> bool:
@@ -55,6 +83,84 @@ def _is_qwen3_moe_fp8_model(model_config: Any | None) -> bool:
         return quantization_config.get("quant_method") == "fp8"
 
     return False
+
+
+def _is_deepseek_v4_model(model_config: Any | None) -> bool:
+    if model_config is None:
+        return False
+
+    hf_config = getattr(model_config, "hf_config", None)
+    model_type = getattr(hf_config, "model_type", None)
+    if model_type == "deepseek_v4":
+        return True
+
+    architectures = getattr(model_config, "architectures", None)
+    if architectures is None and hf_config is not None:
+        architectures = getattr(hf_config, "architectures", None)
+    return any("DeepseekV4" in str(arch) for arch in architectures or ())
+
+
+def _deepseek_v4_flashmla_sparse_block_size(model_config: Any | None) -> int:
+    value = os.getenv(_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV)
+    if value is None or not _is_deepseek_v4_model(model_config):
+        return 64
+
+    value = value.strip()
+    if value in ("64", "256"):
+        return int(value)
+    raise ValueError(
+        f"{_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV} must be 64 or 256, " f"got {value!r}"
+    )
+
+
+def _apply_deepseek_v4_tp8_profile(
+    model_config: Any | None,
+    tensor_parallel_size: int | None,
+) -> None:
+    profile = os.getenv(_DEEPSEEK_V4_TP8_PROFILE_ENV)
+    if profile is None:
+        return
+
+    profile = profile.strip()
+    if not profile or not _is_deepseek_v4_model(model_config):
+        return
+    profile_defaults = _DEEPSEEK_V4_TP8_PROFILE_DEFAULTS.get(profile)
+    if profile_defaults is None:
+        valid_profiles = ", ".join(
+            repr(name) for name in sorted(_DEEPSEEK_V4_TP8_PROFILE_DEFAULTS)
+        )
+        raise ValueError(
+            f"{_DEEPSEEK_V4_TP8_PROFILE_ENV} must be one of "
+            f"{valid_profiles}, "
+            f"got {profile!r}"
+        )
+    if tensor_parallel_size != 8:
+        logger.info(
+            "Ignoring %s=%s because tensor_parallel_size=%s; the profile is "
+            "validated only for DeepSeek-V4 TP8.",
+            _DEEPSEEK_V4_TP8_PROFILE_ENV,
+            profile,
+            tensor_parallel_size,
+        )
+        return
+
+    applied = []
+    preserved = []
+    for env_name, default_value in profile_defaults.items():
+        if env_name in os.environ:
+            preserved.append(env_name)
+            continue
+        os.environ[env_name] = default_value
+        applied.append(f"{env_name}={default_value}")
+
+    logger.info(
+        "Applied DeepSeek-V4 TP8 profile %s=%s; set defaults: %s; preserved "
+        "explicit envs: %s.",
+        _DEEPSEEK_V4_TP8_PROFILE_ENV,
+        profile,
+        ", ".join(applied) if applied else "none",
+        ", ".join(preserved) if preserved else "none",
+    )
 
 
 @cache
@@ -303,6 +409,7 @@ class MUSAPlatformBase(Platform):
             else getattr(spec_config, "method", None) == "dflash"
         ):
             from .patches import apply_patches
+
             apply_patches(force=True)
             # MUSA-0403: the dflash draft-loop FULL CUDAGraph capture is
             # default-on (opt out with VLLM_MUSA_DFLASH_FULL_WRAP=0). It makes
@@ -315,11 +422,13 @@ class MUSAPlatformBase(Platform):
             # configured sizes (default: the single BS=1 block). Multi-block
             # (BS>1) draft capture is tracked separately (MUSA-0406).
             import os as _df_os
+
             if _df_os.environ.get("VLLM_MUSA_DFLASH_FULL_WRAP", "1") != "0":
                 _comp = getattr(vllm_config, "compilation_config", None)
                 _nspec = getattr(spec_config, "num_speculative_tokens", None)
                 if _comp is not None and _nspec:
                     from vllm.config import CUDAGraphMode as _CGM
+
                     _block = 1 + int(_nspec)
                     # Capture exactly the single BS=1 verify block — the proven,
                     # fast size (no padding). vLLM's default capture sizes are
@@ -329,8 +438,14 @@ class MUSAPlatformBase(Platform):
                     # padded to 72 and running ~35 tok/s vs 48 at the exact
                     # block). MUSA-0406 extends this to BS=1,2,4,8 = block-aligned
                     # [9,18,36,72]; a BS=N decode uses the size-N*block graph exactly.
-                    _maxseq = getattr(getattr(vllm_config, "scheduler_config", None),
-                                      "max_num_seqs", 8) or 8
+                    _maxseq = (
+                        getattr(
+                            getattr(vllm_config, "scheduler_config", None),
+                            "max_num_seqs",
+                            8,
+                        )
+                        or 8
+                    )
                     _comp.cudagraph_capture_sizes = [
                         _block * k for k in (1, 2, 4, 8) if k <= max(1, _maxseq)
                     ]
@@ -345,6 +460,28 @@ class MUSAPlatformBase(Platform):
 
         parallel_config = vllm_config.parallel_config
         model_config = vllm_config.model_config
+
+        if _is_deepseek_v4_model(model_config):
+            _apply_deepseek_v4_tp8_profile(
+                model_config,
+                getattr(parallel_config, "tensor_parallel_size", None),
+            )
+            if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV") is None:
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] = "1"
+                logger.info(
+                    "Enabling DeepSeek-V4 MUSA fused-MoE GEMV dispatcher "
+                    "(set VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV=0 to disable)."
+                )
+            if _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV not in os.environ:
+                os.environ[_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV] = (
+                    _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK
+                )
+                logger.info(
+                    "Defaulting DeepSeek-V4 MUSA GEMV/MoE block selector to "
+                    "%s=%s (set it explicitly to override).",
+                    _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV,
+                    _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK,
+                )
 
         if parallel_config.worker_cls == "auto":
             parallel_config.worker_cls = "vllm_musa.worker.MTGPUWorker"
@@ -394,10 +531,14 @@ class MUSAPlatformBase(Platform):
                 if not use_flashmla_sparse:
                     use_flashmla_sparse = True
 
-                if use_flashmla_sparse and cache_config.block_size != 64:
-                    cache_config.block_size = 64
+                sparse_block_size = _deepseek_v4_flashmla_sparse_block_size(
+                    model_config
+                )
+                if use_flashmla_sparse and cache_config.block_size != sparse_block_size:
+                    cache_config.block_size = sparse_block_size
                     logger.info(
-                        "Forcing kv cache block size to 64 for FlashMLASparse backend."
+                        "Forcing kv cache block size to %d for FlashMLASparse backend.",
+                        sparse_block_size,
                     )
 
         scheduler_config = vllm_config.scheduler_config

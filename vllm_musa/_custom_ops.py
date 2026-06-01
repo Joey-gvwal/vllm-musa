@@ -345,3 +345,269 @@ def min_p_sampling_from_probs(
     return _min_p_sampling_from_probs_internal(
         probs, indices, *_to_tensor_scalar_tuple(min_p), deterministic, generator
     )
+
+
+def deepseek_v4_store_sparse_kv(
+    normed: torch.Tensor,
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    write_mask: torch.Tensor,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_store_sparse_kv(
+        normed,
+        kv_cache,
+        slot_mapping,
+        write_mask,
+    )
+
+
+def deepseek_v4_qnorm_rope_kv_insert(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    eps: float,
+    cache_block_size: int,
+) -> None:
+    if slot_mapping.shape[0] > q.shape[0]:
+        # Graph+MTP warmup can carry padded cache slots while q/kv only hold
+        # active rows. The native op stores one KV row per q/kv row.
+        slot_mapping = slot_mapping[: q.shape[0]].contiguous()
+    return torch.ops._C_musa_ops.deepseek_v4_qnorm_rope_kv_insert(
+        q,
+        kv,
+        kv_cache,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        eps,
+        cache_block_size,
+    )
+
+
+def deepseek_v4_fused_q_kv_rmsnorm(
+    q: torch.Tensor,
+    kv: torch.Tensor,
+    q_weight: torch.Tensor,
+    kv_weight: torch.Tensor,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops._C_musa_ops.deepseek_v4_fused_q_kv_rmsnorm(
+        q,
+        kv,
+        q_weight,
+        kv_weight,
+        eps,
+    )
+
+
+def deepseek_v4_dequantize_and_gather_k_cache(
+    out: torch.Tensor,
+    k_cache: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor | None,
+    block_table: torch.Tensor,
+    block_size: int,
+    offset: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_dequantize_and_gather_k_cache(
+        out,
+        k_cache,
+        seq_lens,
+        gather_lens,
+        block_table,
+        block_size,
+        offset,
+    )
+
+
+def deepseek_v4_compute_global_topk_indices_and_lens(
+    topk_indices: torch.Tensor,
+    token_to_req_indices: torch.Tensor,
+    block_table: torch.Tensor,
+    block_size: int,
+    is_valid_token: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops._C_musa_ops.deepseek_v4_compute_global_topk_indices_and_lens(
+        topk_indices,
+        token_to_req_indices,
+        block_table,
+        block_size,
+        is_valid_token,
+    )
+
+
+def deepseek_v4_combine_topk_swa_indices(
+    topk_indices: torch.Tensor,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    gather_lens: torch.Tensor,
+    window_size: int,
+    compress_ratio: int,
+    topk: int,
+    M: int,
+    N: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops._C_musa_ops.deepseek_v4_combine_topk_swa_indices(
+        topk_indices,
+        query_start_loc,
+        seq_lens,
+        gather_lens,
+        window_size,
+        compress_ratio,
+        topk,
+        M,
+        N,
+    )
+
+
+def deepseek_v4_indexer_topk_decode(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_indexer_topk_decode(
+        q_quant,
+        kv_cache,
+        weights,
+        seq_lens,
+        block_table,
+        topk_indices,
+        topk,
+    )
+
+
+def deepseek_v4_indexer_topk_prefill(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    block_table: torch.Tensor,
+    cu_seq_lens: torch.Tensor,
+    token_to_seq: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_indexer_topk_prefill(
+        q_quant,
+        kv_cache,
+        weights,
+        block_table,
+        cu_seq_lens,
+        token_to_seq,
+        cu_seqlen_ks,
+        cu_seqlen_ke,
+        topk_indices,
+        topk,
+    )
+
+
+def deepseek_v4_sparse_flashmla_decode(
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    indices: torch.Tensor,
+    topk_length: torch.Tensor | None,
+    attn_sink: torch.Tensor | None,
+    extra_k_cache: torch.Tensor | None,
+    extra_indices: torch.Tensor | None,
+    extra_topk_length: torch.Tensor | None,
+    out: torch.Tensor,
+    softmax_scale: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops._C_musa_ops.deepseek_v4_sparse_flashmla_decode(
+        q,
+        k_cache,
+        indices,
+        topk_length,
+        attn_sink,
+        extra_k_cache,
+        extra_indices,
+        extra_topk_length,
+        out,
+        softmax_scale,
+    )
+
+
+def deepseek_v4_fused_inv_rope_fp8_quant(
+    o: torch.Tensor,
+    positions: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    n_groups: int,
+    heads_per_group: int,
+    nope_dim: int,
+    rope_dim: int,
+    quant_group_size: int,
+    tma_aligned_scales: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant(
+        o,
+        positions,
+        cos_sin_cache,
+        n_groups,
+        heads_per_group,
+        nope_dim,
+        rope_dim,
+        quant_group_size,
+        tma_aligned_scales,
+    )
+
+
+def deepseek_v4_topk_softplus_sqrt(
+    topk_weights: torch.Tensor,
+    topk_indices: torch.Tensor,
+    token_expert_indices: torch.Tensor,
+    gating_output: torch.Tensor,
+    renormalize: bool = False,
+    routed_scaling_factor: float = 1.0,
+    e_score_correction_bias: torch.Tensor | None = None,
+    input_tokens: torch.Tensor | None = None,
+    hash_indices_table: torch.Tensor | None = None,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_topk_softplus_sqrt(
+        topk_weights,
+        topk_indices,
+        token_expert_indices,
+        gating_output,
+        renormalize,
+        routed_scaling_factor,
+        e_score_correction_bias,
+        input_tokens,
+        hash_indices_table,
+    )
+
+
+def deepseek_v4_mhc_pre(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    post_mix: torch.Tensor,
+    comb_mix: torch.Tensor,
+    layer_input: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_mhc_pre(
+        residual,
+        fn,
+        hc_scale,
+        hc_base,
+        post_mix,
+        comb_mix,
+        layer_input,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )

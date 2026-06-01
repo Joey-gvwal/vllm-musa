@@ -21,26 +21,23 @@ Run on the authorized MUSA container (TP=1 / single rank to isolate
 from any distributed-side effects).
 """
 
-import math
-import os
 import sys
 import traceback
 from dataclasses import dataclass
 
+import torch
+
 # torchada redirects torch.cuda symbols to MUSA — must be first.
 import torchada  # noqa: F401
-
-import torch
+from vllm.config import VllmConfig, set_current_vllm_config
+from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbedding
 
 # Plug into vllm_musa so torch.ops.vllm.musa_rotary_embedding is registered
 # and the MusaRotaryEmbedding OOT class is registered.
 import vllm_musa  # noqa: F401
+
 # Explicit import: register `torch.ops.vllm.musa_rotary_embedding`.
 from vllm_musa.jit_kernel.csrc import rope as _rope_module  # noqa: F401
-
-from vllm.config import VllmConfig, set_current_vllm_config
-from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbedding
-
 
 # RotaryEmbedding.__init__ -> CustomOp.__init__ -> dispatch_forward() reads the
 # current vllm config. We enter set_current_vllm_config() inside main() (NOT at
@@ -49,6 +46,7 @@ from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbedding
 
 
 # ---- shape matrix ----------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class Shape:
@@ -66,36 +64,87 @@ class Shape:
 # in MUSA-0202 / MUSA-0203 testing on yeahdongcn70.
 SHAPES = [
     # Eagle3 draft, the failing case at TP=8 + captured chain
-    Shape("eagle3_draft_tp8_decode", num_heads_per_rank=3, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=1),
-    Shape("eagle3_draft_tp8_chain8", num_heads_per_rank=3, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=8),
-
+    Shape(
+        "eagle3_draft_tp8_decode",
+        num_heads_per_rank=3,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=1,
+    ),
+    Shape(
+        "eagle3_draft_tp8_chain8",
+        num_heads_per_rank=3,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=8,
+    ),
     # M2.5 target at TP=8
-    Shape("m25_target_tp8_decode", num_heads_per_rank=6, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=1),
-    Shape("m25_target_tp8_prefill", num_heads_per_rank=6, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=4096),
-
+    Shape(
+        "m25_target_tp8_decode",
+        num_heads_per_rank=6,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=1,
+    ),
+    Shape(
+        "m25_target_tp8_prefill",
+        num_heads_per_rank=6,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=4096,
+    ),
     # Qwen3-8B-FP8 at TP=8 (known-working control)
-    Shape("qwen3_8b_tp8_decode", num_heads_per_rank=4, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=1),
-    Shape("qwen3_8b_tp8_prefill", num_heads_per_rank=4, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=1024),
-
+    Shape(
+        "qwen3_8b_tp8_decode",
+        num_heads_per_rank=4,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=1,
+    ),
+    Shape(
+        "qwen3_8b_tp8_prefill",
+        num_heads_per_rank=4,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=1024,
+    ),
     # Qwen3-30B-A3B-FP8 at TP=2 (known-working control)
-    Shape("qwen3_30b_tp2_decode", num_heads_per_rank=16, num_kv_heads_per_rank=4,
-          head_dim=128, rotary_dim=128, num_tokens=1),
-
+    Shape(
+        "qwen3_30b_tp2_decode",
+        num_heads_per_rank=16,
+        num_kv_heads_per_rank=4,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=1,
+    ),
     # Edge: smallest possible num_heads (boundary case)
-    Shape("min_heads_1_decode", num_heads_per_rank=1, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=1),
-    Shape("min_heads_2_decode", num_heads_per_rank=2, num_kv_heads_per_rank=1,
-          head_dim=128, rotary_dim=128, num_tokens=1),
+    Shape(
+        "min_heads_1_decode",
+        num_heads_per_rank=1,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=1,
+    ),
+    Shape(
+        "min_heads_2_decode",
+        num_heads_per_rank=2,
+        num_kv_heads_per_rank=1,
+        head_dim=128,
+        rotary_dim=128,
+        num_tokens=1,
+    ),
 ]
 
 
 # ---- harness ---------------------------------------------------------------
+
 
 def make_inputs(shape: Shape, max_pos: int = 8192, device: str = "cuda"):
     """Returns (positions, query, key, cos_sin_cache, jit_module).
@@ -105,14 +154,19 @@ def make_inputs(shape: Shape, max_pos: int = 8192, device: str = "cuda"):
     doesn't contaminate the reference.
     """
     torch.manual_seed(0)
-    positions = torch.arange(shape.num_tokens, dtype=torch.int64,
-                              device=device)
-    query = torch.randn(shape.num_tokens,
-                         shape.num_heads_per_rank * shape.head_dim,
-                         dtype=shape.dtype, device=device)
-    key = torch.randn(shape.num_tokens,
-                       shape.num_kv_heads_per_rank * shape.head_dim,
-                       dtype=shape.dtype, device=device)
+    positions = torch.arange(shape.num_tokens, dtype=torch.int64, device=device)
+    query = torch.randn(
+        shape.num_tokens,
+        shape.num_heads_per_rank * shape.head_dim,
+        dtype=shape.dtype,
+        device=device,
+    )
+    key = torch.randn(
+        shape.num_tokens,
+        shape.num_kv_heads_per_rank * shape.head_dim,
+        dtype=shape.dtype,
+        device=device,
+    )
 
     # Build a RotaryEmbedding to inherit its forward_native + cache shape.
     rope = RotaryEmbedding(
@@ -137,8 +191,13 @@ def eager_native(rope, positions, query, key):
     q = query.clone()
     k = key.clone()
     out_q, out_k = RotaryEmbedding.forward_static(
-        positions, q, k,
-        rope.head_size, rope.rotary_dim, rope.cos_sin_cache, rope.is_neox_style,
+        positions,
+        q,
+        k,
+        rope.head_size,
+        rope.rotary_dim,
+        rope.cos_sin_cache,
+        rope.is_neox_style,
     )
     return out_q, out_k
 
@@ -149,19 +208,21 @@ def eager_jit(positions, query, key, head_size, cos_sin_cache, is_neox):
     k = key.clone()
     # Match dtype / device of cos_sin_cache to query (the wrapper does this).
     csc = cos_sin_cache.to(query.device, dtype=query.dtype)
-    torch.ops.vllm.musa_rotary_embedding(
-        positions, q, k, head_size, csc, is_neox
-    )
+    torch.ops.vllm.musa_rotary_embedding(positions, q, k, head_size, csc, is_neox)
     return q, k
 
 
 def compare(label: str, kind: str, q_ref, k_ref, q_test, k_test, atol=1e-2, rtol=1e-2):
     """Compare two (q, k) outputs and print a single PASS/FAIL line."""
     if q_test.shape != q_ref.shape:
-        print(f"FAIL {label} {kind} SHAPE_MISMATCH q_ref={q_ref.shape} q_test={q_test.shape}")
+        print(
+            f"FAIL {label} {kind} SHAPE_MISMATCH q_ref={q_ref.shape} q_test={q_test.shape}"
+        )
         return False
     if k_test.shape != k_ref.shape:
-        print(f"FAIL {label} {kind} SHAPE_MISMATCH k_ref={k_ref.shape} k_test={k_test.shape}")
+        print(
+            f"FAIL {label} {kind} SHAPE_MISMATCH k_ref={k_ref.shape} k_test={k_test.shape}"
+        )
         return False
     q_close = torch.allclose(q_ref.float(), q_test.float(), atol=atol, rtol=rtol)
     k_close = torch.allclose(k_ref.float(), k_test.float(), atol=atol, rtol=rtol)
@@ -171,8 +232,10 @@ def compare(label: str, kind: str, q_ref, k_ref, q_test, k_test, atol=1e-2, rtol
         print(f"PASS {label} {kind} q_max_diff={q_max:.4e} k_max_diff={k_max:.4e}")
         return True
     else:
-        print(f"FAIL {label} {kind} q_close={q_close} k_close={k_close} "
-              f"q_max_diff={q_max:.4e} k_max_diff={k_max:.4e}")
+        print(
+            f"FAIL {label} {kind} q_close={q_close} k_close={k_close} "
+            f"q_max_diff={q_max:.4e} k_max_diff={k_max:.4e}"
+        )
         return False
 
 
@@ -182,8 +245,12 @@ def check_eager_parity(shape: Shape) -> bool:
         positions, query, key, rope = make_inputs(shape)
         q_native, k_native = eager_native(rope, positions, query, key)
         q_jit, k_jit = eager_jit(
-            positions, query, key, shape.head_dim,
-            rope.cos_sin_cache, shape.is_neox,
+            positions,
+            query,
+            key,
+            shape.head_dim,
+            rope.cos_sin_cache,
+            shape.is_neox,
         )
         return compare(shape.label, "EAGER", q_native, k_native, q_jit, k_jit)
     except Exception as e:
@@ -226,7 +293,12 @@ def check_captured_jit_parity(shape: Shape) -> bool:
 
         def fn():
             torch.ops.vllm.musa_rotary_embedding(
-                positions, q_buf, k_buf, shape.head_dim, csc, shape.is_neox,
+                positions,
+                q_buf,
+                k_buf,
+                shape.head_dim,
+                csc,
+                shape.is_neox,
             )
 
         # Reset buffers, capture + replay.
@@ -272,7 +344,12 @@ def check_multi_replay(shape: Shape, n_replays: int = 32) -> bool:
 
         def fn():
             torch.ops.vllm.musa_rotary_embedding(
-                positions, q_buf, k_buf, shape.head_dim, csc, shape.is_neox,
+                positions,
+                q_buf,
+                k_buf,
+                shape.head_dim,
+                csc,
+                shape.is_neox,
             )
 
         # Capture
@@ -311,6 +388,7 @@ def check_multi_replay(shape: Shape, n_replays: int = 32) -> bool:
 
 # ---- main ------------------------------------------------------------------
 
+
 def main() -> int:
     if not torch.musa.is_available():
         print("FAIL no MUSA device available")
@@ -323,9 +401,11 @@ def main() -> int:
 
     results = []
     for shape in SHAPES:
-        print(f"--- {shape.label}  (q={shape.num_heads_per_rank}, "
-              f"kv={shape.num_kv_heads_per_rank}, head_dim={shape.head_dim}, "
-              f"rot_dim={shape.rotary_dim}, n_tok={shape.num_tokens}) ---")
+        print(
+            f"--- {shape.label}  (q={shape.num_heads_per_rank}, "
+            f"kv={shape.num_kv_heads_per_rank}, head_dim={shape.head_dim}, "
+            f"rot_dim={shape.rotary_dim}, n_tok={shape.num_tokens}) ---"
+        )
         r1 = check_eager_parity(shape)
         r2 = check_captured_jit_parity(shape)
         r3 = check_multi_replay(shape, n_replays=32)
@@ -335,9 +415,11 @@ def main() -> int:
     print(f"{'shape':<35} {'EAGER':>6} {'CAPTURED':>9} {'MULTI':>7}")
     fails = 0
     for label, r1, r2, r3 in results:
-        flags = ("PASS" if r1 else "FAIL",
-                 "PASS" if r2 else "FAIL",
-                 "PASS" if r3 else "FAIL")
+        flags = (
+            "PASS" if r1 else "FAIL",
+            "PASS" if r2 else "FAIL",
+            "PASS" if r3 else "FAIL",
+        )
         if not (r1 and r2 and r3):
             fails += 1
         print(f"{label:<35} {flags[0]:>6} {flags[1]:>9} {flags[2]:>7}")

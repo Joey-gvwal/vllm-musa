@@ -191,6 +191,14 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/gemv.mu",
     "csrc/musa/fused_add_rmsnorm.mu",
     "csrc/musa/cache_kernels.mu",
+    "csrc/musa/attention/deepseek_v4_cache_store.mu",
+    "csrc/musa/attention/deepseek_v4_fused_qkv_rmsnorm.mu",
+    "csrc/musa/attention/deepseek_v4_cache_utils.mu",
+    "csrc/musa/attention/deepseek_v4_indexer_topk.mu",
+    "csrc/musa/attention/deepseek_v4_sparse_flashmla.mu",
+    "csrc/musa/attention/deepseek_v4_inv_rope_fp8_quant.mu",
+    "csrc/musa/mhc/deepseek_v4_mhc_pre.mu",
+    "csrc/musa/moe/deepseek_v4_topk_softplus_sqrt.mu",
     # XXX (MUSA): The version used here is vllm 0.18.0, located at csrc/quantization/w8a8/fp8.
     # While in version 0.20.0, the path has changed to csrc/libtorch_stable/quantization/w8a8/fp8,
     # and depends on two header file from PyTorch 2.11's torch/headeronly/core/ScalarType.h and
@@ -245,12 +253,10 @@ CSRC_TEXT_PATCHES = {
         # invoking it on MUSA would error at dispatch time, which is fine
         # because MUSA code paths never call paged_attention.
         {
-            '  ops.impl("paged_attention_v1", torch::kCUDA, &paged_attention_v1);':
-            '  // MUSA-0203: paged_attention_v1 impl stripped (kernel not built on MUSA)',
+            '  ops.impl("paged_attention_v1", torch::kCUDA, &paged_attention_v1);': "  // MUSA-0203: paged_attention_v1 impl stripped (kernel not built on MUSA)",
         },
         {
-            '  ops.impl("paged_attention_v2", torch::kCUDA, &paged_attention_v2);':
-            '  // MUSA-0203: paged_attention_v2 impl stripped (kernel not built on MUSA)',
+            '  ops.impl("paged_attention_v2", torch::kCUDA, &paged_attention_v2);': "  // MUSA-0203: paged_attention_v2 impl stripped (kernel not built on MUSA)",
         },
     ],
     str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh"): [
@@ -430,8 +436,10 @@ if mcc_version:
             # VLLM_MUSA_DISABLE_LOAD_CLUSTER=1.
             if os.environ.get("VLLM_MUSA_DISABLE_LOAD_CLUSTER", "0") != "1":
                 MCC_FLAGS += [
-                    "-mllvm", "-mtgpu-load-cluster-mutation=1",
-                    "-mllvm", "--num-dwords-of-load-in-mutation=64",
+                    "-mllvm",
+                    "-mtgpu-load-cluster-mutation=1",
+                    "-mllvm",
+                    "--num-dwords-of-load-in-mutation=64",
                 ]
     except Exception as e:
         print(

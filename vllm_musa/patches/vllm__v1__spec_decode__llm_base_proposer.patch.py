@@ -34,6 +34,36 @@ When upstream PR #34880 merges (or v0.20.0-dev rebases onto it), this
 patch's anchors will stop matching and the file should be deleted.
 """
 
+
+def normalize_source(source: str) -> str:
+    """Upgrade already-persisted MUSA draft FULL-wrapper patched sources."""
+    return source.replace(
+        """        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP (default ON since the
+        # query_start_loc in-place hunk fixed the captured-replay stale
+        # data_ptr issue). Set to "0" to disable for debugging.
+        import os as _os
+        cudagraph_mode = self.compilation_config.cudagraph_mode
+        if (
+            _os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1") == "1"
+            and cudagraph_mode.has_full_cudagraphs()
+""",
+        """        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP. Default OFF on MUSA after the
+        # v0.20.0-dev rebase because the wrapped DeepSeek-V4 MTP draft model
+        # can fail graph memory profiling; set to "1" to re-enable for
+        # diagnostics after the draft FULL graph path is fixed.
+        import os as _os
+        cudagraph_mode = self.compilation_config.cudagraph_mode
+        draft_full_wrap_default = "0" if current_platform.is_musa() else "1"
+        if (
+            _os.environ.get(
+                "VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default
+            )
+            == "1"
+            and cudagraph_mode.has_full_cudagraphs()
+""",
+    )
+
+
 # ---- Hunk 1: import CUDAGraphWrapper + BatchDescriptor ----
 _OLD_IMPORTS = """from vllm.distributed.parallel_state import get_pp_group
 from vllm.forward_context import set_forward_context"""
@@ -43,7 +73,9 @@ from vllm.distributed.parallel_state import get_pp_group
 from vllm.forward_context import BatchDescriptor, set_forward_context"""
 
 # ---- Hunk 2: dispatcher init — for_draft_model=True ----
-_OLD_DISPATCHER_INIT = """        self.cudagraph_dispatcher = CudagraphDispatcher(self.vllm_config)"""
+_OLD_DISPATCHER_INIT = (
+    """        self.cudagraph_dispatcher = CudagraphDispatcher(self.vllm_config)"""
+)
 
 _NEW_DISPATCHER_INIT = """        # MUSA-0203 / PR #34880: dedicated dispatcher for the draft model so
         # FULL-mode capture keys are registered with uniform_decode_query_len=1
@@ -102,13 +134,18 @@ _NEW_LOAD_MODEL = """self.model = self._get_model()
         # CUDAGraphWrapper when target uses FULL captures. CUDAGraphWrapper
         # is a no-op when the runtime mode at call time doesn't match FULL,
         # so this is safe when target is PIECEWISE-only.
-        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP (default ON since the
-        # query_start_loc in-place hunk fixed the captured-replay stale
-        # data_ptr issue). Set to "0" to disable for debugging.
+        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP. Default OFF on MUSA after the
+        # v0.20.0-dev rebase because the wrapped DeepSeek-V4 MTP draft model
+        # can fail graph memory profiling; set to "1" to re-enable for
+        # diagnostics after the draft FULL graph path is fixed.
         import os as _os
         cudagraph_mode = self.compilation_config.cudagraph_mode
+        draft_full_wrap_default = "0" if current_platform.is_musa() else "1"
         if (
-            _os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1") == "1"
+            _os.environ.get(
+                "VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default
+            )
+            == "1"
             and cudagraph_mode.has_full_cudagraphs()
             and not self.vllm_config.parallel_config.use_ubatching
             and not self.speculative_config.disable_padded_drafter_batch
@@ -144,7 +181,9 @@ _NEW_DETERMINE = """    def _determine_batch_execution_and_padding(
 
 # Need to also patch the return statement of _determine_batch_execution_and_padding
 # to 4-tuple. Find the unique anchor.
-_OLD_DETERMINE_RETURN = """        return cudagraph_mode, num_tokens_padded, num_tokens_across_dp"""
+_OLD_DETERMINE_RETURN = (
+    """        return cudagraph_mode, num_tokens_padded, num_tokens_across_dp"""
+)
 
 _NEW_DETERMINE_RETURN = """        return cudagraph_mode, batch_desc, num_tokens_padded, num_tokens_across_dp"""
 

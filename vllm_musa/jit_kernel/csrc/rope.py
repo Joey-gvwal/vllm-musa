@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 
 import torch
-
 from vllm.utils.torch_utils import direct_register_custom_op
 
 from vllm_musa.jit_kernel.csrc.jit import load_musa_jit

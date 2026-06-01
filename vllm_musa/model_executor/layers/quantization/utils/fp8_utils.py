@@ -10,6 +10,11 @@ from vllm.platforms import current_platform
 from vllm.utils.deep_gemm import get_tma_aligned_size, is_deep_gemm_e8m0_used
 
 
+def _upcast_e8m0_to_fp32(scale: torch.Tensor) -> torch.Tensor:
+    exp_bits = scale.view(torch.uint8).to(torch.int32)
+    return (exp_bits << 23).view(torch.float32)
+
+
 def deepgemm_post_process_fp8_weight_block(
     wq: torch.Tensor,
     ws: torch.Tensor,
@@ -18,6 +23,10 @@ def deepgemm_post_process_fp8_weight_block(
     is_bmm: bool = False,
     bmm_batch_size: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    del quant_block_shape, is_bmm, bmm_batch_size
+    e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
+    if e8m0_dtype is not None and ws.dtype == e8m0_dtype and not use_e8m0:
+        return wq, _upcast_e8m0_to_fp32(ws)
     return wq, ws
 
 
@@ -55,6 +64,8 @@ def per_token_group_quant_fp8(
         f"by `group_size` {group_size}"
     )
     assert x.stride(-1) == 1, "`x` groups must be contiguous"
+    if current_platform.is_musa() and x.dim() == 2 and not x.is_contiguous():
+        x = x.contiguous()
 
     fp8_min, fp8_max = get_fp8_min_max()
 

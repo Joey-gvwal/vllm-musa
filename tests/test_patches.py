@@ -3,6 +3,7 @@
 """Tests for the MUSA platform patches module."""
 
 import importlib
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -156,6 +157,376 @@ class TestSamplerPatch:
                 break
         else:
             raise AssertionError("topk_topp_sampler patch file was not found")
+
+
+class TestRejectionSamplerPatch:
+    """Tests for the MUSA speculative rejection-sampler patch."""
+
+    def test_rejection_sampler_random_path_uses_target_token_fallback(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.sample.rejection_sampler":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK" in new_source
+                assert "_musa_sample_first_target_token" in new_source
+                assert "not sampling_metadata.all_greedy" in new_source
+                assert "sampling_metadata.max_num_logprobs is None" in new_source
+                assert "PLACEHOLDER_TOKEN_ID" in new_source
+                break
+        else:
+            raise AssertionError("rejection_sampler patch file was not found")
+
+
+class TestGPUModelRunnerPatch:
+    """Tests for MUSA GPU model runner speculative guards."""
+
+    def test_model_runner_skips_musa_random_drafter(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.worker.gpu_model_runner":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK" in new_source
+                assert "current_platform.is_musa()" in new_source
+                assert "not self.input_batch.sampling_metadata.all_greedy" in (
+                    new_source
+                )
+                assert "input_fits_in_drafter = False" in new_source
+                break
+        else:
+            raise AssertionError("gpu_model_runner patch file was not found")
+
+
+class TestLLMBaseProposerPatch:
+    """Tests for MUSA LLM base proposer speculative guards."""
+
+    def test_draft_full_wrapper_is_musa_opt_in(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.spec_decode.llm_base_proposer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert (
+                    'draft_full_wrap_default = "0" if current_platform.is_musa()'
+                    in new_source
+                )
+                assert 'VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default' in (
+                    new_source
+                )
+                assert "self.model = CUDAGraphWrapper(" in new_source
+                break
+        else:
+            raise AssertionError("llm_base_proposer patch file was not found")
+
+    def test_draft_full_wrapper_normalizer_updates_old_default(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.spec_decode.llm_base_proposer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP (default ON since the
+        # query_start_loc in-place hunk fixed the captured-replay stale
+        # data_ptr issue). Set to "0" to disable for debugging.
+        import os as _os
+        cudagraph_mode = self.compilation_config.cudagraph_mode
+        if (
+            _os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1") == "1"
+            and cudagraph_mode.has_full_cudagraphs()
+"""
+                normalized = module.normalize_source(source)
+
+                assert '_os.environ.get("VLLM_MUSA_DRAFT_FULL_WRAP", "1")' not in (
+                    normalized
+                )
+                assert (
+                    'draft_full_wrap_default = "0" if current_platform.is_musa()'
+                    in normalized
+                )
+                assert 'VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default' in (
+                    normalized
+                )
+                break
+        else:
+            raise AssertionError("llm_base_proposer patch file was not found")
+
+
+class TestDeepSeekV4AttentionPatch:
+    """Tests for the MUSA DeepSeek-V4 attention patch."""
+
+    def test_qnorm_rope_native_path_trims_padded_slot_mapping(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.deepseek_v4_attention":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "native_slot_mapping = slot_mapping" in new_source
+                assert "slot_mapping.shape[0] > q.shape[0]" in new_source
+                assert "slot_mapping[: q.shape[0]].contiguous()" in new_source
+                assert "native_slot_mapping," in new_source
+                assert new_source.count("native_slot_mapping = slot_mapping") >= 2
+                break
+        else:
+            raise AssertionError("deepseek_v4_attention patch file was not found")
+
+    def test_custom_ops_wrapper_trims_padded_slot_mapping(self):
+        source = (Path(__file__).parents[1] / "vllm_musa/_custom_ops.py").read_text()
+
+        assert "def deepseek_v4_qnorm_rope_kv_insert(" in source
+        assert "slot_mapping.shape[0] > q.shape[0]" in source
+        assert "slot_mapping[: q.shape[0]].contiguous()" in source
+
+    def test_decode_flashmla_path_trims_padded_sparse_metadata(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.deepseek_v4_attention":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "active_decode_tokens = q.shape[0]" in new_source
+                assert "topk_indices[:active_decode_tokens]" in new_source
+                assert "topk_lens[:active_decode_tokens]" in new_source
+                assert "swa_indices[:active_decode_tokens]" in new_source
+                assert "swa_lens[:active_decode_tokens]" in new_source
+                break
+        else:
+            raise AssertionError("deepseek_v4_attention patch file was not found")
+
+
+class TestSparseAttnIndexerPatch:
+    """Tests for the MUSA DeepSeek-V4 sparse indexer patch."""
+
+    def test_sparse_indexer_patch_handles_mtp_block_table_rows(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "_musa_decode_block_table_for_token_rows" in new_source
+                assert "repeat_interleave(rows // block_rows, dim=0)" in new_source
+                assert "block_table is None" in new_source
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+    def test_sparse_indexer_prefill_uses_musa_native_before_torch_path(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert 'VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0"' in (
+                    new_source
+                )
+                assert "_musa_try_fill_prefill_topk_from_indexer_cache_native" in (
+                    new_source
+                )
+                assert "deepseek_v4_indexer_topk_prefill" in new_source
+                assert new_source.index(
+                    "_musa_try_fill_prefill_topk_from_indexer_cache_native"
+                ) < new_source.index("_musa_gather_indexer_fp8_cache")
+                assert (
+                    "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL"
+                    in new_source
+                )
+                assert "per_head = per_head.clamp_min(0.0)" in new_source
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+    def test_sparse_indexer_patch_removes_stale_duplicate_helpers(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+logger = init_logger(__name__)
+
+
+def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
+    return False
+
+
+def _musa_fill_exact_sparse_indexer_indices_capture():
+    return "current"
+
+
+def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
+    return True
+
+
+def _musa_fill_decode_topk_from_indexer_cache_capture():
+    block_table = decode_metadata.block_table[:rows]
+
+
+def _musa_fill_exact_sparse_indexer_indices(
+    return "entry"
+"""
+                normalized = module.normalize_source(source)
+
+                assert (
+                    normalized.count(
+                        "def _musa_sparse_indexer_is_current_stream_capturing()"
+                    )
+                    == 1
+                )
+                assert "decode_metadata.block_table[:rows]" not in normalized
+                assert "def _musa_fill_exact_sparse_indexer_indices(" in normalized
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+    def test_sparse_indexer_patch_upgrades_partial_prefill_native_helper(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
+    return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
+
+
+def _musa_fill_exact_sparse_indexer_indices():
+    if _musa_try_fill_prefill_topk_from_indexer_cache_native():
+        return "native"
+
+
+def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Tensor:
+    return kv_cache[block_id].view(torch.uint8).flatten()
+"""
+                normalized = module.normalize_source(source)
+
+                assert 'VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0"' in (
+                    normalized
+                )
+                assert (
+                    "def _musa_try_fill_prefill_topk_from_indexer_cache_native"
+                    in normalized
+                )
+                assert "deepseek_v4_indexer_topk_prefill" in normalized
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+    def test_sparse_indexer_patch_removes_shadowed_exact_torch_fallback(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_module
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                module = _load_patch_module(patch_path)
+                assert module is not None
+                source = """
+def _musa_fill_exact_sparse_indexer_indices():
+    if metadata.num_prefills > 0 and metadata.prefill is not None:
+        for chunk in metadata.prefill.chunks:
+            if _musa_try_fill_prefill_topk_from_indexer_cache_native(
+                q_quant[token_start:token_end],
+                kv_cache,
+                weights[token_start:token_end],
+                chunk,
+                topk_indices_buffer[token_start:token_end, :topk_tokens],
+                topk_tokens,
+                head_dim,
+            ):
+                continue
+            k_deq = _musa_gather_indexer_fp8_cache()
+    return topk_indices_buffer
+
+
+def _musa_fill_exact_sparse_indexer_indices():
+    if metadata.num_prefills > 0 and metadata.prefill is not None:
+        q_deq = q_quant.to(torch.float32)
+        weights_fp32 = weights.to(torch.float32)
+        for chunk in metadata.prefill.chunks:
+            k_deq = _musa_gather_indexer_fp8_cache()
+            _musa_fill_topk_rows_from_indexer_logits()
+    return topk_indices_buffer
+"""
+                normalized = module.normalize_source(source)
+
+                assert (
+                    normalized.count("def _musa_fill_exact_sparse_indexer_indices()")
+                    == 1
+                )
+                assert (
+                    "_musa_try_fill_prefill_topk_from_indexer_cache_native"
+                    in normalized
+                )
+                assert "q_deq = q_quant.to(torch.float32)" not in normalized
+                assert normalized.index(
+                    "_musa_try_fill_prefill_topk_from_indexer_cache_native"
+                ) < normalized.index("_musa_gather_indexer_fp8_cache")
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+
+class TestSparseSWAPatch:
+    """Tests for the MUSA DeepSeek-V4 sparse SWA metadata patch."""
+
+    def test_sparse_swa_patch_builds_token_metadata_on_device(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.attention.backends.mla.sparse_swa":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "_compute_token_to_req_and_valid_kernel" in new_source
+                assert "token_to_req_indices.copy_(x, non_blocking=True)" not in (
+                    new_source
+                )
+                assert (
+                    "torch.repeat_interleave(torch.arange(num_reqs), query_lens)"
+                    not in (new_source)
+                )
+                assert "slot >= 0" in new_source
+                break
+        else:
+            raise AssertionError("sparse_swa patch file was not found")
 
 
 class TestDeepGemmPatch:
@@ -519,6 +890,10 @@ class TestMUSAPlatformDefaults:
         cudagraph_capture_sizes=None,
         cudagraph_mode=None,
         tensor_parallel_size=1,
+        use_mla=False,
+        index_topk=None,
+        attention_backend=None,
+        cache_block_size=16,
     ):
         from types import SimpleNamespace
 
@@ -526,23 +901,26 @@ class TestMUSAPlatformDefaults:
             architectures=architectures,
             quantization_config=quantization_config,
         )
+        if index_topk is not None:
+            hf_config.index_topk = index_topk
         return SimpleNamespace(
             model_config=SimpleNamespace(
                 architectures=architectures,
                 hf_config=hf_config,
                 quantization=quantization,
-                use_mla=False,
+                use_mla=use_mla,
                 is_mm_prefix_lm=False,
             ),
             parallel_config=SimpleNamespace(
                 tensor_parallel_size=tensor_parallel_size,
                 worker_cls="auto",
             ),
-            cache_config=SimpleNamespace(block_size=16),
+            cache_config=SimpleNamespace(block_size=cache_block_size),
             scheduler_config=SimpleNamespace(
                 is_multimodal_model=False,
                 disable_chunked_mm_input=False,
             ),
+            attention_config=SimpleNamespace(backend=attention_backend),
             compilation_config=SimpleNamespace(
                 custom_ops=[],
                 cudagraph_mode=cudagraph_mode,
@@ -623,6 +1001,352 @@ class TestMUSAPlatformDefaults:
         assert vllm_config.compilation_config.cudagraph_mode == CUDAGraphMode.PIECEWISE
         assert vllm_config.compilation_config.max_cudagraph_capture_size == 512
         assert vllm_config.compilation_config.cudagraph_capture_sizes == [1, 2, 4, 8]
+
+    def test_deepseek_v4_defaults_moe_gemv_block32x8(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV", None)
+            os.environ.pop("VLLM_MUSA_GEMV_MOE_BLOCK", None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] == "1"
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
+
+    def test_deepseek_v4_preserves_user_moe_gemv_block(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {"VLLM_MUSA_GEMV_MOE_BLOCK": "16x8"}):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
+
+    def test_deepseek_v4_preserves_empty_user_moe_gemv_block(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {"VLLM_MUSA_GEMV_MOE_BLOCK": ""}):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == ""
+
+    def test_non_deepseek_v4_does_not_default_moe_gemv_block(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["Qwen3ForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_GEMV_MOE_BLOCK", None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
+
+    def test_deepseek_v4_tp8_profile_unset_keeps_default_envs(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+        )
+        profile_keys = [
+            "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE",
+            "VLLM_MUSA_GEMV_MOE_BLOCK",
+            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X",
+            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
+        ]
+
+        with patch.dict(os.environ, {}, clear=False):
+            for key in profile_keys:
+                os.environ.pop(key, None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] == "1"
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
+            assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in os.environ
+            assert "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE" not in os.environ
+            assert "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE" not in os.environ
+            assert (
+                "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS" not in os.environ
+            )
+            assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS" not in os.environ
+            assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL" not in os.environ
+
+    def test_deepseek_v4_tp8_profile_sets_missing_envs(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        profile_keys = [
+            "VLLM_MUSA_GEMV_MOE_BLOCK",
+            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X",
+            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
+        ]
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "balanced_long_prefill"},
+            clear=False,
+        ):
+            for key in profile_keys:
+                os.environ.pop(key, None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] == "1"
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
+            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "256"
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"] == "256"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE"]
+                == "dsa_full"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS"] == "1"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"]
+                == "2048"
+            )
+            assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL" not in os.environ
+            assert vllm_config.cache_config.block_size == 256
+
+    def test_deepseek_v4_tp8_aggressive_profile_sets_mhc_deepgemm(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+        profile_keys = [
+            "VLLM_MUSA_GEMV_MOE_BLOCK",
+            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X",
+            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
+        ]
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "aggressive_long_prefill"},
+            clear=False,
+        ):
+            for key in profile_keys:
+                os.environ.pop(key, None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV"] == "1"
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
+            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "256"
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"] == "256"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE"]
+                == "dsa_full"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS"] == "1"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"]
+                == "2048"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "deepgemm_big_fuse"
+            )
+            assert vllm_config.cache_config.block_size == 256
+
+    def test_deepseek_v4_tp8_profile_preserves_explicit_overrides(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+        env = {
+            "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "balanced_long_prefill",
+            "VLLM_MUSA_GEMV_MOE_BLOCK": "32x8",
+            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X": "128",
+            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "64",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE": "opt1",
+            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL": "native",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
+            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "128"
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"] == "64"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE"] == "opt1"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS"] == "0"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"] == "0"
+            )
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "native"
+            assert vllm_config.cache_config.block_size == 64
+
+    def test_deepseek_v4_tp8_profile_rejects_unknown_name(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "typo"},
+            clear=False,
+        ):
+            try:
+                MUSAPlatformBase.check_and_update_config(vllm_config)
+            except ValueError as exc:
+                message = str(exc)
+            else:
+                raise AssertionError("expected invalid profile to raise ValueError")
+
+            assert "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE" in message
+            assert "balanced_long_prefill" in message
+            assert "aggressive_long_prefill" in message
+
+    def test_deepseek_v4_flashmla_sparse_defaults_block64(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=16,
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE", None)
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
+
+    def test_deepseek_v4_flashmla_sparse_preserves_explicit_block64(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "64"},
+        ):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
+
+    def test_deepseek_v4_flashmla_sparse_allows_block256_opt_in(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "256"},
+        ):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 256
+
+    def test_deepseek_v4_flashmla_sparse_rejects_invalid_block_size(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=64,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "128"},
+        ):
+            with pytest.raises(ValueError, match="must be 64 or 256"):
+                MUSAPlatformBase.check_and_update_config(vllm_config)
+
+    def test_non_deepseek_v4_flashmla_sparse_ignores_block256_opt_in(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["OtherSparseMLAForCausalLM"],
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+
+        with patch.dict(
+            os.environ,
+            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "256"},
+        ):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
 
     def test_dense_fp8_does_not_cap_cudagraph_capture_size(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -774,10 +1498,14 @@ class TestScaledMMKernelPatch:
         ).read_text()
 
         assert "torch.ops.vllm.musa_deepgemm_fp8_op" in source
+        assert "torch.ops.vllm.musa_fp8_small_m_gemv_op" in source
         assert "direct_register_custom_op(" in source
         assert '"musa_deepgemm_fp8_op"' in source
+        assert '"musa_fp8_small_m_gemv_op"' in source
         assert "_musa_deepgemm_fp8_op_fake" in source
+        assert "_musa_fp8_small_m_gemv_op_fake" in source
         assert "VLLM_MUSA_DEEPGEMM_ROW_MAJOR_ACT_SCALES" in source
+        assert "VLLM_MUSA_FP8_SMALL_M_GEMV" in source
 
     def test_musa_deepgemm_row_major_scale_gate(self, monkeypatch):
         from vllm_musa.model_executor.kernels.linear.scaled_mm import deep_gemm

@@ -16,18 +16,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+import torch
+
 # torchada redirects torch.cuda symbols to MUSA. Keep this import first.
 import torchada  # noqa: F401
-
-import torch
+from vllm.config import VllmConfig, set_current_vllm_config
+from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbedding
 
 # Register the vllm-musa platform hooks and torch.ops.vllm.musa_rotary_embedding.
 import vllm_musa  # noqa: F401
 from vllm_musa.jit_kernel.csrc import rope as _rope_module  # noqa: F401
-
-from vllm.config import VllmConfig, set_current_vllm_config
-from vllm.model_executor.layers.rotary_embedding.base import RotaryEmbedding
-
 
 _VLLM_CFG = VllmConfig()
 _VLLM_CFG_CM = set_current_vllm_config(_VLLM_CFG)
@@ -201,8 +199,8 @@ def bench_shape(
     if check_correctness:
         assert_close(shape, rope, positions, query, key)
 
-    shape_warmup = warmup if warmup is not None else default_warmup(
-        shape.num_tokens, quick
+    shape_warmup = (
+        warmup if warmup is not None else default_warmup(shape.num_tokens, quick)
     )
     shape_iters = iters if iters is not None else default_iters(shape.num_tokens, quick)
 
@@ -228,9 +226,7 @@ def bench_shape(
     native_event_us, native_wall_us = measure(
         run_native, warmup=shape_warmup, iters=shape_iters
     )
-    jit_event_us, jit_wall_us = measure(
-        run_jit, warmup=shape_warmup, iters=shape_iters
-    )
+    jit_event_us, jit_wall_us = measure(run_jit, warmup=shape_warmup, iters=shape_iters)
 
     native = BenchResult(
         shape.label,
@@ -315,7 +311,9 @@ def main() -> int:
         return 1
 
     shape_filter = parse_shape_filter(args.shapes)
-    unknown = shape_filter - {shape.label for shape in SHAPES} if shape_filter else set()
+    unknown = (
+        shape_filter - {shape.label for shape in SHAPES} if shape_filter else set()
+    )
     if unknown:
         print(f"FAIL unknown shape label(s): {', '.join(sorted(unknown))}")
         return 1
