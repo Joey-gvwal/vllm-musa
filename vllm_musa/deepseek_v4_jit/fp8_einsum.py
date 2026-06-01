@@ -150,3 +150,88 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
         return False, f"{type(exc).__name__}: {exc}"
 
     return True, "musa_fused_gemv"
+
+
+def _torch_fp8_einsum_fallback_enabled() -> bool:
+    return os.getenv("VLLM_MUSA_ENABLE_TORCH_FP8_EINSUM_FALLBACK", "0") == "1"
+
+
+def _validate_group_size_divisible(name: str, size: int) -> None:
+    if size % _GROUP_SIZE != 0:
+        raise ValueError(
+            f"{name} dimension must be divisible by {_GROUP_SIZE}, got {size}"
+        )
+
+
+def _dequant_activation(
+    activation: torch.Tensor,
+    activation_scale: torch.Tensor,
+) -> torch.Tensor:
+    tokens, groups, hidden = activation.shape
+    _validate_group_size_divisible("activation hidden", hidden)
+    scale_blocks = hidden // _GROUP_SIZE
+    activation_blocks = activation.to(torch.float32).reshape(
+        tokens,
+        groups,
+        scale_blocks,
+        _GROUP_SIZE,
+    )
+    return (
+        activation_blocks * activation_scale.to(torch.float32).unsqueeze(-1)
+    ).reshape(tokens, groups, hidden)
+
+
+def _dequant_weight(
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    groups: int,
+) -> torch.Tensor:
+    weight, scales, out_dim, in_dim = _normalize_weight(
+        weight,
+        weight_scale,
+        groups,
+    )
+    _validate_group_size_divisible("weight output", out_dim)
+    _validate_group_size_divisible("weight input", in_dim)
+    out_blocks = out_dim // _GROUP_SIZE
+    in_blocks = in_dim // _GROUP_SIZE
+    weight_blocks = weight.to(torch.float32).reshape(
+        groups,
+        out_blocks,
+        _GROUP_SIZE,
+        in_blocks,
+        _GROUP_SIZE,
+    )
+    return (
+        weight_blocks * scales[:, :, None, :, None]
+    ).reshape(groups, out_dim, in_dim)
+
+
+def try_musa_deepseek_v4_fp8_einsum(
+    activation: torch.Tensor,
+    activation_scale: torch.Tensor,
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    out: torch.Tensor,
+    equation: str,
+) -> tuple[bool, str]:
+    """Try supported MUSA replacements for DeepSeek-V4 FP8 einsum."""
+    handled, reason = try_musa_deepseek_v4_fp8_einsum_gemv(
+        activation,
+        activation_scale,
+        weight,
+        weight_scale,
+        out,
+        equation,
+    )
+    if handled:
+        return True, reason
+    if not _torch_fp8_einsum_fallback_enabled():
+        return False, reason
+    if equation != "bhr,hdr->bhd":
+        return False, f"unsupported equation {equation!r}"
+
+    activation_deq = _dequant_activation(activation, activation_scale)
+    weight_deq = _dequant_weight(weight, weight_scale, activation.shape[1])
+    out.copy_(torch.einsum(equation, activation_deq, weight_deq).to(out.dtype))
+    return True, "torch_dequant_einsum_fallback"

@@ -120,13 +120,16 @@ class _RepoInfo:
 _VLLM_REPO = _RepoInfo(
     name="vllm",
     git_repository="https://github.com/vllm-project/vllm.git",
-    git_tag="v0.20.0",
+    git_tag="v0.22.0",
     git_shallow=False,
 )
 
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
     git_repository="https://github.com/flashinfer-ai/flashinfer.git",
+    # Keep the prepared MUSA-compatible FlashInfer baseline. Upstream vLLM
+    # v0.22.0 uses v0.6.11.post2, but that tag currently breaks the MUSA
+    # csrc_musa/include_musa build path used by vllm-musa.
     git_tag="bc29697ba20b7e6bdb728ded98f04788e16ee021",
     git_shallow=False,
 )
@@ -143,47 +146,36 @@ INCLUDE_DIRS = [
 # =============================================================================
 
 VLLM_CSRC_SOURCES = [
-    str(_VLLM_REPO.source_dir / "csrc/activation_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/cache_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/cuda_utils_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/cumem_allocator.cpp"),
-    str(_VLLM_REPO.source_dir / "csrc/layernorm_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/pos_encoding_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/sampler.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/cuda_view.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/int8/scaled_quant.cu"),
     str(_VLLM_REPO.source_dir / "csrc/mamba/mamba_ssm/selective_scan_fwd.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/gptq/q_gemm.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/gguf/gguf_kernel.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/layernorm_quant_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/fused_qknorm_rope_kernel.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/activation_kernels.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/cache_kernels.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/cache_kernels_fused.cu"),
     # MUSA-0203 (2026-05-28): paged_attention_v1/v2 are CUDA-only and unused
     # on MUSA (vllm uses FlashAttention via mate's flash_attn_varlen_func).
-    # Skipping them avoids ~2 min of compile time and ~1 mcc clang frontend
-    # segfault we hit when expanding mcc flags. Their schema declarations
-    # are also stripped from third_party/vllm/csrc/torch_bindings.cpp below
-    # so torch.ops._C lookups at vllm import time don't reference unbound
-    # kernels.
+    # Skipping them avoids compile time and mcc frontend failures. Their impl
+    # registrations are stripped from third_party/vllm/csrc/torch_bindings.cpp
+    # below so torch.ops._C import does not reference unbuilt symbols.
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v1.cu"),
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v2.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/cache_kernels_fused.cu"),
-    str(
-        _VLLM_REPO.source_dir
-        / "csrc/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"
-    ),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/common.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/custom_all_reduce.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/quantization/awq/gemm_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/attention/vertical_slash_index.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"),
+    str(_VLLM_REPO.source_dir / "csrc/attention/merge_attn_states.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/sampler.cu"),
     str(_VLLM_REPO.source_dir / "csrc/topk.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/cuda_view.cu"),
     str(
         _VLLM_REPO.source_dir
         / "csrc/quantization/fused_kernels/fused_silu_mul_block_quant.cu"
     ),
+    str(_VLLM_REPO.source_dir / "csrc/quantization/activation_kernels.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/cuda_utils_kernels.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/custom_all_reduce.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"),
     str(_VLLM_REPO.source_dir / "csrc/minimax_reduce_rms_kernel.cu"),
+]
+
+VLLM_STABLE_CSRC_SOURCES = [
+    # v0.22 imports this extension for stable-ABI operator schemas. The CUDA
+    # stable kernels require torch/headeronly/core/Dispatch.h, which is not in
+    # the current torch_musa stack, so MUSA builds this as a schema-only shim.
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/torch_bindings.cpp"),
 ]
 
 VLLM_MUSA_CSRC_SOURCES = [
@@ -199,10 +191,9 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/attention/deepseek_v4_inv_rope_fp8_quant.mu",
     "csrc/musa/mhc/deepseek_v4_mhc_pre.mu",
     "csrc/musa/moe/deepseek_v4_topk_softplus_sqrt.mu",
-    # XXX (MUSA): The version used here is vllm 0.18.0, located at csrc/quantization/w8a8/fp8.
-    # While in version 0.20.0, the path has changed to csrc/libtorch_stable/quantization/w8a8/fp8,
-    # and depends on two header file from PyTorch 2.11's torch/headeronly/core/ScalarType.h and
-    # torch/headeronly/util/Exception.h, which is not supported by the current musa.
+    # XXX (MUSA): This local kernel stays non-stable for now because the
+    # upstream v0.22 path moved under csrc/libtorch_stable and depends on
+    # stable ABI headers not yet covered by the current MUSA path.
     "csrc/musa/quantization/per_token_group_quant.cu",
     "csrc/musa/sampler.mu",
     str(_FLASHINFER_REPO.source_dir / "csrc/norm.cu"),
@@ -213,6 +204,7 @@ VLLM_MUSA_CSRC_SOURCES = [
 VLLM_MOE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/moe/moe_align_sum_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/moe/topk_softmax_kernels.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/moe/topk_softplus_sqrt_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/moe/torch_bindings.cpp"),
 ]
 
@@ -227,8 +219,6 @@ CSRC_FILE_OVERRIDES = [
     "csrc/custom_all_reduce.cuh",
     "csrc/mamba/mamba_ssm/selective_scan_fwd.cu",
     "csrc/quantization/activation_kernels.cu",
-    "csrc/quantization/gptq/q_gemm.cu",
-    "csrc/quantization/gptq/compat.cuh",
 ]
 
 # Inline text replacements to apply to upstream source files.
@@ -258,6 +248,21 @@ CSRC_TEXT_PATCHES = {
         {
             '  ops.impl("paged_attention_v2", torch::kCUDA, &paged_attention_v2);': "  // MUSA-0203: paged_attention_v2 impl stripped (kernel not built on MUSA)",
         },
+        {
+            '  ops.impl("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert", torch::kCUDA,\n           &fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert);': "  // MUSA: fused DeepSeek-V4 qnorm/rope/cache impl stripped;\n  // vllm_musa redirects this path to native/JIT MUSA implementations.",
+        },
+    ],
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/torch_bindings.cpp"): [
+        {
+            '#include "ops.h"': '#if !defined(USE_MUSA)\n#include "ops.h"\n#endif'
+        },
+        {
+            "STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {": "#if !defined(USE_MUSA)\nSTABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {"
+        },
+        {
+            "STABLE_TORCH_LIBRARY_IMPL(_C, CompositeExplicitAutograd, ops) {": "#endif\n#if !defined(USE_MUSA)\nSTABLE_TORCH_LIBRARY_IMPL(_C, CompositeExplicitAutograd, ops) {"
+        },
+        {"REGISTER_EXTENSION(_C_stable_libtorch)": "#endif\nREGISTER_EXTENSION(_C_stable_libtorch)"},
     ],
     str(_VLLM_REPO.source_dir / "csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh"): [
         {
@@ -314,6 +319,14 @@ CSRC_TEXT_PATCHES = {
     ): [
         {
             '#include "../w8a8/fp8/common.cuh"': '#include "quantization/w8a8/fp8/common.cuh"'
+        },
+    ],
+    str(
+        _VLLM_REPO.source_dir
+        / "csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh"
+    ): [
+        {
+            '#include "../../../quantization/w8a8/fp8/common.cuh"': '#include "quantization/w8a8/fp8/common.cuh"'
         },
     ],
     str(
@@ -469,6 +482,15 @@ EXT_MODULES = [
         py_limited_api=False,
     ),
     CUDAExtension(
+        name="vllm._C_stable_libtorch",
+        sources=VLLM_STABLE_CSRC_SOURCES,
+        include_dirs=INCLUDE_DIRS,
+        extra_compile_args=COMPILE_ARGS,
+        libraries=LINK_LIBRARIES,
+        extra_link_args=EXTRA_LINK_ARGS,
+        py_limited_api=False,
+    ),
+    CUDAExtension(
         name="vllm_musa._C",
         sources=VLLM_MUSA_CSRC_SOURCES,
         include_dirs=INCLUDE_DIRS,
@@ -593,6 +615,10 @@ class _CustomBuildExt(BuildExtension):
     def _apply_text_patches():
         """Apply inline text replacements to upstream source files."""
         for file_path, replacement_rules in CSRC_TEXT_PATCHES.items():
+            if not Path(file_path).exists():
+                print(f"Skipping missing text patch target: {file_path}")
+                continue
+
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
 

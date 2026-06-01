@@ -48,10 +48,23 @@ def test_mhc_patch_uses_musa_provider_by_default():
 
     assert "from vllm_musa.deepseek_v4_mhc import mhc_pre_musa" in source
     assert "from vllm_musa.deepseek_v4_mhc import mhc_post_musa" in source
+    assert "from vllm_musa.deepseek_v4_mhc import mhc_pre_musa_with_norm" in source
+    assert "from vllm_musa.deepseek_v4_mhc import mhc_fused_post_pre_musa" in source
+    assert "from vllm_musa.deepseek_v4_mhc import hc_head_musa" in source
     assert "VLLM_MUSA_ENABLE_DEEPSEEK_V4_MHC_MUSA_IMPL" in source
     assert (
         'VLLM_MUSA_ENABLE_TORCH_MHC_PRENORM_FALLBACK",\n                "0"' in source
     )
+
+
+def test_fp8_einsum_fallback_validates_group_size_divisibility():
+    source = _read("vllm_musa/deepseek_v4_jit/fp8_einsum.py")
+
+    assert "def _validate_group_size_divisible(" in source
+    assert "must be divisible by" in source
+    assert '_validate_group_size_divisible("activation hidden", hidden)' in source
+    assert '_validate_group_size_divisible("weight output", out_dim)' in source
+    assert '_validate_group_size_divisible("weight input", in_dim)' in source
 
 
 def test_mhc_pre_deepgemm_big_fuse_is_default_off():
@@ -66,6 +79,41 @@ def test_mhc_pre_deepgemm_big_fuse_is_default_off():
     assert "return _mhc_pre_deepgemm_big_fuse_provider(" in source
     assert 'return "native"' in source
     assert 'return "deepgemm_big_fuse"' not in source
+
+
+def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+
+    assert "def mhc_fused_post_pre_musa(" in source
+    assert "residual_cur = mhc_post_musa(" in source
+    assert "post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa(" in source
+    assert "def _apply_optional_rms_norm(" in source
+    assert "norm_weight.to(torch.float32)" in source
+
+
+def test_mhc_auto_paths_fall_back_when_tilelang_is_unavailable():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+
+    assert 'VLLM_MUSA_DEEPSEEK_V4_MHC_POST_IMPL", "auto"' in source
+    assert "except (ImportError, OSError, NotImplementedError):" in source
+    assert "return mhc_post_torch_fallback(" in source
+    assert "return _mhc_pre_native_provider(" in source
+    assert "if not auto_impl:" in source
+
+
+def test_hc_head_musa_eager_path_preserves_token_dimensions():
+    source = _read("vllm_musa/deepseek_v4_mhc.py")
+
+    assert "def _reshape_hc_head_input(" in source
+    assert "def hc_head_musa(" in source
+    assert "hidden_states.flatten(1)" not in source
+    assert "token_shape = hidden_states.shape[:-1]" in source
+    assert "token_shape = hidden_states.shape[:-2]" in source
+    assert "grouped = hidden_states.reshape(-1, hc_mult, hidden_size)" in source
+    assert "x = grouped.reshape(grouped.shape[0], -1)" in source
+    assert "x @ hc_fn.to(torch.float32).t()" in source
+    assert "torch.sum(pre.unsqueeze(-1) * grouped, dim=1)" in source
+    assert "return y.reshape(*token_shape, hidden_size).to(dtype)" in source
 
 
 def test_mhc_pre_decode_prenorm_tilelang_selector_is_default_off():

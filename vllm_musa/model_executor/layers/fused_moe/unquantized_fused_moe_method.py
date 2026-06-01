@@ -5,7 +5,14 @@ from vllm.model_executor.layers.fused_moe import (
     UnquantizedFusedMoEMethod,
     fused_experts,
 )
-from vllm.model_executor.layers.fused_moe.fused_batched_moe import BatchedTritonExperts
+try:
+    from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import (
+        BatchedTritonExperts,
+    )
+except ModuleNotFoundError:
+    from vllm.model_executor.layers.fused_moe.fused_batched_moe import (
+        BatchedTritonExperts,
+    )
 from vllm.model_executor.layers.fused_moe.modular_kernel import (
     FusedMoEActivationFormat,
     FusedMoEExpertsModular,
@@ -64,6 +71,7 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
         x: torch.Tensor,
         topk_weights: torch.Tensor,
         topk_ids: torch.Tensor,
+        shared_experts: object | None = None,
         shared_experts_input: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         is_inplace = not is_torch_equal_or_newer("2.9")
@@ -79,6 +87,8 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             apply_router_weight_on_input=layer.apply_router_weight_on_input,
             global_num_experts=layer.global_num_experts,
             expert_map=layer.expert_map,
+            shared_experts=shared_experts,
+            shared_experts_input=shared_experts_input,
         )
 
         return result

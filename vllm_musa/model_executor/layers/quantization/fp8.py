@@ -116,6 +116,7 @@ def apply(
     x: torch.Tensor,
     topk_weights: torch.Tensor,
     topk_ids: torch.Tensor,
+    shared_experts: object | None = None,
     shared_experts_input: torch.Tensor | None = None,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     if layer.ep_size != None and layer.ep_size <= 1:
@@ -146,6 +147,7 @@ def apply(
             global_num_experts=layer.global_num_experts,
             expert_map=layer.expert_map,
             apply_router_weight_on_input=layer.apply_router_weight_on_input,
+            shared_experts=shared_experts,
             shared_experts_input=shared_experts_input,
         )
 

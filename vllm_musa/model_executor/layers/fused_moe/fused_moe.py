@@ -14,6 +14,7 @@ from vllm.model_executor.layers.quantization.utils.mxfp6_utils import dequant_mx
 from vllm.model_executor.layers.quantization.utils.ocp_mx_utils import OCP_MX_Scheme
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     kFp8Dynamic128Sym,
+    kFp8DynamicTensorSym,
     kFp8DynamicTokenSym,
     kFp8Static128BlockSym,
     kFp8StaticChannelSym,
@@ -102,6 +103,7 @@ def _supports_quant_scheme(
         (kFp8StaticChannelSym, kFp8DynamicTokenSym),
         (kFp8StaticTensorSym, kFp8DynamicTokenSym),
         (kFp8StaticTensorSym, kFp8StaticTensorSym),
+        (kFp8StaticTensorSym, kFp8DynamicTensorSym),
     ]
     return (weight_key, activation_key) in SUPPORTED_W_A
 
@@ -325,8 +327,25 @@ def _musa_fused_experts_impl_dispatch(*args, **kwargs) -> torch.Tensor:
 
 _upstream_fused_moe.fused_experts_impl = _musa_fused_experts_impl_dispatch
 
+
+def _patch_triton_experts_quant_scheme() -> None:
+    """Patch the Triton MoE expert class across vLLM fused-MoE layouts."""
+    try:
+        from vllm.model_executor.layers.fused_moe.experts.triton_moe import (
+            TritonExperts,
+        )
+    except ImportError:
+        TritonExperts = getattr(_upstream_fused_moe, "TritonExperts", None)
+
+    if TritonExperts is None:
+        logger.warning(
+            "Skipping MUSA TritonExperts quant-scheme patch: class not found."
+        )
+        return
+
+    TritonExperts._supports_quant_scheme = _supports_quant_scheme
+
+
 # The TritonExperts._supports_quant_scheme patch is independent; it expands
 # MUSA's supported FP8 quant key list and stays in place for upstream dispatch.
-vllm.model_executor.layers.fused_moe.fused_moe.TritonExperts._supports_quant_scheme = (
-    _supports_quant_scheme
-)
+_patch_triton_experts_quant_scheme()

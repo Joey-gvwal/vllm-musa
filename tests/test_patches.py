@@ -75,6 +75,84 @@ class TestPatchFileLoading:
         assert patches == []
 
 
+class TestCustomOpsRuntimePatches:
+    def test_rms_norm_wrapper_is_registered_on_vllm_custom_ops(self, monkeypatch):
+        import vllm
+
+        import vllm_musa
+
+        vllm_ops = ModuleType("vllm._custom_ops")
+        monkeypatch.setitem(sys.modules, "vllm._custom_ops", vllm_ops)
+        monkeypatch.setattr(vllm, "_custom_ops", vllm_ops, raising=False)
+
+        vllm_musa._patch_vllm_custom_ops_dflash_fallbacks()
+
+        assert vllm_ops.rms_norm is vllm_musa._musa_safe_rms_norm
+        assert getattr(vllm_ops.rms_norm, "_musa_safe_rms_norm") is True
+        assert vllm_ops.rotary_embedding is vllm_musa._musa_safe_rotary_embedding
+        assert getattr(vllm_ops.rotary_embedding, "_musa_safe_rotary_embedding") is True
+
+
+class TestDeepSeekV4V022Patches:
+    def test_common_inv_rope_fp8_quant_patch_is_discoverable(self):
+        from vllm_musa.patches import _get_patch_files
+
+        modules = {module_name for module_name, _ in _get_patch_files()}
+
+        assert (
+            "vllm.models.deepseek_v4.common.ops.fused_inv_rope_fp8_quant"
+            in modules
+        )
+
+    def test_attention_fp8_einsum_patch_is_discoverable(self):
+        from vllm_musa.patches import _get_patch_files
+
+        modules = {module_name for module_name, _ in _get_patch_files()}
+
+        assert "vllm.models.deepseek_v4.attention" in modules
+
+    def test_nvidia_model_patch_is_discoverable(self):
+        from vllm_musa.patches import _get_patch_files
+
+        modules = {module_name for module_name, _ in _get_patch_files()}
+
+        assert "vllm.models.deepseek_v4.nvidia.model" in modules
+
+    def test_attention_fp8_einsum_patch_uses_musa_provider(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        for module_name, patch_path in _get_patch_files():
+            if module_name == "vllm.models.deepseek_v4.attention":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "try_musa_deepseek_v4_fp8_einsum" in new_source
+                assert "upstream DeepGEMM fp8_einsum" in new_source
+                assert "not available in the MUSA runtime" in new_source
+                assert "current_platform.is_musa()" in new_source
+                assert "_musa_deepseek_v4_mm_out_dtype" in new_source
+                assert "torch.mm(a.to(out_dtype), b.to(out_dtype))" in new_source
+                break
+        else:
+            raise AssertionError("DeepSeek-V4 v0.22 attention patch was not found")
+
+    def test_nvidia_model_patch_runs_final_hc_post_on_musa(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        for module_name, patch_path in _get_patch_files():
+            if module_name == "vllm.models.deepseek_v4.nvidia.model":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "current_platform.is_cuda() or current_platform.is_musa()" in (
+                    new_source
+                )
+                assert "hidden_states = layer.hc_post(" in new_source
+                break
+        else:
+            raise AssertionError("DeepSeek-V4 v0.22 NVIDIA model patch was not found")
+
+
 class TestTritonPatch:
     """Tests for the Triton unified attention patch."""
 
@@ -269,6 +347,51 @@ class TestLLMBaseProposerPatch:
 
 class TestDeepSeekV4AttentionPatch:
     """Tests for the MUSA DeepSeek-V4 attention patch."""
+
+    def test_v022_attention_redirects_qnorm_rope_insert_to_musa_native(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.models.deepseek_v4.attention":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "def _musa_deepseek_v4_qnorm_rope_kv_insert(" in new_source
+                assert "_musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(" in (
+                    new_source
+                )
+                assert "if _musa_deepseek_v4_is_musa_tensor(q):" in new_source
+                assert "swa_kv_cache," in new_source
+                assert "F.pad(q, (0, 0, 0, padded_heads - q.shape[1])" in (
+                    new_source
+                )
+                assert "slot_mapping[: q.shape[0]].contiguous()" in new_source
+                break
+        else:
+            raise AssertionError("v0.22 deepseek_v4 attention patch file was not found")
+
+    def test_v022_deepseek_v4_flashmla_uses_musa_ops_wrapper(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.models.deepseek_v4.nvidia.flashmla":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "from vllm_musa.v1.attention.ops.flashmla import (" in (
+                    new_source
+                )
+                assert "flash_mla_sparse_fwd" in new_source
+                assert "flash_mla_with_kvcache" in new_source
+                break
+        else:
+            raise AssertionError(
+                "v0.22 deepseek_v4 nvidia flashmla patch file was not found"
+            )
 
     def test_qnorm_rope_native_path_trims_padded_slot_mapping(self):
         from vllm_musa.patches import _get_patch_files, _load_patch_config

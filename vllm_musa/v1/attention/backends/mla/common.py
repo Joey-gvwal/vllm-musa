@@ -13,9 +13,8 @@ from vllm._aiter_ops import rocm_aiter_ops
 from vllm.config import get_current_vllm_config
 from vllm.distributed.parallel_state import get_dcp_group, is_global_first_rank
 from vllm.logger import init_logger
+from vllm.model_executor.layers.attention import mla_attention as _mla_attention
 from vllm.model_executor.layers.attention.mla_attention import (
-    CudnnPrefillMetadata,
-    FlashInferPrefillMetadata,
     MLAAttentionImpl,
     MLACommonMetadata,
     MLACommonMetadataBuilder,
@@ -23,9 +22,6 @@ from vllm.model_executor.layers.attention.mla_attention import (
     dynamic_per_batched_tensor_quant,
     has_flashinfer,
     reorg_kvcache,
-    use_cudnn_prefill,
-    use_flashinfer_prefill,
-    use_trtllm_ragged_deepseek_prefill,
 )
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
@@ -63,6 +59,94 @@ logger = init_logger(__name__)
 
 M = TypeVar("M", bound=MLACommonMetadata)
 A = TypeVar("A")
+
+CudnnPrefillMetadata = getattr(
+    _mla_attention, "CudnnPrefillMetadata", MLACommonPrefillMetadata
+)
+FlashInferPrefillMetadata = getattr(
+    _mla_attention, "FlashInferPrefillMetadata", MLACommonPrefillMetadata
+)
+
+
+def _disabled_prefill_backend() -> bool:
+    return False
+
+
+use_cudnn_prefill = getattr(
+    _mla_attention, "use_cudnn_prefill", _disabled_prefill_backend
+)
+use_flashinfer_prefill = getattr(
+    _mla_attention, "use_flashinfer_prefill", _disabled_prefill_backend
+)
+use_trtllm_ragged_deepseek_prefill = getattr(
+    _mla_attention, "use_trtllm_ragged_deepseek_prefill", _disabled_prefill_backend
+)
+
+
+class MUSAMLAPrefillBackend:
+    """Compatibility backend for vLLM v0.22 MLA prefill selection.
+
+    MUSA keeps the prefill execution in this module's MLACommonImpl because
+    mate's FlashAttention interface differs from upstream CUDA FA. v0.22 still
+    requires MLAAttention to own a prefill_backend object, so provide a backend
+    that participates in metadata construction while execution remains here.
+    """
+
+    supported_dtypes = [torch.float16, torch.bfloat16]
+    requires_r1_mla_dimensions = False
+
+    def __init__(
+        self,
+        num_heads: int,
+        scale: float,
+        kv_lora_rank: int,
+        qk_nope_head_dim: int,
+        qk_rope_head_dim: int,
+        v_head_dim: int,
+        vllm_config,
+    ) -> None:
+        self.num_heads = num_heads
+        self.scale = scale
+        self.kv_lora_rank = kv_lora_rank
+        self.qk_nope_head_dim = qk_nope_head_dim
+        self.qk_rope_head_dim = qk_rope_head_dim
+        self.v_head_dim = v_head_dim
+        self.vllm_config = vllm_config
+
+    @staticmethod
+    def get_name() -> str:
+        return "FLASH_ATTN"
+
+    @classmethod
+    def supports_compute_capability(cls, device_capability) -> bool:
+        return True
+
+    @classmethod
+    def supports_dtype(cls, dtype: torch.dtype) -> bool:
+        return dtype in cls.supported_dtypes
+
+    @classmethod
+    def is_available(cls) -> bool:
+        return True
+
+    @classmethod
+    def validate_configuration(cls, device_capability, selector_config) -> list[str]:
+        if not cls.supports_dtype(selector_config.dtype):
+            return [f"dtype {selector_config.dtype} not supported"]
+        return []
+
+    def prepare_metadata(self, prefill_metadata: MLACommonPrefillMetadata) -> None:
+        self._prefill_metadata = prefill_metadata
+
+    def run_prefill_new_tokens(self, *args, **kwargs):
+        raise RuntimeError("MUSA MLA prefill is executed by MLACommonImpl")
+
+    def run_prefill_context_chunk(self, *args, **kwargs):
+        raise RuntimeError("MUSA MLA prefill is executed by MLACommonImpl")
+
+
+def _get_musa_mla_prefill_backend(vllm_config):
+    return MUSAMLAPrefillBackend
 
 
 def _v_up_proj(self, x: torch.Tensor, out: torch.Tensor):
@@ -799,6 +883,17 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
 
 
 import vllm.model_executor.layers.attention.mla_attention
+import vllm.v1.attention.backends.mla.prefill
+import vllm.v1.attention.backends.mla.prefill.selector
 
 vllm.model_executor.layers.attention.mla_attention.MLAAttention._v_up_proj = _v_up_proj
 vllm.model_executor.layers.attention.mla_attention.MLACommonImpl = MLACommonImpl
+vllm.model_executor.layers.attention.mla_attention.get_mla_prefill_backend = (
+    _get_musa_mla_prefill_backend
+)
+vllm.v1.attention.backends.mla.prefill.get_mla_prefill_backend = (
+    _get_musa_mla_prefill_backend
+)
+vllm.v1.attention.backends.mla.prefill.selector.get_mla_prefill_backend = (
+    _get_musa_mla_prefill_backend
+)

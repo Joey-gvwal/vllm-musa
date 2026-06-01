@@ -23,7 +23,7 @@ __all__ = [
     "register_custom_ops",
     "collect_env",
 ]
-__version__ = "0.1.1"
+__version__ = "0.1.22"
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +224,50 @@ def _patch_vllm_functorch_config() -> None:
     compiler_interface._get_vllm_functorch_config = get_existing_functorch_config
 
 
+def _patch_musa_batch_defaults() -> None:
+    """Keep MUSA on the non-H100 scheduler defaults.
+
+    vLLM v0.22 picks the high-memory defaults (16384 tokens / 1024 seqs) for
+    non-A100 GPUs with >=70 GiB memory. S5000 has that memory size, but mate
+    FA3 metadata kernels do not currently support the resulting warmup shape.
+    """
+    try:
+        from vllm.engine.arg_utils import EngineArgs
+        from vllm.usage.usage_lib import UsageContext
+    except Exception as e:
+        logger.debug("Skipping MUSA batch-defaults patch: %s", e)
+        return
+
+    original = EngineArgs.get_batch_defaults
+    if getattr(original, "_musa_batch_defaults_patched", False):
+        return
+
+    original_func = original.__func__
+
+    @classmethod
+    def get_musa_batch_defaults(cls, world_size: int):
+        try:
+            from vllm.platforms import current_platform
+
+            if current_platform.is_musa():
+                return (
+                    {
+                        UsageContext.LLM_CLASS: 8192,
+                        UsageContext.OPENAI_API_SERVER: 2048,
+                    },
+                    {
+                        UsageContext.LLM_CLASS: 256,
+                        UsageContext.OPENAI_API_SERVER: 256,
+                    },
+                )
+        except Exception:
+            pass
+        return original_func(cls, world_size)
+
+    get_musa_batch_defaults._musa_batch_defaults_patched = True
+    EngineArgs.get_batch_defaults = get_musa_batch_defaults
+
+
 def _register_patches() -> None:
     """Apply vLLM source patches for MUSA compatibility."""
     _apply_vllm_patches()
@@ -231,11 +275,129 @@ def _register_patches() -> None:
     _patch_inductor_config_patch()
     _patch_vllm_backend_call_options()
     _patch_vllm_functorch_config()
+    _patch_musa_batch_defaults()
 
 
 def _register_ops() -> None:
     """Register OOT custom ops (activation, layernorm, fused_moe, etc.)."""
     import vllm_musa.model_executor  # noqa: F401
+
+
+def _has_musa_rms_norm_kernel() -> bool:
+    try:
+        import torch
+
+        if not hasattr(torch.ops, "_C") or not hasattr(torch.ops._C, "rms_norm"):
+            return False
+        return torch._C._dispatch_has_kernel_for_dispatch_key(
+            "_C::rms_norm", "MUSA"
+        )
+    except Exception:
+        return False
+
+
+def _has_musa_rotary_embedding_kernel() -> bool:
+    try:
+        import torch
+
+        if (
+            not hasattr(torch.ops, "_C")
+            or not hasattr(torch.ops._C, "rotary_embedding")
+        ):
+            return False
+        return torch._C._dispatch_has_kernel_for_dispatch_key(
+            "_C::rotary_embedding", "MUSA"
+        )
+    except Exception:
+        return False
+
+
+def _musa_safe_rms_norm(
+    out: Any,
+    input: Any,
+    weight: Any,
+    epsilon: float,
+) -> None:
+    import torch
+    import torch.nn as nn
+
+    if (
+        getattr(input.device, "type", None) == "musa"
+        and not _has_musa_rms_norm_kernel()
+    ):
+        normalized_shape = (weight.shape[-1],)
+        out.copy_(nn.functional.rms_norm(input, normalized_shape, weight, epsilon))
+        return
+    torch.ops._C.rms_norm(out, input, weight, epsilon)
+
+
+def _musa_safe_rotary_embedding(
+    positions: Any,
+    query: Any,
+    key: Any,
+    head_size: int,
+    cos_sin_cache: Any,
+    is_neox: bool,
+    rope_dim_offset: int = 0,
+    inverse: bool = False,
+) -> None:
+    import torch
+
+    if (
+        getattr(query.device, "type", None) == "musa"
+        and rope_dim_offset == 0
+        and not inverse
+        and not _has_musa_rotary_embedding_kernel()
+    ):
+        from vllm.model_executor.layers.rotary_embedding import RotaryEmbedding
+
+        rotary_dim = cos_sin_cache.shape[-1]
+        query_rot, key_rot = RotaryEmbedding.forward_static(
+            positions,
+            query,
+            key,
+            head_size,
+            rotary_dim,
+            cos_sin_cache,
+            is_neox,
+        )
+        query.copy_(query_rot)
+        if key is not None:
+            key.copy_(key_rot)
+        return
+    if rope_dim_offset == 0 and not inverse:
+        torch.ops._C.rotary_embedding(
+            positions, query, key, head_size, cos_sin_cache, is_neox
+        )
+    else:
+        torch.ops._C.rotary_embedding(
+            positions,
+            query,
+            key,
+            head_size,
+            cos_sin_cache,
+            is_neox,
+            rope_dim_offset,
+            inverse,
+        )
+
+
+def _patch_vllm_custom_ops_dflash_fallbacks() -> None:
+    """Patch direct vllm._custom_ops calls for MUSA-only dflash paths."""
+    try:
+        from vllm import _custom_ops as vllm_custom_ops
+    except Exception:
+        return
+
+    current = getattr(vllm_custom_ops, "rms_norm", None)
+    if not getattr(current, "_musa_safe_rms_norm", False):
+        setattr(_musa_safe_rms_norm, "_musa_safe_rms_norm", True)
+        vllm_custom_ops.rms_norm = _musa_safe_rms_norm
+
+    current = getattr(vllm_custom_ops, "rotary_embedding", None)
+    if not getattr(current, "_musa_safe_rotary_embedding", False):
+        setattr(_musa_safe_rotary_embedding, "_musa_safe_rotary_embedding", True)
+        vllm_custom_ops.rotary_embedding = _musa_safe_rotary_embedding
 
 
 def _register_modules() -> None:
@@ -256,6 +418,7 @@ def register_custom_ops() -> None:
     """
     _register_patches()
     _register_ops()
+    _patch_vllm_custom_ops_dflash_fallbacks()
     _register_modules()
     logger.info("MUSA patches and custom ops registered")
 

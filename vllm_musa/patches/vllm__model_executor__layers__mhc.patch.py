@@ -123,6 +123,48 @@ else:
         _MUSA_MHC_PRE_DISPATCH,
     ),
     (
+        """        return mhc_kernels.mhc_pre_torch(
+            residual,
+            fn,
+            hc_scale,
+            hc_base,
+            rms_eps,
+            hc_pre_eps,
+            hc_sinkhorn_eps,
+            hc_post_mult_value,
+            sinkhorn_repeat,
+        )
+""",
+        """        if residual.device.type == "musa":
+            from vllm_musa.deepseek_v4_mhc import mhc_pre_musa_with_norm
+
+            return mhc_pre_musa_with_norm(
+                residual,
+                fn,
+                hc_scale,
+                hc_base,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+                norm_weight,
+                norm_eps,
+            )
+        return mhc_kernels.mhc_pre_torch(
+            residual,
+            fn,
+            hc_scale,
+            hc_base,
+            rms_eps,
+            hc_pre_eps,
+            hc_sinkhorn_eps,
+            hc_post_mult_value,
+            sinkhorn_repeat,
+        )
+""",
+    ),
+    (
         """def mhc_post(
     x: torch.Tensor,
     residual: torch.Tensor,
@@ -153,6 +195,56 @@ else:
         return mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
 
     out = torch.empty_like(residual)
+""",
+    ),
+    (
+        """        return mhc_kernels.mhc_post_torch(
+            x,
+            residual,
+            post_layer_mix,
+            comb_res_mix,
+        )
+""",
+        """        if x.device.type == "musa":
+            from vllm_musa.deepseek_v4_mhc import mhc_post_musa
+
+            return mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
+        return mhc_kernels.mhc_post_torch(
+            x,
+            residual,
+            post_layer_mix,
+            comb_res_mix,
+        )
+""",
+    ),
+    (
+        """    def forward_native(self, *args, **kwargs):
+        raise NotImplementedError("Native implementation of hc_head is not available")
+""",
+        """    def forward_native(self, *args, **kwargs):
+        hidden_states = args[0] if args else kwargs.get("hidden_states")
+        if hidden_states is not None and hidden_states.device.type == "musa":
+            from vllm_musa.deepseek_v4_mhc import hc_head_musa
+
+            return hc_head_musa(*args, **kwargs)
+        raise NotImplementedError("Native implementation of hc_head is not available")
+""",
+    ),
+    (
+        """    def forward_native(self, *args, **kwargs):
+        raise NotImplementedError(
+            "Native implementation of mhc_fused_post_pre is not available"
+        )
+""",
+        """    def forward_native(self, *args, **kwargs):
+        x = args[0] if args else kwargs.get("x")
+        if x is not None and x.device.type == "musa":
+            from vllm_musa.deepseek_v4_mhc import mhc_fused_post_pre_musa
+
+            return mhc_fused_post_pre_musa(*args, **kwargs)
+        raise NotImplementedError(
+            "Native implementation of mhc_fused_post_pre is not available"
+        )
 """,
     ),
 ]

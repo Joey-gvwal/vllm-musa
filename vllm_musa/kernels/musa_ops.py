@@ -27,7 +27,11 @@ current_platform.import_kernels()
 
 def _has_C_rms_norm() -> bool:
     try:
-        return hasattr(torch.ops._C, "rms_norm")
+        if not hasattr(torch.ops._C, "rms_norm"):
+            return False
+        return torch._C._dispatch_has_kernel_for_dispatch_key(
+            "_C::rms_norm", "MUSA"
+        )
     except Exception:
         return False
 

@@ -435,7 +435,6 @@ def _apply_worker_sampling_params_defer_filters(
         idx_mapping_np,
         input_ids,
         expanded_local_pos,
-        sampler.num_speculative_tokens,
     )
     sampler.bad_words_state.apply_bad_words(
         logits,

@@ -29,6 +29,7 @@ def mhc_pre_musa(
     sinkhorn_repeat: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL", "auto").lower()
+    auto_impl = impl == "auto"
     if impl == "auto":
         impl = _select_mhc_pre_auto_impl(residual)
     if impl in {"native", "musa", "mu"}:
@@ -56,17 +57,32 @@ def mhc_pre_musa(
             sinkhorn_repeat,
         )
     if impl in {"tilelang", "jit"}:
-        return _mhc_pre_tilelang_provider(
-            residual,
-            fn,
-            hc_scale,
-            hc_base,
-            rms_eps,
-            hc_pre_eps,
-            hc_sinkhorn_eps,
-            hc_post_mult_value,
-            sinkhorn_repeat,
-        )
+        try:
+            return _mhc_pre_tilelang_provider(
+                residual,
+                fn,
+                hc_scale,
+                hc_base,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+            )
+        except (ImportError, OSError, NotImplementedError):
+            if not auto_impl:
+                raise
+            return _mhc_pre_native_provider(
+                residual,
+                fn,
+                hc_scale,
+                hc_base,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+            )
     if impl in {"deepgemm_big_fuse", "deepgemm-big-fuse"}:
         return _mhc_pre_deepgemm_big_fuse_provider(
             residual,
@@ -80,6 +96,148 @@ def mhc_pre_musa(
             sinkhorn_repeat,
         )
     raise ValueError(f"unsupported DeepSeek-V4 MHC pre impl: {impl!r}")
+
+
+def _apply_optional_rms_norm(
+    x: torch.Tensor,
+    norm_weight: torch.Tensor | None,
+    norm_eps: float,
+) -> torch.Tensor:
+    if norm_weight is None:
+        return x
+    x_float = x.to(torch.float32)
+    variance = x_float.pow(2).mean(dim=-1, keepdim=True)
+    x_float = x_float * torch.rsqrt(variance + norm_eps)
+    x_float = x_float * norm_weight.to(torch.float32)
+    return x_float.to(x.dtype)
+
+
+def mhc_pre_musa_with_norm(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+    norm_weight: torch.Tensor | None = None,
+    norm_eps: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    post_mix, comb_mix, layer_input = mhc_pre_musa(
+        residual,
+        fn,
+        hc_scale,
+        hc_base,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )
+    return post_mix, comb_mix, _apply_optional_rms_norm(
+        layer_input,
+        norm_weight,
+        norm_eps,
+    )
+
+
+def mhc_fused_post_pre_musa(
+    x: torch.Tensor,
+    residual: torch.Tensor,
+    post_layer_mix: torch.Tensor,
+    comb_res_mix: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+    n_splits: int = 1,
+    tile_n: int = 1,
+    norm_weight: torch.Tensor | None = None,
+    norm_eps: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    del n_splits, tile_n
+    residual_cur = mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
+    post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa(
+        residual_cur,
+        fn,
+        hc_scale,
+        hc_base,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )
+    layer_input_cur = _apply_optional_rms_norm(
+        layer_input_cur,
+        norm_weight,
+        norm_eps,
+    )
+    return residual_cur, post_mix_cur, comb_mix_cur, layer_input_cur
+
+
+def _reshape_hc_head_input(
+    hidden_states: torch.Tensor,
+    hc_fn: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Size, int]:
+    hc_mult = hc_fn.shape[0]
+    flat_hidden = hc_fn.shape[1]
+    if hidden_states.shape[-1] == flat_hidden:
+        if flat_hidden % hc_mult != 0:
+            raise ValueError(
+                f"hc_head hidden width {flat_hidden} is not divisible by hc_mult "
+                f"{hc_mult}"
+            )
+        hidden_size = flat_hidden // hc_mult
+        token_shape = hidden_states.shape[:-1]
+        grouped = hidden_states.reshape(-1, hc_mult, hidden_size)
+    elif (
+        hidden_states.dim() >= 2
+        and hidden_states.shape[-2] * hidden_states.shape[-1] == flat_hidden
+    ):
+        token_shape = hidden_states.shape[:-2]
+        hidden_size = hidden_states.shape[-1]
+        grouped = hidden_states.reshape(-1, hidden_states.shape[-2], hidden_size)
+    else:
+        raise ValueError(
+            "hc_head hidden_states must have trailing shape "
+            f"({flat_hidden},) or (*, {flat_hidden}); got "
+            f"{tuple(hidden_states.shape)}"
+        )
+    if grouped.shape[1] != hc_mult:
+        raise ValueError(
+            f"hc_head grouped dimension must match hc_mult {hc_mult}, got "
+            f"{grouped.shape[1]}"
+        )
+    return grouped, token_shape, hidden_size
+
+
+def hc_head_musa(
+    hidden_states: torch.Tensor,
+    hc_fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_norm_eps: float,
+    hc_eps: float,
+) -> torch.Tensor:
+    dtype = hidden_states.dtype
+    grouped, token_shape, hidden_size = _reshape_hc_head_input(hidden_states, hc_fn)
+    grouped = grouped.to(torch.float32)
+    x = grouped.reshape(grouped.shape[0], -1)
+    rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + rms_norm_eps)
+    mixes = (x @ hc_fn.to(torch.float32).t()) * rsqrt
+    pre = (
+        torch.sigmoid(mixes * hc_scale.to(torch.float32) + hc_base.to(torch.float32))
+        + hc_eps
+    )
+    y = torch.sum(pre.unsqueeze(-1) * grouped, dim=1)
+    return y.reshape(*token_shape, hidden_size).to(dtype)
 
 
 def _select_mhc_pre_auto_impl(residual: torch.Tensor) -> str:
@@ -725,7 +883,16 @@ def mhc_post_musa(
     post_layer_mix: torch.Tensor,
     comb_res_mix: torch.Tensor,
 ) -> torch.Tensor:
-    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_POST_IMPL", "tilelang").lower()
+    impl = os.getenv("VLLM_MUSA_DEEPSEEK_V4_MHC_POST_IMPL", "auto").lower()
+    if impl in {"auto", ""}:
+        try:
+            return _mhc_post_tilelang_provider(
+                x, residual, post_layer_mix, comb_res_mix
+            )
+        except (ImportError, OSError, NotImplementedError):
+            return mhc_post_torch_fallback(
+                x, residual, post_layer_mix, comb_res_mix
+            )
     if impl in {"tilelang", "jit", "native", "musa", "mu"}:
         return _mhc_post_tilelang_provider(x, residual, post_layer_mix, comb_res_mix)
     if impl in {"torch", "fallback"}:

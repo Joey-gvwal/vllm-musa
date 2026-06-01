@@ -215,15 +215,18 @@ def register_attention_backends() -> None:
             "MUSATurboQuantAttentionBackend"
         ),
     )
-    # MUSA-0094: tree drafting via a MUSA-routed TreeAttention backend
-    # (Triton unified_attention is already MUSA-patched; reshape_and_cache_flash
-    # is wired through fa_utils.reshape_and_cache_flash).
-    register_backend(
-        AttentionBackendEnum.TREE_ATTN,
-        class_path=(
-            "vllm_musa.v1.attention.backends.tree_attn.MUSATreeAttentionBackend"
-        ),
-    )
+    tree_attn_backend = getattr(AttentionBackendEnum, "TREE_ATTN", None)
+    if tree_attn_backend is not None:
+        # MUSA-0094: tree drafting via a MUSA-routed TreeAttention backend
+        # (Triton unified_attention is already MUSA-patched; reshape_and_cache_flash
+        # is wired through fa_utils.reshape_and_cache_flash). v0.22 removed this
+        # enum member, so only register it on older upstream snapshots.
+        register_backend(
+            tree_attn_backend,
+            class_path=(
+                "vllm_musa.v1.attention.backends.tree_attn.MUSATreeAttentionBackend"
+            ),
+        )
 
 
 class MUSAPlatformBase(Platform):
@@ -256,6 +259,15 @@ class MUSAPlatformBase(Platform):
         return True
 
     @classmethod
+    def import_kernels(cls) -> None:
+        """Import upstream vLLM kernels, including v0.22 stable ABI ops."""
+        super().import_kernels()
+        try:
+            import vllm._C_stable_libtorch  # noqa: F401
+        except ImportError as e:
+            logger.warning("Failed to import from vllm._C_stable_libtorch: %r", e)
+
+    @classmethod
     def import_ir_kernels(cls) -> None:
         """Import upstream and MUSA-OOT IR-op providers.
 
@@ -284,7 +296,7 @@ class MUSAPlatformBase(Platform):
         """Platform-default priority list for vllm.ir.ops on MUSA.
 
         When compiling with Inductor, prefer the `native` (pure-PyTorch)
-        IR impl; in the eager path, prefer the `musa` kernel provider.
+        IR impl; in the eager path, prefer the `musa` rms_norm provider.
         This mirrors the upstream `cuda.py` pattern
         (`default = ["native"] if using_inductor else ["vllm_c", "native"]`):
         under Inductor the native rms_norm is a handful of
@@ -318,8 +330,11 @@ class MUSAPlatformBase(Platform):
             default = ["native"]
             rms_norm = ["native"]
         else:
-            # Eager path: no Inductor fusion to lose, so take the kernel.
-            default = ["musa", "native"]
+            # Eager path: no Inductor fusion to lose, so take the rms_norm
+            # kernel. Keep the default native because v0.22 adds
+            # fused_add_rms_norm and MUSA has not registered an IR provider
+            # for that op.
+            default = ["native"]
             rms_norm = ["musa", "native"]
         return IrOpPriorityConfig.with_default(default, rms_norm=rms_norm)
 

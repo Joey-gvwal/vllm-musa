@@ -3,7 +3,12 @@
 
 import torch
 import torch.nn as nn
-from vllm.model_executor.layers.layernorm import RMSNorm, fused_add_rms_norm
+from vllm.model_executor.layers.layernorm import RMSNorm
+
+try:
+    from vllm.model_executor.layers.layernorm import fused_add_rms_norm
+except ImportError:
+    fused_add_rms_norm = None
 
 from vllm_musa import _custom_ops as musa_ops
 from vllm_musa.utils.environ import envs
@@ -59,9 +64,11 @@ class MusaRMSNorm(RMSNorm):
                     x, residual, self.weight.data, self.variance_epsilon
                 )
                 return x, residual
-            return fused_add_rms_norm(
-                x, residual, self.weight.data, self.variance_epsilon
-            )
+            if fused_add_rms_norm is not None:
+                return fused_add_rms_norm(
+                    x, residual, self.weight.data, self.variance_epsilon
+                )
+            return self.forward_native(x, residual)
         else:
             out = nn.functional.rms_norm(
                 x, (self.hidden_size,), self.weight.data, self.variance_epsilon
