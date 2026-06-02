@@ -3,9 +3,11 @@
 """MUSA IR-op providers for vllm.ir.ops.*
 
 Currently registers:
-- rms_norm: delegates to torch.ops._C.rms_norm (the upstream
-  layernorm_kernels.cu kernel built via vllm-musa/setup.py
-  VLLM_CSRC_SOURCES; torchada redirects CUDA → MUSA at runtime).
+- rms_norm: delegates to torch.ops._C.rms_norm only when that op has a MUSA
+  dispatch kernel. In vLLM v0.22 the upstream layernorm implementation moved
+  to _C_stable_libtorch; vllm-musa builds that extension as a schema-only
+  compatibility shim, so this provider self-disables until a real MUSA kernel
+  is present.
 
 Engine log from MUSA-0049 baseline confirms:
     ir_op_priority=IrOpPriorityConfig(rms_norm=['native'])
@@ -13,7 +15,8 @@ Engine log from MUSA-0049 baseline confirms:
 i.e. before this provider lands, every decoder layer per token uses
 the pure-PyTorch native rms_norm. With the "musa" provider plus a
 priority override in `vllm_musa.platform`, the dispatcher / Inductor
-lowering picks the MUSA kernel.
+lowering picks the MUSA kernel when `_dispatch_has_kernel_for_dispatch_key`
+confirms one is registered.
 """
 
 import torch
@@ -68,8 +71,8 @@ def rms_norm(
 ) -> Tensor:
     """MUSA provider for vllm.ir.ops.rms_norm.
 
-    Delegates to torch.ops._C.rms_norm (the upstream layernorm_kernels.cu
-    kernel built via vllm-musa setup.py; torchada redirects CUDA->MUSA).
+    Delegates to torch.ops._C.rms_norm only when a MUSA dispatch kernel is
+    registered for the upstream op namespace.
     """
     assert variance_size is None
     assert weight is not None
