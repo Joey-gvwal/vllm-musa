@@ -111,6 +111,23 @@ class TestDeepSeekV4V022Patches:
 
         assert "vllm.models.deepseek_v4.attention" in modules
 
+    def test_save_partial_states_patch_is_discoverable(self):
+        from vllm_musa.patches import _get_patch_files
+
+        modules = {module_name for module_name, _ in _get_patch_files()}
+
+        assert "vllm.models.deepseek_v4.common.ops.save_partial_states" in modules
+
+    def test_fused_compress_quant_cache_patch_is_discoverable(self):
+        from vllm_musa.patches import _get_patch_files
+
+        modules = {module_name for module_name, _ in _get_patch_files()}
+
+        assert (
+            "vllm.models.deepseek_v4.common.ops.fused_compress_quant_cache"
+            in modules
+        )
+
     def test_nvidia_model_patch_is_discoverable(self):
         from vllm_musa.patches import _get_patch_files
 
@@ -135,6 +152,55 @@ class TestDeepSeekV4V022Patches:
                 break
         else:
             raise AssertionError("DeepSeek-V4 v0.22 attention patch was not found")
+
+    def test_save_partial_states_patch_strips_launch_pdl_on_musa(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        for module_name, patch_path in _get_patch_files():
+            if module_name == "vllm.models.deepseek_v4.common.ops.save_partial_states":
+                patches = _load_patch_config(patch_path)
+                old_source = "\n".join(old for old, _ in patches)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "**(pdl_kwargs or {})" in old_source
+                assert "_musa_deepseek_v4_save_partial_pdl_kwargs" in new_source
+                assert "current_platform.is_musa()" in new_source
+                assert 'getattr(torch.version, "musa", None)' in new_source
+                assert 'getattr(tensor.device, "type", None) == "musa"' in new_source
+                assert 'active_pdl_kwargs.pop("launch_pdl", None)' in new_source
+                break
+        else:
+            raise AssertionError(
+                "DeepSeek-V4 v0.22 save_partial_states patch was not found"
+            )
+
+    def test_fused_compress_quant_cache_patch_strips_launch_pdl_on_musa(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        for module_name, patch_path in _get_patch_files():
+            if (
+                module_name
+                == "vllm.models.deepseek_v4.common.ops.fused_compress_quant_cache"
+            ):
+                patches = _load_patch_config(patch_path)
+                old_source = "\n".join(old for old, _ in patches)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "**pdl_kwargs" in old_source
+                assert "_musa_deepseek_v4_compress_cache_pdl_kwargs" in new_source
+                assert "current_platform.is_musa()" in new_source
+                assert 'getattr(torch.version, "musa", None)' in new_source
+                assert 'getattr(tensor.device, "type", None) == "musa"' in new_source
+                assert 'active_pdl_kwargs.pop("launch_pdl", None)' in new_source
+                assert "tl.softmax(score, dim=0)" in old_source
+                assert "MUSA Triton does not accept" in new_source
+                assert "score_max = tl.max(score, axis=0)" in new_source
+                assert "score = score_exp / score_denom" in new_source
+                break
+        else:
+            raise AssertionError(
+                "DeepSeek-V4 v0.22 fused_compress_quant_cache patch was not found"
+            )
 
     def test_nvidia_model_patch_runs_final_hc_post_on_musa(self):
         from vllm_musa.patches import _get_patch_files, _load_patch_config
@@ -387,10 +453,37 @@ class TestDeepSeekV4AttentionPatch:
                 )
                 assert "flash_mla_sparse_fwd" in new_source
                 assert "flash_mla_with_kvcache" in new_source
+                assert "active_decode_tokens = q.shape[0]" in new_source
+                assert "topk_indices[:active_decode_tokens]" in new_source
+                assert "topk_lens[:active_decode_tokens]" in new_source
+                assert "swa_indices[:active_decode_tokens]" in new_source
+                assert "swa_lens[:active_decode_tokens]" in new_source
                 break
         else:
             raise AssertionError(
                 "v0.22 deepseek_v4 nvidia flashmla patch file was not found"
+            )
+
+    def test_v022_deepseek_v4_mtp_runs_hc_post_on_musa(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.models.deepseek_v4.nvidia.mtp":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert (
+                    "if current_platform.is_cuda() or current_platform.is_musa():"
+                    in new_source
+                )
+                assert "hidden_states = self.mtp_block.hc_post(" in new_source
+                assert "hidden_states.dim() == 2" not in new_source
+                break
+        else:
+            raise AssertionError(
+                "v0.22 deepseek_v4 nvidia mtp patch file was not found"
             )
 
     def test_qnorm_rope_native_path_trims_padded_slot_mapping(self):
