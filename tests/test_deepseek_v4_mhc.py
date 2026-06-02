@@ -83,12 +83,18 @@ def test_mhc_pre_deepgemm_big_fuse_is_default_off():
 
 def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
+    kernels = _read("vllm_musa/deepseek_v4_jit/tilelang_kernels.py")
 
     assert "def mhc_fused_post_pre_musa(" in source
     assert "residual_cur = mhc_post_musa(" in source
     assert "post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa(" in source
     assert "def _apply_optional_rms_norm(" in source
+    assert "def _try_mhc_weighted_rms_norm_musa(" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_WEIGHTED_RMSNORM_IMPL" in source
+    assert "mhc_weighted_rmsnorm_kernel" in source
     assert "norm_weight.to(torch.float32)" in source
+    assert "def mhc_weighted_rmsnorm_kernel(" in kernels
+    assert "value * warp_sumsq[0] * weight_value" in kernels
 
 
 def test_mhc_auto_paths_fall_back_when_tilelang_is_unavailable():
