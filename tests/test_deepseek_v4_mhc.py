@@ -2,13 +2,59 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Source-level checks for DeepSeek-V4 MHC MUSA dispatch."""
 
+import ast
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text()
+
+
+def _function_node(tree: ast.AST, name: str) -> ast.FunctionDef:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"function {name!r} not found")
+
+
+def _call_name(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _call_name(node.value)
+        if base:
+            return f"{base}.{node.attr}"
+        return node.attr
+    return None
+
+
+def _calls(node: ast.AST, name: str) -> bool:
+    return any(
+        isinstance(child, ast.Call) and _call_name(child.func) == name
+        for child in ast.walk(node)
+    )
+
+
+def _loads_name(node: ast.AST, name: str) -> bool:
+    return any(
+        isinstance(child, ast.Name)
+        and child.id == name
+        and isinstance(child.ctx, ast.Load)
+        for child in ast.walk(node)
+    )
+
+
+def _stores_subscript(node: ast.AST, name: str) -> bool:
+    return any(
+        isinstance(child, ast.Subscript)
+        and isinstance(child.value, ast.Name)
+        and child.value.id == name
+        and isinstance(child.ctx, ast.Store)
+        for child in ast.walk(node)
+    )
 
 
 def test_mhc_pre_defaults_to_auto_provider():
@@ -83,12 +129,30 @@ def test_mhc_pre_deepgemm_big_fuse_is_default_off():
 
 def test_mhc_fused_post_pre_composes_musa_post_pre_and_norm():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
+    kernels = _read("vllm_musa/deepseek_v4_jit/tilelang_kernels.py")
+    source_tree = ast.parse(source)
+    kernels_tree = ast.parse(kernels)
+    apply_norm = _function_node(source_tree, "_apply_optional_rms_norm")
+    weighted_norm = _function_node(source_tree, "_try_mhc_weighted_rms_norm_musa")
+    kernel_factory = _function_node(kernels_tree, "mhc_weighted_rmsnorm_kernel")
+    inner_kernel = _function_node(kernel_factory, "_kernel")
 
     assert "def mhc_fused_post_pre_musa(" in source
     assert "residual_cur = mhc_post_musa(" in source
     assert "post_mix_cur, comb_mix_cur, layer_input_cur = mhc_pre_musa(" in source
     assert "def _apply_optional_rms_norm(" in source
-    assert "norm_weight.to(torch.float32)" in source
+    assert "def _try_mhc_weighted_rms_norm_musa(" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_WEIGHTED_RMSNORM_IMPL" in source
+    assert "def mhc_weighted_rmsnorm_kernel(" in kernels
+    assert _calls(apply_norm, "_try_mhc_weighted_rms_norm_musa")
+    assert _loads_name(apply_norm, "norm_weight")
+    assert _calls(weighted_norm, "mhc_weighted_rmsnorm_kernel")
+    assert _calls(kernel_factory, "T.rsqrt")
+    kernel_args = [arg.arg for arg in inner_kernel.args.args]
+    assert len(kernel_args) == 4
+    _, weight_arg, out_arg, _ = kernel_args
+    assert _loads_name(inner_kernel, weight_arg)
+    assert _stores_subscript(inner_kernel, out_arg)
 
 
 def test_mhc_auto_paths_fall_back_when_tilelang_is_unavailable():

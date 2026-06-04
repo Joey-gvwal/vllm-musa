@@ -610,6 +610,71 @@ def mhc_pre_big_fuse_decode_split_kernel(
     return _mhc_pre_big_fuse_decode_split_kernel()
 
 
+@lru_cache(maxsize=None)
+def mhc_weighted_rmsnorm_kernel(
+    hidden_size: int,
+    threads: int = 128,
+):
+    num_rows = T.dynamic("num_rows")
+    warps_per_cta = threads // 32
+    assert hidden_size > 0
+    assert hidden_size % threads == 0
+    assert threads in (64, 128, 256)
+
+    @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
+    def _mhc_weighted_rmsnorm_kernel():
+        @T.prim_func
+        def _kernel(
+            x: T.Tensor((num_rows, hidden_size), T.bfloat16),
+            weight: T.Tensor((hidden_size,), T.bfloat16),
+            out: T.Tensor((num_rows, hidden_size), T.bfloat16),
+            eps: T.float32,
+        ):
+            with T.Kernel(num_rows, threads=threads) as row_id:
+                tx = T.get_thread_binding()
+                lane = tx % 32
+                warp = tx // 32
+                partial_sumsq = T.alloc_local((1,), T.float32)
+                warp_sumsq = T.alloc_shared((warps_per_cta,), T.float32)
+
+                partial_sumsq[0] = 0.0
+                for col_base in T.serial(0, hidden_size, threads):
+                    col = col_base + tx
+                    value = T.cast(x[row_id, col], T.float32)
+                    partial_sumsq[0] += value * value
+
+                partial_sumsq[0] = _warp_reduce_sum(partial_sumsq[0])
+                if lane == 0:
+                    warp_sumsq[warp] = partial_sumsq[0]
+                T.sync_threads()
+
+                partial_sumsq[0] = T.if_then_else(
+                    tx < warps_per_cta,
+                    warp_sumsq[tx],
+                    0.0,
+                )
+                if warp == 0:
+                    partial_sumsq[0] = _warp_reduce_sum(partial_sumsq[0])
+                    if lane == 0:
+                        warp_sumsq[0] = T.rsqrt(
+                            partial_sumsq[0] / float(hidden_size) + eps
+                        )
+                T.sync_threads()
+
+                for col_base in T.serial(0, hidden_size, threads):
+                    col = col_base + tx
+                    value = T.cast(x[row_id, col], T.float32)
+                    weight_value = T.cast(weight[col], T.float32)
+                    out[row_id, col] = T.cast(
+                        value * warp_sumsq[0] * weight_value,
+                        T.bfloat16,
+                    )
+
+        return _kernel
+
+    return _mhc_weighted_rmsnorm_kernel()
+
+
 @tilelang.jit(target="musa", pass_configs=_tilelang_musa_pass_configs(tilelang))
 def qnorm_rope_kernel():
     num_tokens = T.dynamic("num_tokens")
