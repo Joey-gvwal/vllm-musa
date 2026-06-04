@@ -9,19 +9,19 @@ PATCHES = [
         """logger = init_logger(__name__)
 
 
-def _musa_deepseek_v4_mm_out_dtype(
+def _musa_deepseek_v4_linear_out_dtype(
     a: torch.Tensor,
-    b: torch.Tensor,
+    weight: torch.Tensor,
     out_dtype: torch.dtype,
 ) -> torch.Tensor:
     if (
         current_platform.is_musa()
         or getattr(torch.version, "musa", None) is not None
         or a.device.type == "musa"
-        or b.device.type == "musa"
+        or weight.device.type == "musa"
     ):
-        return torch.mm(a.to(out_dtype), b.to(out_dtype))
-    return torch.mm(a, b, out_dtype=out_dtype)
+        return F.linear(a.to(out_dtype), weight.to(out_dtype))
+    return torch.mm(a, weight.T, out_dtype=out_dtype)
 
 
 def _musa_deepseek_v4_is_musa_tensor(tensor: torch.Tensor) -> bool:
@@ -123,9 +123,9 @@ def _musa_deepseek_v4_qnorm_rope_kv_insert(
                     out_dtype=torch.float32,
                 )
 """,
-        """                return _musa_deepseek_v4_mm_out_dtype(
+        """                return _musa_deepseek_v4_linear_out_dtype(
                     hidden_states,
-                    compressor.fused_wkv_wgate.weight.T,
+                    compressor.fused_wkv_wgate.weight,
                     torch.float32,
                 )
 """,
@@ -137,9 +137,9 @@ def _musa_deepseek_v4_qnorm_rope_kv_insert(
                     out_dtype=torch.float32,
                 )
 """,
-        """                return _musa_deepseek_v4_mm_out_dtype(
+        """                return _musa_deepseek_v4_linear_out_dtype(
                     hidden_states,
-                    indexer.compressor.fused_wkv_wgate.weight.T,
+                    indexer.compressor.fused_wkv_wgate.weight,
                     torch.float32,
                 )
 """,

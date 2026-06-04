@@ -15,6 +15,7 @@ _MHC_PRE_BIG_FUSE_HIDDEN_BLOCK_ENV = (
 )
 _MHC_PRE_BIG_FUSE_PASS_CONFIG_ENV = "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_PASS_CONFIG"
 _MHC_PRE_DECODE_PRENORM_IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DECODE_PRENORM_IMPL"
+_MHC_WEIGHTED_RMSNORM_IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_MHC_WEIGHTED_RMSNORM_IMPL"
 
 
 def mhc_pre_musa(
@@ -105,11 +106,91 @@ def _apply_optional_rms_norm(
 ) -> torch.Tensor:
     if norm_weight is None:
         return x
+    musa_result = _try_mhc_weighted_rms_norm_musa(x, norm_weight, norm_eps)
+    if musa_result is not None:
+        return musa_result
     x_float = x.to(torch.float32)
     variance = x_float.pow(2).mean(dim=-1, keepdim=True)
     x_float = x_float * torch.rsqrt(variance + norm_eps)
     x_float = x_float * norm_weight.to(torch.float32)
     return x_float.to(x.dtype)
+
+
+def _mhc_weighted_rms_norm_threads(hidden_size: int) -> int | None:
+    if hidden_size % 128 == 0:
+        return 128
+    if hidden_size % 64 == 0:
+        return 64
+    return None
+
+
+def _try_mhc_weighted_rms_norm_musa(
+    x: torch.Tensor,
+    norm_weight: torch.Tensor,
+    norm_eps: float,
+) -> torch.Tensor | None:
+    impl = os.getenv(_MHC_WEIGHTED_RMSNORM_IMPL_ENV, "auto").strip().lower()
+    disabled_impls = {"", "0", "false", "off", "torch", "fallback"}
+    tilelang_impls = {"1", "true", "on", "tilelang", "jit", "musa"}
+    if impl in disabled_impls:
+        return None
+    if impl not in {"auto"} | tilelang_impls:
+        raise ValueError(
+            f"{_MHC_WEIGHTED_RMSNORM_IMPL_ENV} must be 'auto', one of "
+            "TileLang aliases ('tilelang', 'jit', 'musa', '1', 'true', "
+            "'on'), or one of torch/off aliases ('torch', 'fallback', "
+            "'off', '0', 'false', ''), "
+            f"got {impl!r}"
+        )
+
+    explicit_tilelang = impl in tilelang_impls
+    hidden_size = x.shape[-1]
+    threads = _mhc_weighted_rms_norm_threads(hidden_size)
+    supported = (
+        x.device.type == "musa"
+        and x.dtype == torch.bfloat16
+        and x.is_contiguous()
+        and x.dim() >= 2
+        and norm_weight.shape == (hidden_size,)
+        and norm_weight.device == x.device
+        and norm_weight.dtype == torch.bfloat16
+        and norm_weight.is_contiguous()
+        and threads is not None
+    )
+    if not supported:
+        if explicit_tilelang:
+            raise NotImplementedError(
+                "DeepSeek-V4 MHC TileLang weighted RMSNorm requires contiguous "
+                "MUSA bf16 x, contiguous bf16 norm_weight on the same device, "
+                "and hidden_size divisible by 64; got "
+                f"x_shape={tuple(x.shape)}, "
+                f"x_dtype={x.dtype}, x_device={x.device}, "
+                f"x_contiguous={x.is_contiguous()}, "
+                f"weight_shape={tuple(norm_weight.shape)}, "
+                f"weight_dtype={norm_weight.dtype}, "
+                f"weight_device={norm_weight.device}, "
+                f"weight_contiguous={norm_weight.is_contiguous()}"
+            )
+        return None
+
+    try:
+        from vllm_musa.deepseek_v4_jit.tilelang_kernels import (
+            mhc_weighted_rmsnorm_kernel,
+        )
+
+        x_2d = x.view(-1, hidden_size)
+        out_2d = torch.empty_like(x_2d)
+        mhc_weighted_rmsnorm_kernel(hidden_size, threads=threads)(
+            x_2d,
+            norm_weight,
+            out_2d,
+            float(norm_eps),
+        )
+        return out_2d.view_as(x)
+    except (ImportError, OSError, NotImplementedError, RuntimeError):
+        if explicit_tilelang:
+            raise
+        return None
 
 
 def mhc_pre_musa_with_norm(
