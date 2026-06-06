@@ -29,6 +29,8 @@ constexpr const char *kPrefillBlockSelectEnv =
     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT";
 constexpr const char *kPrefillPartialSortEnv =
     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT";
+constexpr const char *kPrefillPartialSortMergeBarrierEnv =
+    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER";
 
 __device__ __forceinline__ float dequant_fp8_e4m3(uint8_t byte) {
   __mt_fp8_e4m3 packed;
@@ -607,7 +609,7 @@ __global__ void deepseek_v4_indexer_topk_prefill_q_cache_blockselect_kernel(
   }
 }
 
-template <typename OutT>
+template <typename OutT, bool HoistMergeBarriers>
 __global__ void deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel(
     const uint8_t *__restrict__ q_quant, int64_t q_stride0, int64_t q_stride1,
     int64_t q_stride2, const uint8_t *__restrict__ kv_cache,
@@ -714,28 +716,59 @@ __global__ void deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel(
       }
     }
 
-    for (int merge_size = kMaxTopK << 1; merge_size <= kMaxSeqLen;
-         merge_size <<= 1) {
-      const int half = merge_size >> 1;
-      for (int group_start = 0; group_start < kMaxSeqLen;
-           group_start += merge_size) {
+    if constexpr (HoistMergeBarriers) {
+      for (int merge_size = kMaxTopK << 1; merge_size <= kMaxSeqLen;
+           merge_size <<= 1) {
+        const int half = merge_size >> 1;
         for (int offset = tid; offset < kMaxTopK; offset += blockDim.x) {
-          compare_swap_score_pair(scores, score_indices, group_start + offset,
-                                  group_start + half + offset, true);
+          for (int group_start = 0; group_start < kMaxSeqLen;
+               group_start += merge_size) {
+            compare_swap_score_pair(scores, score_indices, group_start + offset,
+                                    group_start + half + offset, true);
+          }
         }
         __syncthreads();
 
-        const bool output_descending = (group_start & merge_size) == 0;
         for (int stride = kMaxTopK >> 1; stride > 0; stride >>= 1) {
           for (int offset = tid; offset < kMaxTopK; offset += blockDim.x) {
             const int other = offset ^ stride;
             if (other > offset) {
-              compare_swap_score_pair(scores, score_indices,
-                                      group_start + offset,
-                                      group_start + other, output_descending);
+              for (int group_start = 0; group_start < kMaxSeqLen;
+                   group_start += merge_size) {
+                const bool output_descending = (group_start & merge_size) == 0;
+                compare_swap_score_pair(scores, score_indices,
+                                        group_start + offset,
+                                        group_start + other, output_descending);
+              }
             }
           }
           __syncthreads();
+        }
+      }
+    } else {
+      for (int merge_size = kMaxTopK << 1; merge_size <= kMaxSeqLen;
+           merge_size <<= 1) {
+        const int half = merge_size >> 1;
+        for (int group_start = 0; group_start < kMaxSeqLen;
+             group_start += merge_size) {
+          for (int offset = tid; offset < kMaxTopK; offset += blockDim.x) {
+            compare_swap_score_pair(scores, score_indices, group_start + offset,
+                                    group_start + half + offset, true);
+          }
+          __syncthreads();
+
+          const bool output_descending = (group_start & merge_size) == 0;
+          for (int stride = kMaxTopK >> 1; stride > 0; stride >>= 1) {
+            for (int offset = tid; offset < kMaxTopK; offset += blockDim.x) {
+              const int other = offset ^ stride;
+              if (other > offset) {
+                compare_swap_score_pair(scores, score_indices,
+                                        group_start + offset,
+                                        group_start + other, output_descending);
+              }
+            }
+            __syncthreads();
+          }
         }
       }
     }
@@ -801,25 +834,48 @@ void launch_indexer_topk_prefill(
       use_q_cache && env_flag_enabled(kPrefillBlockSelectEnv);
   const bool use_partialsort =
       use_blockselect && env_flag_enabled(kPrefillPartialSortEnv);
+  const bool use_partialsort_merge_barrier =
+      use_partialsort && env_flag_enabled(kPrefillPartialSortMergeBarrierEnv);
   if (use_partialsort) {
-    deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel<OutT>
-        <<<grid, block, 0, stream>>>(
-            static_cast<const uint8_t *>(q_quant.data_ptr()), q_quant.stride(0),
-            q_quant.stride(1), q_quant.stride(2),
-            static_cast<const uint8_t *>(kv_cache.data_ptr()), kv_cache.size(0),
-            kv_cache.size(1), kv_cache.stride(0),
-            static_cast<const float *>(weights.data_ptr()), weights.stride(0),
-            weights.stride(1), block_table.data_ptr(),
-            index_kind(block_table, "block_table"), block_table.stride(0),
-            cu_seq_lens.data_ptr(), index_kind(cu_seq_lens, "cu_seq_lens"),
-            cu_seq_lens.stride(0), token_to_seq.data_ptr(),
-            index_kind(token_to_seq, "token_to_seq"), token_to_seq.stride(0),
-            cu_seqlen_ks.data_ptr(), index_kind(cu_seqlen_ks, "cu_seqlen_ks"),
-            cu_seqlen_ks.stride(0), cu_seqlen_ke.data_ptr(),
-            index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
-            static_cast<OutT *>(topk_indices.data_ptr()),
-            topk_indices.stride(0), topk_indices.stride(1), q_quant.size(0),
-            token_to_seq.numel(), topk);
+    if (use_partialsort_merge_barrier) {
+      deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel<OutT, true>
+          <<<grid, block, 0, stream>>>(
+              static_cast<const uint8_t *>(q_quant.data_ptr()), q_quant.stride(0),
+              q_quant.stride(1), q_quant.stride(2),
+              static_cast<const uint8_t *>(kv_cache.data_ptr()), kv_cache.size(0),
+              kv_cache.size(1), kv_cache.stride(0),
+              static_cast<const float *>(weights.data_ptr()), weights.stride(0),
+              weights.stride(1), block_table.data_ptr(),
+              index_kind(block_table, "block_table"), block_table.stride(0),
+              cu_seq_lens.data_ptr(), index_kind(cu_seq_lens, "cu_seq_lens"),
+              cu_seq_lens.stride(0), token_to_seq.data_ptr(),
+              index_kind(token_to_seq, "token_to_seq"), token_to_seq.stride(0),
+              cu_seqlen_ks.data_ptr(), index_kind(cu_seqlen_ks, "cu_seqlen_ks"),
+              cu_seqlen_ks.stride(0), cu_seqlen_ke.data_ptr(),
+              index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
+              static_cast<OutT *>(topk_indices.data_ptr()),
+              topk_indices.stride(0), topk_indices.stride(1), q_quant.size(0),
+              token_to_seq.numel(), topk);
+    } else {
+      deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel<OutT, false>
+          <<<grid, block, 0, stream>>>(
+              static_cast<const uint8_t *>(q_quant.data_ptr()), q_quant.stride(0),
+              q_quant.stride(1), q_quant.stride(2),
+              static_cast<const uint8_t *>(kv_cache.data_ptr()), kv_cache.size(0),
+              kv_cache.size(1), kv_cache.stride(0),
+              static_cast<const float *>(weights.data_ptr()), weights.stride(0),
+              weights.stride(1), block_table.data_ptr(),
+              index_kind(block_table, "block_table"), block_table.stride(0),
+              cu_seq_lens.data_ptr(), index_kind(cu_seq_lens, "cu_seq_lens"),
+              cu_seq_lens.stride(0), token_to_seq.data_ptr(),
+              index_kind(token_to_seq, "token_to_seq"), token_to_seq.stride(0),
+              cu_seqlen_ks.data_ptr(), index_kind(cu_seqlen_ks, "cu_seqlen_ks"),
+              cu_seqlen_ks.stride(0), cu_seqlen_ke.data_ptr(),
+              index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
+              static_cast<OutT *>(topk_indices.data_ptr()),
+              topk_indices.stride(0), topk_indices.stride(1), q_quant.size(0),
+              token_to_seq.numel(), topk);
+    }
   } else if (use_blockselect) {
     deepseek_v4_indexer_topk_prefill_q_cache_blockselect_kernel<OutT>
         <<<grid, block, 0, stream>>>(
