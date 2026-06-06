@@ -182,3 +182,71 @@ def test_musa_fused_moe_shape_inventory_records_bridge_contract(
         [1, 1, 1],
         [1, 0, 2],
     ]
+
+
+def _deepgemm_gate_kwargs(torch_module):
+    return {
+        "hidden_states": torch_module.empty(
+            (4100, 4096), device="meta", dtype=torch_module.bfloat16
+        ),
+        "w1": torch_module.empty(
+            (256, 512, 4096),
+            device="meta",
+            dtype=torch_module.float8_e4m3fn,
+        ),
+        "w2": torch_module.empty(
+            (256, 4096, 256),
+            device="meta",
+            dtype=torch_module.float8_e4m3fn,
+        ),
+        "topk_ids": torch_module.empty(
+            (4100, 6), device="meta", dtype=torch_module.int32
+        ),
+        "activation": "silu",
+        "apply_router_weight_on_input": False,
+        "use_fp8_w8a8": True,
+        "use_int8_w8a8": False,
+        "use_int8_w8a16": False,
+        "use_int4_w4a16": False,
+        "ocp_mx_scheme": None,
+        "per_channel_quant": False,
+        "expert_map": None,
+        "w1_scale": torch_module.empty(
+            (256, 4, 32), device="meta", dtype=torch_module.float32
+        ),
+        "w2_scale": torch_module.empty(
+            (256, 32, 2), device="meta", dtype=torch_module.float32
+        ),
+        "a1_scale": None,
+        "a2_scale": None,
+        "block_shape": [128, 128],
+        "w1_bias": None,
+        "w2_bias": None,
+    }
+
+
+def test_deepseek_v4_deepgemm_prefill_gate_is_env_gated(monkeypatch):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    kwargs = _deepgemm_gate_kwargs(torch)
+    monkeypatch.delenv(
+        "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL", raising=False
+    )
+
+    assert not fused_moe._can_use_deepseek_v4_moe_deepgemm_prefill(**kwargs)
+
+    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL", "1")
+
+    assert fused_moe._can_use_deepseek_v4_moe_deepgemm_prefill(**kwargs)
+
+
+def test_deepseek_v4_deepgemm_prefill_gate_rejects_nonmatching_shape(
+    monkeypatch,
+):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    kwargs = _deepgemm_gate_kwargs(torch)
+    kwargs["topk_ids"] = torch.empty((4100, 2), device="meta", dtype=torch.int32)
+    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL", "1")
+
+    assert not fused_moe._can_use_deepseek_v4_moe_deepgemm_prefill(**kwargs)
