@@ -349,6 +349,35 @@ class TestGPUModelRunnerPatch:
         else:
             raise AssertionError("gpu_model_runner patch file was not found")
 
+    def test_model_runner_reuses_spec_decode_metadata_buffers_on_musa(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.worker.gpu_model_runner":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "_spec_cu_num_draft_tokens" in new_source
+                assert "_spec_cu_num_sampled_tokens" in new_source
+                assert "_spec_logits_indices" in new_source
+                assert "_spec_target_logits_indices" in new_source
+                assert "_spec_bonus_logits_indices" in new_source
+                assert "current_platform.is_musa()" in new_source
+                assert "copy_to_gpu(num_sampled_total)" in new_source
+                musa_branch = new_source.split("MUSA-3406: copy through", 1)[
+                    1
+                ].split("else:", 1)[0]
+                assert "torch.from_numpy(cu_num_draft_tokens).to" not in musa_branch
+                assert "torch.from_numpy(cu_num_sampled_tokens).to" not in musa_branch
+                assert "torch.from_numpy(logits_indices).to" not in musa_branch
+                assert "torch.from_numpy(target_logits_indices).to" not in musa_branch
+                assert "torch.from_numpy(bonus_logits_indices).to" not in musa_branch
+                break
+        else:
+            raise AssertionError("gpu_model_runner patch file was not found")
+
 
 class TestLLMBaseProposerPatch:
     """Tests for MUSA LLM base proposer speculative guards."""

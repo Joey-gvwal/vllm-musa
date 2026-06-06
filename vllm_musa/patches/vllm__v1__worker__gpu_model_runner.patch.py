@@ -153,6 +153,95 @@ _NEW_MUSA_RANDOM_DRAFTER_FITS = """            # Decide whether to run the draft
                 input_fits_in_drafter = False
 """
 
+# ---- MUSA-3406: reuse pinned spec-decode metadata upload buffers ----
+_OLD_SPEC_METADATA_BUFFERS_INIT = """        self.query_pos = self._make_buffer(arange_size, dtype=torch.int64)
+        self._arange_scratch = np.empty(arange_size, dtype=np.int64)"""
+
+_NEW_SPEC_METADATA_BUFFERS_INIT = """        self.query_pos = self._make_buffer(arange_size, dtype=torch.int64)
+        self._arange_scratch = np.empty(arange_size, dtype=np.int64)
+
+        # MUSA-3406: reusable CPU/GPU buffers for speculative metadata indices.
+        # Avoid per-step torch.from_numpy(...).to(device) pageable uploads in
+        # _calc_spec_decode_metadata on the TP8 DeepSeek-V4 decode path.
+        self._spec_cu_num_draft_tokens = self._make_buffer(
+            self.max_num_reqs, dtype=torch.int32
+        )
+        self._spec_cu_num_sampled_tokens = self._make_buffer(
+            self.max_num_reqs, dtype=torch.int32
+        )
+        self._spec_logits_indices = self._make_buffer(
+            self.max_num_tokens, dtype=torch.int64
+        )
+        self._spec_target_logits_indices = self._make_buffer(
+            self.max_num_tokens, dtype=torch.int32
+        )
+        self._spec_bonus_logits_indices = self._make_buffer(
+            self.max_num_reqs, dtype=torch.int32
+        )"""
+
+_OLD_SPEC_METADATA_TO_DEVICE = """        # TODO: Optimize the CPU -> GPU copy.
+        cu_num_draft_tokens = torch.from_numpy(cu_num_draft_tokens).to(
+            self.device, non_blocking=True
+        )
+        cu_num_sampled_tokens = torch.from_numpy(cu_num_sampled_tokens).to(
+            self.device, non_blocking=True
+        )
+        logits_indices = torch.from_numpy(logits_indices).to(
+            self.device, non_blocking=True
+        )
+        target_logits_indices = torch.from_numpy(target_logits_indices).to(
+            self.device, non_blocking=True
+        )
+        bonus_logits_indices = torch.from_numpy(bonus_logits_indices).to(
+            self.device, non_blocking=True
+        )"""
+
+_NEW_SPEC_METADATA_TO_DEVICE = """        if current_platform.is_musa():
+            # MUSA-3406: copy through persistent pinned CPU buffers so the
+            # per-step metadata uploads do not allocate pageable CPU tensors.
+            num_reqs = num_draft_tokens.shape[0]
+            num_sampled_total = int(cu_num_sampled_tokens[-1])
+            num_draft_total = int(cu_num_draft_tokens[-1])
+
+            self._spec_cu_num_draft_tokens.np[:num_reqs] = cu_num_draft_tokens
+            self._spec_cu_num_sampled_tokens.np[:num_reqs] = cu_num_sampled_tokens
+            self._spec_logits_indices.np[:num_sampled_total] = logits_indices
+            self._spec_target_logits_indices.np[:num_draft_total] = (
+                target_logits_indices
+            )
+            self._spec_bonus_logits_indices.np[:num_reqs] = bonus_logits_indices
+
+            self._spec_cu_num_draft_tokens.copy_to_gpu(num_reqs)
+            self._spec_cu_num_sampled_tokens.copy_to_gpu(num_reqs)
+            self._spec_logits_indices.copy_to_gpu(num_sampled_total)
+            self._spec_target_logits_indices.copy_to_gpu(num_draft_total)
+            self._spec_bonus_logits_indices.copy_to_gpu(num_reqs)
+
+            cu_num_draft_tokens = self._spec_cu_num_draft_tokens.gpu[:num_reqs]
+            cu_num_sampled_tokens = self._spec_cu_num_sampled_tokens.gpu[:num_reqs]
+            logits_indices = self._spec_logits_indices.gpu[:num_sampled_total]
+            target_logits_indices = self._spec_target_logits_indices.gpu[
+                :num_draft_total
+            ]
+            bonus_logits_indices = self._spec_bonus_logits_indices.gpu[:num_reqs]
+        else:
+            # TODO: Optimize the CPU -> GPU copy.
+            cu_num_draft_tokens = torch.from_numpy(cu_num_draft_tokens).to(
+                self.device, non_blocking=True
+            )
+            cu_num_sampled_tokens = torch.from_numpy(cu_num_sampled_tokens).to(
+                self.device, non_blocking=True
+            )
+            logits_indices = torch.from_numpy(logits_indices).to(
+                self.device, non_blocking=True
+            )
+            target_logits_indices = torch.from_numpy(target_logits_indices).to(
+                self.device, non_blocking=True
+            )
+            bonus_logits_indices = torch.from_numpy(bonus_logits_indices).to(
+                self.device, non_blocking=True
+            )"""
+
 PATCHES = [
     (_OLD_INIT_FLAG, _NEW_INIT_FLAG),
     (_OLD_EAGLE_INIT, _NEW_EAGLE_INIT),
@@ -162,4 +251,6 @@ PATCHES = [
     (_OLD_USE_CG, _NEW_USE_CG),
     (_OLD_DRAFTER_CALL, _NEW_DRAFTER_CALL),
     (_OLD_MUSA_RANDOM_DRAFTER_FITS, _NEW_MUSA_RANDOM_DRAFTER_FITS),
+    (_OLD_SPEC_METADATA_BUFFERS_INIT, _NEW_SPEC_METADATA_BUFFERS_INIT),
+    (_OLD_SPEC_METADATA_TO_DEVICE, _NEW_SPEC_METADATA_TO_DEVICE),
 ]
