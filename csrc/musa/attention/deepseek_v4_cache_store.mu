@@ -1,5 +1,7 @@
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 #include <musa_bf16.h>
 #include <musa_fp8.h>
@@ -22,6 +24,8 @@ constexpr int kQNormThreads = 256;
 
 constexpr int kIndexInt32 = 1;
 constexpr int kIndexInt64 = 2;
+constexpr const char* kFusedQKVInsertEnv =
+    "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED";
 
 __device__ __forceinline__ int64_t load_index(const void* ptr, int kind,
                                               int64_t idx) {
@@ -248,6 +252,136 @@ int index_kind(const torch::Tensor& tensor) {
   TORCH_CHECK(false, "slot_mapping must be int32 or int64");
 }
 
+bool env_flag_enabled(const char* name) {
+  const char* value = std::getenv(name);
+  return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+__global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
+    __mt_bfloat16* __restrict__ q, const __mt_bfloat16* __restrict__ kv,
+    uint8_t* __restrict__ cache, const void* __restrict__ slots,
+    int slot_kind, const void* __restrict__ positions, int position_kind,
+    const float* __restrict__ cos_sin_cache, float eps, int64_t num_tokens,
+    int64_t num_heads, int64_t num_slots, int64_t num_blocks,
+    int64_t block_size, int64_t block_stride) {
+  const int64_t token = static_cast<int64_t>(blockIdx.x);
+  const int64_t head = static_cast<int64_t>(blockIdx.y);
+  if (token >= num_tokens || head >= num_heads) {
+    return;
+  }
+
+  __shared__ float reduce[kQNormThreads];
+  __shared__ int scale_exponents[kTokenScaleBytes];
+
+  const int tid = threadIdx.x;
+  __mt_bfloat16* row = q + (token * num_heads + head) * kHeadDim;
+
+  float partial = 0.0f;
+  for (int64_t dim = tid; dim < kHeadDim; dim += blockDim.x) {
+    const float value = __bfloat162float(row[dim]);
+    partial += value * value;
+  }
+  reduce[tid] = partial;
+  __syncthreads();
+
+  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      reduce[tid] += reduce[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  const float norm = rsqrtf(reduce[0] / static_cast<float>(kHeadDim) + eps);
+  for (int64_t dim = tid; dim < kNopeDim; dim += blockDim.x) {
+    row[dim] = __float2bfloat16(__bfloat162float(row[dim]) * norm);
+  }
+
+  const int64_t pos = load_index(positions, position_kind, token);
+  const float* cos_ptr = cos_sin_cache + pos * kRopeDim;
+  const float* sin_ptr = cos_ptr + kRopeDim / 2;
+  for (int64_t pair = tid; pair < kRopeDim / 2; pair += blockDim.x) {
+    const int64_t even_dim = kNopeDim + pair * 2;
+    const int64_t odd_dim = even_dim + 1;
+    const float even = __bfloat162float(row[even_dim]) * norm;
+    const float odd = __bfloat162float(row[odd_dim]) * norm;
+    const float c = cos_ptr[pair];
+    const float s = sin_ptr[pair];
+    row[even_dim] = __float2bfloat16(even * c - odd * s);
+    row[odd_dim] = __float2bfloat16(even * s + odd * c);
+  }
+
+  const bool kv_pack_block = head == 0 && token < num_slots;
+  if (!kv_pack_block) {
+    return;
+  }
+
+  const int64_t slot = load_index(slots, slot_kind, token);
+  if (slot < 0 || slot >= num_blocks * block_size) {
+    return;
+  }
+
+  const int64_t block_idx = slot / block_size;
+  const int64_t pos_in_block = slot - block_idx * block_size;
+  uint8_t* block_ptr = cache + block_idx * block_stride;
+  uint8_t* token_ptr = block_ptr + pos_in_block * kTokenDataBytes;
+  uint8_t* scale_ptr = block_ptr + block_size * kTokenDataBytes +
+                       pos_in_block * kTokenScaleBytes;
+  const __mt_bfloat16* input = kv + token * kHeadDim;
+
+  for (int qblock = 0; qblock < kNopeDim / kQuantBlockSize; ++qblock) {
+    const int64_t start = qblock * kQuantBlockSize;
+    if (tid < kQuantBlockSize) {
+      const float value = __bfloat162float(input[start + tid]);
+      reduce[tid] = fabsf(value);
+    }
+    __syncthreads();
+
+    for (int stride = kQuantBlockSize / 2; stride > 0; stride >>= 1) {
+      if (tid < stride) {
+        reduce[tid] = fmaxf(reduce[tid], reduce[tid + stride]);
+      }
+      __syncthreads();
+    }
+
+    if (tid == 0) {
+      const float amax = fmaxf(reduce[0], 1.0e-4f);
+      const int exponent =
+          static_cast<int>(ceilf(log2f(amax / 448.0f)));
+      scale_exponents[qblock] = exponent;
+      const int scale_byte = max(0, min(255, exponent + 127));
+      scale_ptr[qblock] = static_cast<uint8_t>(scale_byte);
+    }
+    __syncthreads();
+
+    if (tid < kQuantBlockSize) {
+      const float value = __bfloat162float(input[start + tid]);
+      const float scaled = fminf(fmaxf(value * exp2f(-scale_exponents[qblock]),
+                                      -448.0f),
+                                448.0f);
+      const __mt_fp8_e4m3 packed(scaled);
+      token_ptr[start + tid] = packed.__x;
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    scale_ptr[kTokenScaleBytes - 1] = 0;
+  }
+
+  __mt_bfloat16* rope_ptr =
+      reinterpret_cast<__mt_bfloat16*>(token_ptr + kNopeDim);
+  for (int64_t pair = tid; pair < kRopeDim / 2; pair += blockDim.x) {
+    const int64_t even_dim = kNopeDim + pair * 2;
+    const int64_t odd_dim = even_dim + 1;
+    const float even = __bfloat162float(input[even_dim]);
+    const float odd = __bfloat162float(input[odd_dim]);
+    const float c = cos_ptr[pair];
+    const float s = sin_ptr[pair];
+    rope_ptr[pair * 2] = __float2bfloat16(even * c - odd * s);
+    rope_ptr[pair * 2 + 1] = __float2bfloat16(even * s + odd * c);
+  }
+}
+
 }  // namespace
 
 void deepseek_v4_qnorm_rope_kv_insert(
@@ -304,6 +438,21 @@ void deepseek_v4_qnorm_rope_kv_insert(
   const dim3 q_grid(static_cast<unsigned int>(q.size(0)),
                     static_cast<unsigned int>(q.size(1)));
   const dim3 q_block(kQNormThreads);
+  if (env_flag_enabled(kFusedQKVInsertEnv)) {
+    deepseek_v4_qnorm_rope_kv_pack_fused_kernel<<<q_grid, q_block, 0, stream>>>(
+        static_cast<__mt_bfloat16*>(q.data_ptr()),
+        static_cast<const __mt_bfloat16*>(kv.data_ptr()),
+        static_cast<uint8_t*>(kv_cache.data_ptr()), slot_mapping.data_ptr(),
+        index_kind(slot_mapping), positions.data_ptr(), index_kind(positions),
+        static_cast<const float*>(cos_sin_cache.data_ptr()),
+        static_cast<float>(eps), q.size(0), q.size(1), slot_mapping.numel(),
+        kv_cache.size(0), cache_block_size, kv_cache.stride(0));
+    const auto err = musaGetLastError();
+    TORCH_CHECK(err == musaSuccess,
+                "deepseek_v4_qnorm_rope_kv_pack_fused launch failed: ",
+                musaGetErrorString(err));
+    return;
+  }
   deepseek_v4_qnorm_rope_kernel<<<q_grid, q_block, 0, stream>>>(
       static_cast<__mt_bfloat16*>(q.data_ptr()), positions.data_ptr(),
       index_kind(positions), static_cast<const float*>(cos_sin_cache.data_ptr()),

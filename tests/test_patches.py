@@ -1288,6 +1288,8 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
 
@@ -1307,6 +1309,11 @@ class TestMUSAPlatformDefaults:
             )
             assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS" not in os.environ
             assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL" not in os.environ
+            assert (
+                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"
+                not in os.environ
+            )
+            assert "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED" not in os.environ
 
     def test_deepseek_v4_tp8_profile_sets_missing_envs(self):
         from vllm_musa.platform import MUSAPlatformBase
@@ -1326,6 +1333,8 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
 
@@ -1357,6 +1366,11 @@ class TestMUSAPlatformDefaults:
                 == "2048"
             )
             assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL" not in os.environ
+            assert (
+                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"
+                not in os.environ
+            )
+            assert "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED" not in os.environ
             assert vllm_config.cache_config.block_size == 256
 
     def test_deepseek_v4_tp8_aggressive_profile_sets_mhc_deepgemm(self):
@@ -1377,6 +1391,8 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
 
@@ -1410,6 +1426,10 @@ class TestMUSAPlatformDefaults:
             assert (
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "deepgemm_big_fuse"
             )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"] == "1"
+            )
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "1"
             assert vllm_config.cache_config.block_size == 256
 
     def test_deepseek_v4_tp8_profile_preserves_explicit_overrides(self):
@@ -1423,7 +1443,7 @@ class TestMUSAPlatformDefaults:
             cache_block_size=256,
         )
         env = {
-            "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "balanced_long_prefill",
+            "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "aggressive_long_prefill",
             "VLLM_MUSA_GEMV_MOE_BLOCK": "32x8",
             "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X": "128",
             "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "64",
@@ -1431,6 +1451,8 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS": "0",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "0",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL": "native",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED": "0",
         }
 
         with patch.dict(os.environ, env, clear=False):
@@ -1451,6 +1473,10 @@ class TestMUSAPlatformDefaults:
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"] == "0"
             )
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "native"
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"] == "0"
+            )
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "0"
             assert vllm_config.cache_config.block_size == 64
 
     def test_deepseek_v4_tp8_profile_rejects_unknown_name(self):
