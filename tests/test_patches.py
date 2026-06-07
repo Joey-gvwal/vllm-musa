@@ -605,7 +605,55 @@ class TestSparseAttnIndexerPatch:
                     "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL"
                     in new_source
                 )
+                assert (
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+                    in new_source
+                )
                 assert "per_head = per_head.clamp_min(0.0)" in new_source
+                break
+        else:
+            raise AssertionError("sparse_attn_indexer patch file was not found")
+
+    def test_sparse_indexer_materialized_prefill_path_is_guarded(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.model_executor.layers.sparse_attn_indexer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert (
+                    'VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",\n'
+                    '        "0"'
+                ) in new_source
+                assert (
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
+                    in new_source
+                )
+                assert 'for provider_name in ("mate.deep_gemm", "deep_gemm")' in (
+                    new_source
+                )
+                assert "from mate import deep_gemm as _musa_deep_gemm" in new_source
+                assert "_musa_deep_gemm.fp8_paged_mqa_logits" in new_source
+                assert 'getattr(_musa_deep_gemm, "get_num_sms", None)' in new_source
+                assert "_vllm_deep_gemm.fp8_fp4_paged_mqa_logits" in new_source
+                assert "materialized_chunk_rows = 128" in new_source
+                assert "kv_cache.unsqueeze(-2)" in new_source
+                assert "chunk.block_table[:1].expand(chunk_rows, -1).contiguous()" in (
+                    new_source
+                )
+                assert "int(chunk.num_reqs) != 1" in new_source
+                assert "_musa_rerank_materialized_candidates" in new_source
+                assert "q_quant.to(torch.float32).to(torch.bfloat16)" in new_source
+                assert (
+                    "_musa_sparse_indexer_prefill_full_row_shortcut_enabled()"
+                    in new_source
+                )
+                assert new_source.index(
+                    "_musa_try_fill_prefill_topk_from_materialized_logits"
+                ) < new_source.index("deepseek_v4_indexer_topk_prefill")
                 break
         else:
             raise AssertionError("sparse_attn_indexer patch file was not found")

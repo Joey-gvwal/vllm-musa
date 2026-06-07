@@ -8,6 +8,335 @@ import ast
 
 _PREFILL_NATIVE_HELPER = """
 
+def _musa_sparse_indexer_materialized_prefill_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+        "0",
+    ) == "1"
+
+
+def _musa_sparse_indexer_materialized_prefill_overselect(
+    topk: int,
+    total_seq_lens: int,
+) -> int:
+    raw_width = os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
+        "640",
+    )
+    try:
+        width = int(raw_width)
+    except ValueError:
+        width = 640
+    width = max(width, int(topk))
+    return max(0, min(width, int(total_seq_lens)))
+
+
+def _musa_sparse_indexer_prefill_full_row_shortcut_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+        "0",
+    ) == "1"
+
+
+def _musa_stable_argsort(
+    values: torch.Tensor,
+    dim: int = -1,
+    descending: bool = False,
+) -> torch.Tensor:
+    try:
+        return torch.argsort(
+            values,
+            dim=dim,
+            descending=descending,
+            stable=True,
+        )
+    except Exception:
+        return torch.argsort(values, dim=dim, descending=descending)
+
+
+def _musa_exact_indexer_scores_for_abs_positions(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    block_table: torch.Tensor,
+    abs_positions: torch.Tensor,
+    valid_positions: torch.Tensor,
+    head_dim: int,
+) -> torch.Tensor:
+    if abs_positions.numel() == 0:
+        return torch.empty_like(abs_positions, dtype=torch.float32)
+
+    block_size = kv_cache.shape[1]
+    block_table_row = block_table[0].to(torch.long)
+    logical_blocks = torch.div(
+        abs_positions,
+        block_size,
+        rounding_mode="floor",
+    )
+    pos_in_block = abs_positions.remainder(block_size)
+    valid_blocks = (
+        valid_positions
+        & (logical_blocks >= 0)
+        & (logical_blocks < block_table_row.numel())
+        & (pos_in_block >= 0)
+        & (pos_in_block < block_size)
+    )
+
+    safe_logical = logical_blocks.clamp(0, max(block_table_row.numel() - 1, 0))
+    physical_blocks = block_table_row.index_select(0, safe_logical.reshape(-1))
+    physical_blocks = physical_blocks.reshape_as(abs_positions)
+    valid_blocks = (
+        valid_blocks
+        & (physical_blocks >= 0)
+        & (physical_blocks < kv_cache.shape[0])
+    )
+
+    safe_blocks = physical_blocks.clamp(0, kv_cache.shape[0] - 1).reshape(-1)
+    safe_pos = pos_in_block.clamp(0, block_size - 1).reshape(-1)
+    selected_blocks = _musa_indexer_cache_rows(kv_cache).index_select(0, safe_blocks)
+
+    value_offsets = safe_pos.unsqueeze(-1) * head_dim + torch.arange(
+        head_dim,
+        device=kv_cache.device,
+        dtype=torch.long,
+    )
+    values = (
+        torch.gather(selected_blocks, 1, value_offsets)
+        .contiguous()
+        .view(torch.float8_e4m3fn)
+        .to(torch.float32)
+        .view(*abs_positions.shape, head_dim)
+    )
+
+    scale_offsets = (
+        block_size * head_dim
+        + safe_pos.unsqueeze(-1) * 4
+        + torch.arange(4, device=kv_cache.device, dtype=torch.long)
+    )
+    scales = (
+        torch.gather(selected_blocks, 1, scale_offsets)
+        .contiguous()
+        .view(torch.float32)
+        .reshape_as(abs_positions)
+    )
+
+    q_exact = q_quant.to(torch.float32).to(torch.bfloat16).to(torch.float32)
+    per_head = torch.einsum("r h d, r n d -> r h n", q_exact, values)
+    per_head = per_head.clamp_min(0.0)
+    scores = (
+        per_head * weights.to(torch.float32).unsqueeze(-1)
+    ).sum(dim=1) * scales
+    return torch.where(
+        valid_blocks,
+        scores,
+        torch.full((), float("-inf"), dtype=scores.dtype, device=scores.device),
+    )
+
+
+def _musa_rerank_materialized_candidates(
+    exact_scores: torch.Tensor,
+    candidate_rel_indices: torch.Tensor,
+    valid_candidates: torch.Tensor,
+    topk: int,
+) -> torch.Tensor:
+    invalid_index = torch.full_like(candidate_rel_indices, 1 << 30)
+    rel_order_key = torch.where(
+        valid_candidates,
+        candidate_rel_indices,
+        invalid_index,
+    )
+    rel_order = _musa_stable_argsort(rel_order_key, dim=1)
+    ordered_scores = exact_scores.gather(1, rel_order)
+    ordered_rel = candidate_rel_indices.gather(1, rel_order)
+    score_order = _musa_stable_argsort(ordered_scores, dim=1, descending=True)
+    return ordered_rel.gather(1, score_order[:, :topk])
+
+
+def _musa_try_fill_prefill_topk_from_materialized_logits(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    chunk,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> bool:
+    if (
+        not _musa_sparse_indexer_materialized_prefill_enabled()
+        or head_dim != 128
+        or topk_tokens > 512
+        or q_quant.dtype != torch.float8_e4m3fn
+        or kv_cache.dtype != torch.uint8
+        or weights.dtype != torch.float32
+        or kv_cache.ndim != 3
+        or int(chunk.total_seq_lens) > 4096
+        or int(chunk.num_reqs) != 1
+    ):
+        return False
+
+    rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
+    topk = min(int(topk_tokens), topk_indices.shape[1])
+    total_seq_lens = int(chunk.total_seq_lens)
+    overselect = _musa_sparse_indexer_materialized_prefill_overselect(
+        topk,
+        total_seq_lens,
+    )
+    if rows <= 0 or topk <= 0:
+        return True
+    if total_seq_lens <= 0 or overselect <= 0:
+        return True
+
+    block_size = int(kv_cache.shape[1])
+    if block_size <= 0:
+        return False
+
+    row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
+    row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
+    context_lens = row_ends.reshape(rows, 1).contiguous()
+    if context_lens.dtype != torch.int32:
+        context_lens = context_lens.to(torch.int32)
+
+    kv_paged = kv_cache.unsqueeze(-2)
+    row_starts = row_starts.to(torch.long)
+    row_ends = row_ends.to(torch.long)
+    row_lens = (row_ends - row_starts).clamp(min=0, max=total_seq_lens)
+    positions = torch.arange(total_seq_lens, device=q_quant.device, dtype=torch.long)
+    rank_offsets = torch.arange(topk, device=q_quant.device, dtype=torch.long)
+    materialized_chunk_rows = 128
+    full_row_shortcut = _musa_sparse_indexer_prefill_full_row_shortcut_enabled()
+
+    def _musa_fill_chunk_from_logits(
+        logits: torch.Tensor,
+        row_start: int,
+        row_end: int,
+    ) -> bool:
+        chunk_rows = row_end - row_start
+        if logits.shape[0] < chunk_rows or logits.shape[1] < total_seq_lens:
+            return False
+
+        logits = logits[:chunk_rows, :total_seq_lens]
+        starts = row_starts[row_start:row_end]
+        ends = row_ends[row_start:row_end]
+        lens = row_lens[row_start:row_end]
+        valid_positions = (
+            (positions.unsqueeze(0) >= starts.unsqueeze(1))
+            & (positions.unsqueeze(0) < ends.unsqueeze(1))
+        )
+        logits.masked_fill_(~valid_positions, float("-inf"))
+
+        approx_abs = torch.topk(logits, overselect, dim=-1).indices.to(torch.long)
+        candidate_rel = approx_abs - starts.unsqueeze(1)
+        valid_candidates = (
+            (approx_abs >= starts.unsqueeze(1))
+            & (approx_abs < ends.unsqueeze(1))
+            & (candidate_rel >= 0)
+        )
+        exact_scores = _musa_exact_indexer_scores_for_abs_positions(
+            q_quant[row_start:row_end],
+            kv_cache,
+            weights[row_start:row_end],
+            chunk.block_table[:1],
+            approx_abs,
+            valid_candidates,
+            head_dim,
+        )
+        reranked = _musa_rerank_materialized_candidates(
+            exact_scores,
+            candidate_rel,
+            valid_candidates,
+            min(topk, overselect),
+        )
+        output = torch.full(
+            (chunk_rows, topk),
+            -1,
+            device=topk_indices.device,
+            dtype=torch.long,
+        )
+        output[:, : reranked.shape[1]] = reranked
+        valid_ranks = rank_offsets.unsqueeze(0) < lens.clamp(max=topk).unsqueeze(1)
+        output = torch.where(valid_ranks, output, torch.full_like(output, -1))
+        if full_row_shortcut:
+            full_rows = lens <= topk
+            full_output = torch.where(
+                valid_ranks,
+                rank_offsets.unsqueeze(0).expand(chunk_rows, -1),
+                torch.full_like(output, -1),
+            )
+            output = torch.where(full_rows.unsqueeze(1), full_output, output)
+        topk_indices[row_start:row_end, :topk].copy_(output.to(topk_indices.dtype))
+        return True
+
+    def _musa_fill_with_deep_gemm_provider(_musa_deep_gemm) -> bool:
+        get_num_sms = getattr(_musa_deep_gemm, "get_num_sms", None)
+        try:
+            num_mps = int(get_num_sms()) if get_num_sms is not None else 0
+        except Exception:
+            num_mps = 0
+
+        for row_start in range(0, rows, materialized_chunk_rows):
+            row_end = min(row_start + materialized_chunk_rows, rows)
+            chunk_rows = row_end - row_start
+            context_chunk = context_lens[row_start:row_end].contiguous()
+            schedule_meta = _musa_deep_gemm.get_paged_mqa_logits_metadata(
+                context_chunk, block_size, num_mps
+            )
+            logits = _musa_deep_gemm.fp8_paged_mqa_logits(
+                q_quant[row_start:row_end].unsqueeze(1).contiguous(),
+                kv_paged,
+                weights[row_start:row_end].contiguous(),
+                context_chunk,
+                chunk.block_table[:1].expand(chunk_rows, -1).contiguous(),
+                schedule_meta,
+                total_seq_lens,
+                False,
+            )
+            if not _musa_fill_chunk_from_logits(logits, row_start, row_end):
+                return False
+        return True
+
+    def _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm) -> bool:
+        for row_start in range(0, rows, materialized_chunk_rows):
+            row_end = min(row_start + materialized_chunk_rows, rows)
+            chunk_rows = row_end - row_start
+            context_chunk = context_lens[row_start:row_end].contiguous()
+            schedule_meta = _vllm_deep_gemm.get_paged_mqa_logits_metadata(
+                context_chunk,
+                block_size,
+                _vllm_deep_gemm.get_num_sms(),
+            )
+            logits = _vllm_deep_gemm.fp8_fp4_paged_mqa_logits(
+                (q_quant[row_start:row_end].unsqueeze(1).contiguous(), None),
+                kv_paged,
+                weights[row_start:row_end].contiguous(),
+                context_chunk,
+                chunk.block_table[:1].expand(chunk_rows, -1).contiguous(),
+                schedule_metadata=schedule_meta,
+                max_model_len=total_seq_lens,
+                clean_logits=False,
+            )
+            if not _musa_fill_chunk_from_logits(logits, row_start, row_end):
+                return False
+        return True
+
+    for provider_name in ("mate.deep_gemm", "deep_gemm"):
+        try:
+            if provider_name == "mate.deep_gemm":
+                from mate import deep_gemm as _musa_deep_gemm
+            else:
+                import deep_gemm as _musa_deep_gemm
+
+            if _musa_fill_with_deep_gemm_provider(_musa_deep_gemm):
+                return True
+        except Exception:
+            pass
+
+    try:
+        from vllm.utils import deep_gemm as _vllm_deep_gemm
+        return _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm)
+    except Exception:
+        return False
+
+
 def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -31,6 +360,17 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
     topk = min(int(topk_tokens), topk_indices.shape[1])
     if rows <= 0 or topk <= 0:
+        return True
+
+    if _musa_try_fill_prefill_topk_from_materialized_logits(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk,
+        topk_indices[:rows, :topk],
+        topk,
+        head_dim,
+    ):
         return True
 
     _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
@@ -192,6 +532,43 @@ def normalize_source(source: str) -> str:
             _PREFILL_NATIVE_HELPER
             + "\n\ndef _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int)"
             " -> torch.Tensor:\n",
+        )
+
+    if (
+        "def _musa_try_fill_prefill_topk_from_indexer_cache_native" in source
+        and "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+        not in source
+    ):
+        source = source.replace(
+            "\n\ndef _musa_try_fill_prefill_topk_from_indexer_cache_native(\n",
+            _PREFILL_NATIVE_HELPER.split(
+                "\n\ndef _musa_try_fill_prefill_topk_from_indexer_cache_native(\n",
+                1,
+            )[0]
+            + "\n\ndef _musa_try_fill_prefill_topk_from_indexer_cache_native(\n",
+        )
+        source = source.replace(
+            """    if rows <= 0 or topk <= 0:
+        return True
+
+    _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
+""",
+            """    if rows <= 0 or topk <= 0:
+        return True
+
+    if _musa_try_fill_prefill_topk_from_materialized_logits(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk,
+        topk_indices[:rows, :topk],
+        topk,
+        head_dim,
+    ):
+        return True
+
+    _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
+""",
         )
 
     source = _remove_shadowed_exact_fill_definitions(source)
@@ -415,6 +792,52 @@ def _musa_sparse_indexer_native_decode_enabled() -> bool:
     return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_NATIVE", "1") == "1"
 
 
+def _musa_sparse_indexer_materialized_prefill_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+        "0",
+    ) == "1"
+
+
+def _musa_sparse_indexer_materialized_prefill_overselect(
+    topk: int,
+    total_seq_lens: int,
+) -> int:
+    raw_width = os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
+        "640",
+    )
+    try:
+        width = int(raw_width)
+    except ValueError:
+        width = 640
+    width = max(width, int(topk))
+    return max(0, min(width, int(total_seq_lens)))
+
+
+def _musa_sparse_indexer_prefill_full_row_shortcut_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+        "0",
+    ) == "1"
+
+
+def _musa_stable_argsort(
+    values: torch.Tensor,
+    dim: int = -1,
+    descending: bool = False,
+) -> torch.Tensor:
+    try:
+        return torch.argsort(
+            values,
+            dim=dim,
+            descending=descending,
+            stable=True,
+        )
+    except Exception:
+        return torch.argsort(values, dim=dim, descending=descending)
+
+
 def _musa_decode_block_table_for_token_rows(
     block_table: torch.Tensor,
     rows: int,
@@ -473,6 +896,289 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
     return True
 
 
+def _musa_exact_indexer_scores_for_abs_positions(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    block_table: torch.Tensor,
+    abs_positions: torch.Tensor,
+    valid_positions: torch.Tensor,
+    head_dim: int,
+) -> torch.Tensor:
+    if abs_positions.numel() == 0:
+        return torch.empty_like(abs_positions, dtype=torch.float32)
+
+    block_size = kv_cache.shape[1]
+    block_table_row = block_table[0].to(torch.long)
+    logical_blocks = torch.div(
+        abs_positions,
+        block_size,
+        rounding_mode="floor",
+    )
+    pos_in_block = abs_positions.remainder(block_size)
+    valid_blocks = (
+        valid_positions
+        & (logical_blocks >= 0)
+        & (logical_blocks < block_table_row.numel())
+        & (pos_in_block >= 0)
+        & (pos_in_block < block_size)
+    )
+
+    safe_logical = logical_blocks.clamp(0, max(block_table_row.numel() - 1, 0))
+    physical_blocks = block_table_row.index_select(0, safe_logical.reshape(-1))
+    physical_blocks = physical_blocks.reshape_as(abs_positions)
+    valid_blocks = (
+        valid_blocks
+        & (physical_blocks >= 0)
+        & (physical_blocks < kv_cache.shape[0])
+    )
+
+    safe_blocks = physical_blocks.clamp(0, kv_cache.shape[0] - 1).reshape(-1)
+    safe_pos = pos_in_block.clamp(0, block_size - 1).reshape(-1)
+    selected_blocks = _musa_indexer_cache_rows(kv_cache).index_select(0, safe_blocks)
+
+    value_offsets = safe_pos.unsqueeze(-1) * head_dim + torch.arange(
+        head_dim,
+        device=kv_cache.device,
+        dtype=torch.long,
+    )
+    values = (
+        torch.gather(selected_blocks, 1, value_offsets)
+        .contiguous()
+        .view(torch.float8_e4m3fn)
+        .to(torch.float32)
+        .view(*abs_positions.shape, head_dim)
+    )
+
+    scale_offsets = (
+        block_size * head_dim
+        + safe_pos.unsqueeze(-1) * 4
+        + torch.arange(4, device=kv_cache.device, dtype=torch.long)
+    )
+    scales = (
+        torch.gather(selected_blocks, 1, scale_offsets)
+        .contiguous()
+        .view(torch.float32)
+        .reshape_as(abs_positions)
+    )
+
+    q_exact = q_quant.to(torch.float32).to(torch.bfloat16).to(torch.float32)
+    per_head = torch.einsum("r h d, r n d -> r h n", q_exact, values)
+    per_head = per_head.clamp_min(0.0)
+    scores = (
+        per_head * weights.to(torch.float32).unsqueeze(-1)
+    ).sum(dim=1) * scales
+    return torch.where(
+        valid_blocks,
+        scores,
+        torch.full((), float("-inf"), dtype=scores.dtype, device=scores.device),
+    )
+
+
+def _musa_rerank_materialized_candidates(
+    exact_scores: torch.Tensor,
+    candidate_rel_indices: torch.Tensor,
+    valid_candidates: torch.Tensor,
+    topk: int,
+) -> torch.Tensor:
+    invalid_index = torch.full_like(candidate_rel_indices, 1 << 30)
+    rel_order_key = torch.where(
+        valid_candidates,
+        candidate_rel_indices,
+        invalid_index,
+    )
+    rel_order = _musa_stable_argsort(rel_order_key, dim=1)
+    ordered_scores = exact_scores.gather(1, rel_order)
+    ordered_rel = candidate_rel_indices.gather(1, rel_order)
+    score_order = _musa_stable_argsort(ordered_scores, dim=1, descending=True)
+    return ordered_rel.gather(1, score_order[:, :topk])
+
+
+def _musa_try_fill_prefill_topk_from_materialized_logits(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    chunk,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> bool:
+    if (
+        not _musa_sparse_indexer_materialized_prefill_enabled()
+        or head_dim != 128
+        or topk_tokens > 512
+        or q_quant.dtype != torch.float8_e4m3fn
+        or kv_cache.dtype != torch.uint8
+        or weights.dtype != torch.float32
+        or kv_cache.ndim != 3
+        or int(chunk.total_seq_lens) > 4096
+        or int(chunk.num_reqs) != 1
+    ):
+        return False
+
+    rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
+    topk = min(int(topk_tokens), topk_indices.shape[1])
+    total_seq_lens = int(chunk.total_seq_lens)
+    overselect = _musa_sparse_indexer_materialized_prefill_overselect(
+        topk,
+        total_seq_lens,
+    )
+    if rows <= 0 or topk <= 0:
+        return True
+    if total_seq_lens <= 0 or overselect <= 0:
+        return True
+
+    block_size = int(kv_cache.shape[1])
+    if block_size <= 0:
+        return False
+
+    row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
+    row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
+    context_lens = row_ends.reshape(rows, 1).contiguous()
+    if context_lens.dtype != torch.int32:
+        context_lens = context_lens.to(torch.int32)
+
+    kv_paged = kv_cache.unsqueeze(-2)
+    row_starts = row_starts.to(torch.long)
+    row_ends = row_ends.to(torch.long)
+    row_lens = (row_ends - row_starts).clamp(min=0, max=total_seq_lens)
+    positions = torch.arange(total_seq_lens, device=q_quant.device, dtype=torch.long)
+    rank_offsets = torch.arange(topk, device=q_quant.device, dtype=torch.long)
+    materialized_chunk_rows = 128
+    full_row_shortcut = _musa_sparse_indexer_prefill_full_row_shortcut_enabled()
+
+    def _musa_fill_chunk_from_logits(
+        logits: torch.Tensor,
+        row_start: int,
+        row_end: int,
+    ) -> bool:
+        chunk_rows = row_end - row_start
+        if logits.shape[0] < chunk_rows or logits.shape[1] < total_seq_lens:
+            return False
+
+        logits = logits[:chunk_rows, :total_seq_lens]
+        starts = row_starts[row_start:row_end]
+        ends = row_ends[row_start:row_end]
+        lens = row_lens[row_start:row_end]
+        valid_positions = (
+            (positions.unsqueeze(0) >= starts.unsqueeze(1))
+            & (positions.unsqueeze(0) < ends.unsqueeze(1))
+        )
+        logits.masked_fill_(~valid_positions, float("-inf"))
+
+        approx_abs = torch.topk(logits, overselect, dim=-1).indices.to(torch.long)
+        candidate_rel = approx_abs - starts.unsqueeze(1)
+        valid_candidates = (
+            (approx_abs >= starts.unsqueeze(1))
+            & (approx_abs < ends.unsqueeze(1))
+            & (candidate_rel >= 0)
+        )
+        exact_scores = _musa_exact_indexer_scores_for_abs_positions(
+            q_quant[row_start:row_end],
+            kv_cache,
+            weights[row_start:row_end],
+            chunk.block_table[:1],
+            approx_abs,
+            valid_candidates,
+            head_dim,
+        )
+        reranked = _musa_rerank_materialized_candidates(
+            exact_scores,
+            candidate_rel,
+            valid_candidates,
+            min(topk, overselect),
+        )
+        output = torch.full(
+            (chunk_rows, topk),
+            -1,
+            device=topk_indices.device,
+            dtype=torch.long,
+        )
+        output[:, : reranked.shape[1]] = reranked
+        valid_ranks = rank_offsets.unsqueeze(0) < lens.clamp(max=topk).unsqueeze(1)
+        output = torch.where(valid_ranks, output, torch.full_like(output, -1))
+        if full_row_shortcut:
+            full_rows = lens <= topk
+            full_output = torch.where(
+                valid_ranks,
+                rank_offsets.unsqueeze(0).expand(chunk_rows, -1),
+                torch.full_like(output, -1),
+            )
+            output = torch.where(full_rows.unsqueeze(1), full_output, output)
+        topk_indices[row_start:row_end, :topk].copy_(output.to(topk_indices.dtype))
+        return True
+
+    def _musa_fill_with_deep_gemm_provider(_musa_deep_gemm) -> bool:
+        get_num_sms = getattr(_musa_deep_gemm, "get_num_sms", None)
+        try:
+            num_mps = int(get_num_sms()) if get_num_sms is not None else 0
+        except Exception:
+            num_mps = 0
+
+        for row_start in range(0, rows, materialized_chunk_rows):
+            row_end = min(row_start + materialized_chunk_rows, rows)
+            chunk_rows = row_end - row_start
+            context_chunk = context_lens[row_start:row_end].contiguous()
+            schedule_meta = _musa_deep_gemm.get_paged_mqa_logits_metadata(
+                context_chunk, block_size, num_mps
+            )
+            logits = _musa_deep_gemm.fp8_paged_mqa_logits(
+                q_quant[row_start:row_end].unsqueeze(1).contiguous(),
+                kv_paged,
+                weights[row_start:row_end].contiguous(),
+                context_chunk,
+                chunk.block_table[:1].expand(chunk_rows, -1).contiguous(),
+                schedule_meta,
+                total_seq_lens,
+                False,
+            )
+            if not _musa_fill_chunk_from_logits(logits, row_start, row_end):
+                return False
+        return True
+
+    def _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm) -> bool:
+        for row_start in range(0, rows, materialized_chunk_rows):
+            row_end = min(row_start + materialized_chunk_rows, rows)
+            chunk_rows = row_end - row_start
+            context_chunk = context_lens[row_start:row_end].contiguous()
+            schedule_meta = _vllm_deep_gemm.get_paged_mqa_logits_metadata(
+                context_chunk,
+                block_size,
+                _vllm_deep_gemm.get_num_sms(),
+            )
+            logits = _vllm_deep_gemm.fp8_fp4_paged_mqa_logits(
+                (q_quant[row_start:row_end].unsqueeze(1).contiguous(), None),
+                kv_paged,
+                weights[row_start:row_end].contiguous(),
+                context_chunk,
+                chunk.block_table[:1].expand(chunk_rows, -1).contiguous(),
+                schedule_metadata=schedule_meta,
+                max_model_len=total_seq_lens,
+                clean_logits=False,
+            )
+            if not _musa_fill_chunk_from_logits(logits, row_start, row_end):
+                return False
+        return True
+
+    for provider_name in ("mate.deep_gemm", "deep_gemm"):
+        try:
+            if provider_name == "mate.deep_gemm":
+                from mate import deep_gemm as _musa_deep_gemm
+            else:
+                import deep_gemm as _musa_deep_gemm
+
+            if _musa_fill_with_deep_gemm_provider(_musa_deep_gemm):
+                return True
+        except Exception:
+            pass
+
+    try:
+        from vllm.utils import deep_gemm as _vllm_deep_gemm
+        return _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm)
+    except Exception:
+        return False
+
+
 def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -496,6 +1202,17 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
     topk = min(int(topk_tokens), topk_indices.shape[1])
     if rows <= 0 or topk <= 0:
+        return True
+
+    if _musa_try_fill_prefill_topk_from_materialized_logits(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk,
+        topk_indices[:rows, :topk],
+        topk,
+        head_dim,
+    ):
         return True
 
     _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
