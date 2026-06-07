@@ -63,7 +63,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
 
     row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
     row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
-    context_lens = row_ends.reshape(1, rows).contiguous()
+    context_lens = row_ends.reshape(rows, 1).contiguous()
     if context_lens.dtype != torch.int32:
         context_lens = context_lens.to(torch.int32)
 
@@ -74,11 +74,11 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
             deep_gemm.get_num_sms(),
         )
         logits = deep_gemm.fp8_paged_mqa_logits(
-            q_quant[:rows].unsqueeze(0).contiguous(),
+            q_quant[:rows].unsqueeze(1).contiguous(),
             kv_cache.unsqueeze(-2),
             weights[:rows].contiguous(),
             context_lens,
-            chunk.block_table[:1].contiguous(),
+            chunk.block_table[:1].expand(rows, -1).contiguous(),
             schedule_meta,
             total_seq_lens,
             False,
@@ -684,7 +684,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
 
     row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
     row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
-    context_lens = row_ends.reshape(1, rows).contiguous()
+    context_lens = row_ends.reshape(rows, 1).contiguous()
     if context_lens.dtype != torch.int32:
         context_lens = context_lens.to(torch.int32)
 
@@ -695,11 +695,11 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
             deep_gemm.get_num_sms(),
         )
         logits = deep_gemm.fp8_paged_mqa_logits(
-            q_quant[:rows].unsqueeze(0).contiguous(),
+            q_quant[:rows].unsqueeze(1).contiguous(),
             kv_cache.unsqueeze(-2),
             weights[:rows].contiguous(),
             context_lens,
-            chunk.block_table[:1].contiguous(),
+            chunk.block_table[:1].expand(rows, -1).contiguous(),
             schedule_meta,
             total_seq_lens,
             False,

@@ -630,7 +630,9 @@ class TestSparseAttnIndexerPatch:
                 ) in new_source
                 assert "deep_gemm.fp8_paged_mqa_logits" in new_source
                 assert "kv_cache.unsqueeze(-2)" in new_source
-                assert "chunk.block_table[:1].contiguous()" in new_source
+                assert "chunk.block_table[:1].expand(rows, -1).contiguous()" in (
+                    new_source
+                )
                 assert "int(chunk.num_reqs) != 1" in new_source
                 assert "indices = indices - row_starts.unsqueeze(1)" in new_source
                 assert (
