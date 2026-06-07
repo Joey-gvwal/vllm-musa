@@ -53,7 +53,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
         return True
 
     try:
-        import deep_gemm
+        from vllm.utils import deep_gemm as _musa_deep_gemm
     except Exception:
         return False
 
@@ -68,20 +68,20 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
         context_lens = context_lens.to(torch.int32)
 
     try:
-        schedule_meta = deep_gemm.get_paged_mqa_logits_metadata(
+        schedule_meta = _musa_deep_gemm.get_paged_mqa_logits_metadata(
             context_lens,
             block_size,
-            deep_gemm.get_num_sms(),
+            _musa_deep_gemm.get_num_sms(),
         )
-        logits = deep_gemm.fp8_paged_mqa_logits(
-            q_quant[:rows].unsqueeze(1).contiguous(),
+        logits = _musa_deep_gemm.fp8_fp4_paged_mqa_logits(
+            (q_quant[:rows].unsqueeze(1).contiguous(), None),
             kv_cache.unsqueeze(-2),
             weights[:rows].contiguous(),
             context_lens,
             chunk.block_table[:1].expand(rows, -1).contiguous(),
-            schedule_meta,
-            total_seq_lens,
-            False,
+            schedule_metadata=schedule_meta,
+            max_model_len=total_seq_lens,
+            clean_logits=False,
         )
     except Exception:
         return False
@@ -674,7 +674,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
         return True
 
     try:
-        import deep_gemm
+        from vllm.utils import deep_gemm as _musa_deep_gemm
     except Exception:
         return False
 
@@ -689,20 +689,20 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
         context_lens = context_lens.to(torch.int32)
 
     try:
-        schedule_meta = deep_gemm.get_paged_mqa_logits_metadata(
+        schedule_meta = _musa_deep_gemm.get_paged_mqa_logits_metadata(
             context_lens,
             block_size,
-            deep_gemm.get_num_sms(),
+            _musa_deep_gemm.get_num_sms(),
         )
-        logits = deep_gemm.fp8_paged_mqa_logits(
-            q_quant[:rows].unsqueeze(1).contiguous(),
+        logits = _musa_deep_gemm.fp8_fp4_paged_mqa_logits(
+            (q_quant[:rows].unsqueeze(1).contiguous(), None),
             kv_cache.unsqueeze(-2),
             weights[:rows].contiguous(),
             context_lens,
             chunk.block_table[:1].expand(rows, -1).contiguous(),
-            schedule_meta,
-            total_seq_lens,
-            False,
+            schedule_metadata=schedule_meta,
+            max_model_len=total_seq_lens,
+            clean_logits=False,
         )
     except Exception:
         return False

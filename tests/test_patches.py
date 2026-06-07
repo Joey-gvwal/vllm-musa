@@ -628,7 +628,8 @@ class TestSparseAttnIndexerPatch:
                     'VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",\n'
                     '        "0"'
                 ) in new_source
-                assert "deep_gemm.fp8_paged_mqa_logits" in new_source
+                assert "_musa_deep_gemm.fp8_fp4_paged_mqa_logits" in new_source
+                assert "_musa_deep_gemm.get_num_sms()" in new_source
                 assert "kv_cache.unsqueeze(-2)" in new_source
                 assert "chunk.block_table[:1].expand(rows, -1).contiguous()" in (
                     new_source
