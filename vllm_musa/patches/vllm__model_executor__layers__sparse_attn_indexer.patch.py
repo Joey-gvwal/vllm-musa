@@ -8,6 +8,114 @@ import ast
 
 _PREFILL_NATIVE_HELPER = """
 
+def _musa_sparse_indexer_materialized_prefill_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+        "0",
+    ) == "1"
+
+
+def _musa_sparse_indexer_prefill_full_row_shortcut_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+        "0",
+    ) == "1"
+
+
+def _musa_try_fill_prefill_topk_from_materialized_logits(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    chunk,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> bool:
+    if (
+        not _musa_sparse_indexer_materialized_prefill_enabled()
+        or head_dim != 128
+        or topk_tokens > 512
+        or q_quant.dtype != torch.float8_e4m3fn
+        or kv_cache.dtype != torch.uint8
+        or weights.dtype != torch.float32
+        or kv_cache.ndim != 3
+        or int(chunk.total_seq_lens) > 4096
+        or int(chunk.num_reqs) != 1
+    ):
+        return False
+
+    rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
+    topk = min(int(topk_tokens), topk_indices.shape[1])
+    total_seq_lens = int(chunk.total_seq_lens)
+    if rows <= 0 or topk <= 0:
+        return True
+    if total_seq_lens <= 0:
+        return True
+
+    try:
+        import deep_gemm
+    except Exception:
+        return False
+
+    block_size = int(kv_cache.shape[1])
+    if block_size <= 0:
+        return False
+
+    row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
+    row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
+    context_lens = row_ends.reshape(1, rows).contiguous()
+    if context_lens.dtype != torch.int32:
+        context_lens = context_lens.to(torch.int32)
+
+    try:
+        schedule_meta = deep_gemm.get_paged_mqa_logits_metadata(
+            context_lens,
+            block_size,
+            deep_gemm.get_num_sms(),
+        )
+        logits = deep_gemm.fp8_paged_mqa_logits(
+            q_quant[:rows].unsqueeze(0).contiguous(),
+            kv_cache.unsqueeze(-2),
+            weights[:rows].contiguous(),
+            context_lens,
+            chunk.block_table[:1].contiguous(),
+            schedule_meta,
+            total_seq_lens,
+            False,
+        )
+    except Exception:
+        return False
+
+    if logits.shape[0] < rows or logits.shape[1] < total_seq_lens:
+        return False
+
+    logits = logits[:rows, :total_seq_lens]
+    row_starts = row_starts.to(torch.long)
+    row_ends = row_ends.to(torch.long)
+    row_lens = (row_ends - row_starts).clamp(min=0, max=total_seq_lens)
+    positions = torch.arange(total_seq_lens, device=logits.device, dtype=torch.long)
+    valid_positions = (
+        (positions.unsqueeze(0) >= row_starts.unsqueeze(1))
+        & (positions.unsqueeze(0) < row_ends.unsqueeze(1))
+    )
+    logits.masked_fill_(~valid_positions, float("-inf"))
+
+    indices = torch.topk(logits, topk, dim=-1).indices.to(torch.long)
+    indices = indices - row_starts.unsqueeze(1)
+    rank_offsets = torch.arange(topk, device=logits.device, dtype=torch.long)
+    valid_ranks = rank_offsets.unsqueeze(0) < row_lens.clamp(max=topk).unsqueeze(1)
+    if _musa_sparse_indexer_prefill_full_row_shortcut_enabled():
+        full_rows = row_lens <= topk
+        indices = torch.where(
+            full_rows.unsqueeze(1),
+            rank_offsets.unsqueeze(0).expand_as(indices),
+            indices,
+        )
+    indices = torch.where(valid_ranks, indices, torch.full_like(indices, -1))
+    topk_indices[:rows, :topk].copy_(indices.to(topk_indices.dtype))
+    return True
+
+
 def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -31,6 +139,17 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
     topk = min(int(topk_tokens), topk_indices.shape[1])
     if rows <= 0 or topk <= 0:
+        return True
+
+    if _musa_try_fill_prefill_topk_from_materialized_logits(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk,
+        topk_indices[:rows, :topk],
+        topk,
+        head_dim,
+    ):
         return True
 
     _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
@@ -192,6 +311,43 @@ def normalize_source(source: str) -> str:
             _PREFILL_NATIVE_HELPER
             + "\n\ndef _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int)"
             " -> torch.Tensor:\n",
+        )
+
+    if (
+        "def _musa_try_fill_prefill_topk_from_indexer_cache_native" in source
+        and "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+        not in source
+    ):
+        source = source.replace(
+            "\n\ndef _musa_try_fill_prefill_topk_from_indexer_cache_native(\n",
+            _PREFILL_NATIVE_HELPER.split(
+                "\n\ndef _musa_try_fill_prefill_topk_from_indexer_cache_native(\n",
+                1,
+            )[0]
+            + "\n\ndef _musa_try_fill_prefill_topk_from_indexer_cache_native(\n",
+        )
+        source = source.replace(
+            """    if rows <= 0 or topk <= 0:
+        return True
+
+    _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
+""",
+            """    if rows <= 0 or topk <= 0:
+        return True
+
+    if _musa_try_fill_prefill_topk_from_materialized_logits(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk,
+        topk_indices[:rows, :topk],
+        topk,
+        head_dim,
+    ):
+        return True
+
+    _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
+""",
         )
 
     source = _remove_shadowed_exact_fill_definitions(source)
@@ -415,6 +571,20 @@ def _musa_sparse_indexer_native_decode_enabled() -> bool:
     return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_NATIVE", "1") == "1"
 
 
+def _musa_sparse_indexer_materialized_prefill_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+        "0",
+    ) == "1"
+
+
+def _musa_sparse_indexer_prefill_full_row_shortcut_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+        "0",
+    ) == "1"
+
+
 def _musa_decode_block_table_for_token_rows(
     block_table: torch.Tensor,
     rows: int,
@@ -473,6 +643,100 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
     return True
 
 
+def _musa_try_fill_prefill_topk_from_materialized_logits(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    chunk,
+    topk_indices: torch.Tensor,
+    topk_tokens: int,
+    head_dim: int,
+) -> bool:
+    if (
+        not _musa_sparse_indexer_materialized_prefill_enabled()
+        or head_dim != 128
+        or topk_tokens > 512
+        or q_quant.dtype != torch.float8_e4m3fn
+        or kv_cache.dtype != torch.uint8
+        or weights.dtype != torch.float32
+        or kv_cache.ndim != 3
+        or int(chunk.total_seq_lens) > 4096
+        or int(chunk.num_reqs) != 1
+    ):
+        return False
+
+    rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
+    topk = min(int(topk_tokens), topk_indices.shape[1])
+    total_seq_lens = int(chunk.total_seq_lens)
+    if rows <= 0 or topk <= 0:
+        return True
+    if total_seq_lens <= 0:
+        return True
+
+    try:
+        import deep_gemm
+    except Exception:
+        return False
+
+    block_size = int(kv_cache.shape[1])
+    if block_size <= 0:
+        return False
+
+    row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
+    row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
+    context_lens = row_ends.reshape(1, rows).contiguous()
+    if context_lens.dtype != torch.int32:
+        context_lens = context_lens.to(torch.int32)
+
+    try:
+        schedule_meta = deep_gemm.get_paged_mqa_logits_metadata(
+            context_lens,
+            block_size,
+            deep_gemm.get_num_sms(),
+        )
+        logits = deep_gemm.fp8_paged_mqa_logits(
+            q_quant[:rows].unsqueeze(0).contiguous(),
+            kv_cache.unsqueeze(-2),
+            weights[:rows].contiguous(),
+            context_lens,
+            chunk.block_table[:1].contiguous(),
+            schedule_meta,
+            total_seq_lens,
+            False,
+        )
+    except Exception:
+        return False
+
+    if logits.shape[0] < rows or logits.shape[1] < total_seq_lens:
+        return False
+
+    logits = logits[:rows, :total_seq_lens]
+    row_starts = row_starts.to(torch.long)
+    row_ends = row_ends.to(torch.long)
+    row_lens = (row_ends - row_starts).clamp(min=0, max=total_seq_lens)
+    positions = torch.arange(total_seq_lens, device=logits.device, dtype=torch.long)
+    valid_positions = (
+        (positions.unsqueeze(0) >= row_starts.unsqueeze(1))
+        & (positions.unsqueeze(0) < row_ends.unsqueeze(1))
+    )
+    logits.masked_fill_(~valid_positions, float("-inf"))
+
+    indices = torch.topk(logits, topk, dim=-1).indices.to(torch.long)
+    indices = indices - row_starts.unsqueeze(1)
+    rank_offsets = torch.arange(topk, device=logits.device, dtype=torch.long)
+    valid_ranks = rank_offsets.unsqueeze(0) < row_lens.clamp(max=topk).unsqueeze(1)
+    if _musa_sparse_indexer_prefill_full_row_shortcut_enabled():
+        full_rows = row_lens <= topk
+        indices = torch.where(
+            full_rows.unsqueeze(1),
+            rank_offsets.unsqueeze(0).expand_as(indices),
+            indices,
+        )
+    indices = torch.where(valid_ranks, indices, torch.full_like(indices, -1))
+    topk_indices[:rows, :topk].copy_(indices.to(topk_indices.dtype))
+    return True
+
+
 def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -496,6 +760,17 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
     rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
     topk = min(int(topk_tokens), topk_indices.shape[1])
     if rows <= 0 or topk <= 0:
+        return True
+
+    if _musa_try_fill_prefill_topk_from_materialized_logits(
+        q_quant[:rows],
+        kv_cache,
+        weights[:rows],
+        chunk,
+        topk_indices[:rows, :topk],
+        topk,
+        head_dim,
+    ):
         return True
 
     _musa_custom_ops.deepseek_v4_indexer_topk_prefill(
