@@ -378,6 +378,32 @@ class TestGPUModelRunnerPatch:
         else:
             raise AssertionError("gpu_model_runner patch file was not found")
 
+    def test_model_runner_reuses_async_num_computed_buffer_on_musa(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.worker.gpu_model_runner":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "_async_num_computed_tokens" in new_source
+                assert "MUSA-3407: reuse a persistent pinned buffer" in new_source
+                assert "self._async_num_computed_tokens.copy_to_gpu(num_reqs)" in (
+                    new_source
+                )
+                musa_branch = new_source.split(
+                    "MUSA-3407: reuse a persistent pinned buffer", 1
+                )[1].split("else:", 1)[0]
+                assert (
+                    "num_computed_tokens_cpu_tensor[:num_reqs].to"
+                    not in musa_branch
+                )
+                break
+        else:
+            raise AssertionError("gpu_model_runner patch file was not found")
+
 
 class TestLLMBaseProposerPatch:
     """Tests for MUSA LLM base proposer speculative guards."""

@@ -177,6 +177,9 @@ _NEW_SPEC_METADATA_BUFFERS_INIT = """        self.query_pos = self._make_buffer(
         )
         self._spec_bonus_logits_indices = self._make_buffer(
             self.max_num_reqs, dtype=torch.int32
+        )
+        self._async_num_computed_tokens = self._make_buffer(
+            self.max_num_reqs, dtype=torch.int32
         )"""
 
 _OLD_SPEC_METADATA_TO_DEVICE = """        # TODO: Optimize the CPU -> GPU copy.
@@ -242,6 +245,33 @@ _NEW_SPEC_METADATA_TO_DEVICE = """        if current_platform.is_musa():
                 self.device, non_blocking=True
             )"""
 
+# ---- MUSA-3407: reuse async spec-decode num_computed_tokens upload buffer ----
+_OLD_ASYNC_NUM_COMPUTED_TO_DEVICE = """            self.prev_positions.copy_to_gpu(num_reqs)
+            self.prev_num_draft_tokens.copy_to_gpu()
+            cpu_values = self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs].to(
+                device=self.device, non_blocking=True
+            )
+            update_num_computed_tokens_for_batch_change("""
+
+_NEW_ASYNC_NUM_COMPUTED_TO_DEVICE = """            self.prev_positions.copy_to_gpu(num_reqs)
+            self.prev_num_draft_tokens.copy_to_gpu()
+            if current_platform.is_musa():
+                # MUSA-3407: reuse a persistent pinned buffer for the async
+                # spec-decode batch-change scalar upload instead of allocating
+                # a fresh device tensor via Tensor.to(device) every step.
+                self._async_num_computed_tokens.np[:num_reqs] = (
+                    self.input_batch.num_computed_tokens_cpu[:num_reqs]
+                )
+                self._async_num_computed_tokens.copy_to_gpu(num_reqs)
+                cpu_values = self._async_num_computed_tokens.gpu[:num_reqs]
+            else:
+                cpu_values = (
+                    self.input_batch.num_computed_tokens_cpu_tensor[:num_reqs].to(
+                        device=self.device, non_blocking=True
+                    )
+                )
+            update_num_computed_tokens_for_batch_change("""
+
 PATCHES = [
     (_OLD_INIT_FLAG, _NEW_INIT_FLAG),
     (_OLD_EAGLE_INIT, _NEW_EAGLE_INIT),
@@ -253,4 +283,5 @@ PATCHES = [
     (_OLD_MUSA_RANDOM_DRAFTER_FITS, _NEW_MUSA_RANDOM_DRAFTER_FITS),
     (_OLD_SPEC_METADATA_BUFFERS_INIT, _NEW_SPEC_METADATA_BUFFERS_INIT),
     (_OLD_SPEC_METADATA_TO_DEVICE, _NEW_SPEC_METADATA_TO_DEVICE),
+    (_OLD_ASYNC_NUM_COMPUTED_TO_DEVICE, _NEW_ASYNC_NUM_COMPUTED_TO_DEVICE),
 ]
