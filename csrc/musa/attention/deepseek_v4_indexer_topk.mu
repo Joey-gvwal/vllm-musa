@@ -31,6 +31,8 @@ constexpr const char *kPrefillPartialSortEnv =
     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT";
 constexpr const char *kPrefillPartialSortMergeBarrierEnv =
     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER";
+constexpr const char *kPrefillFullRowShortcutEnv =
+    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT";
 
 __device__ __forceinline__ float dequant_fp8_e4m3(uint8_t byte) {
   __mt_fp8_e4m3 packed;
@@ -625,7 +627,7 @@ __global__ void deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel(
     int cu_seqlen_ke_kind, int64_t cu_seqlen_ke_stride,
     OutT *__restrict__ topk_indices, int64_t topk_stride0,
     int64_t topk_stride1, int64_t rows, int64_t total_seq_lens,
-    int64_t topk) {
+    int64_t topk, bool full_row_shortcut) {
   const int64_t row = static_cast<int64_t>(blockIdx.x);
   if (row >= rows) {
     return;
@@ -637,6 +639,24 @@ __global__ void deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel(
   __shared__ int score_indices[kMaxSeqLen];
 
   const int tid = threadIdx.x;
+  const int64_t row_start =
+      load_index(cu_seqlen_ks, cu_seqlen_ks_kind, row * cu_seqlen_ks_stride);
+  const int64_t row_end =
+      load_index(cu_seqlen_ke, cu_seqlen_ke_kind, row * cu_seqlen_ke_stride);
+  const int64_t raw_row_len = row_end - row_start;
+  const int64_t row_len =
+      raw_row_len < kMaxSeqLen ? (raw_row_len > 0 ? raw_row_len : 0)
+                               : kMaxSeqLen;
+
+  if (full_row_shortcut && row_len <= topk) {
+    for (int64_t rank = tid; rank < topk; rank += blockDim.x) {
+      const int64_t selected = rank < row_len ? rank : -1;
+      topk_indices[row * topk_stride0 + rank * topk_stride1] =
+          static_cast<OutT>(selected);
+    }
+    return;
+  }
+
   for (int64_t elem = tid; elem < kNumHeads * kHeadDim; elem += blockDim.x) {
     const int64_t head = elem / kHeadDim;
     const int64_t dim = elem - head * kHeadDim;
@@ -648,15 +668,6 @@ __global__ void deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel(
         weights[row * weights_stride0 + head * weights_stride1];
   }
   __syncthreads();
-
-  const int64_t row_start =
-      load_index(cu_seqlen_ks, cu_seqlen_ks_kind, row * cu_seqlen_ks_stride);
-  const int64_t row_end =
-      load_index(cu_seqlen_ke, cu_seqlen_ke_kind, row * cu_seqlen_ke_stride);
-  const int64_t raw_row_len = row_end - row_start;
-  const int64_t row_len =
-      raw_row_len < kMaxSeqLen ? (raw_row_len > 0 ? raw_row_len : 0)
-                               : kMaxSeqLen;
 
   for (int64_t rel_pos = tid; rel_pos < kMaxSeqLen; rel_pos += blockDim.x) {
     float score = -INFINITY;
@@ -836,6 +847,8 @@ void launch_indexer_topk_prefill(
       use_blockselect && env_flag_enabled(kPrefillPartialSortEnv);
   const bool use_partialsort_merge_barrier =
       use_partialsort && env_flag_enabled(kPrefillPartialSortMergeBarrierEnv);
+  const bool use_full_row_shortcut =
+      use_partialsort && env_flag_enabled(kPrefillFullRowShortcutEnv);
   if (use_partialsort) {
     if (use_partialsort_merge_barrier) {
       deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel<OutT, true>
@@ -855,7 +868,7 @@ void launch_indexer_topk_prefill(
               index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
               static_cast<OutT *>(topk_indices.data_ptr()),
               topk_indices.stride(0), topk_indices.stride(1), q_quant.size(0),
-              token_to_seq.numel(), topk);
+              token_to_seq.numel(), topk, use_full_row_shortcut);
     } else {
       deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel<OutT, false>
           <<<grid, block, 0, stream>>>(
@@ -874,7 +887,7 @@ void launch_indexer_topk_prefill(
               index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
               static_cast<OutT *>(topk_indices.data_ptr()),
               topk_indices.stride(0), topk_indices.stride(1), q_quant.size(0),
-              token_to_seq.numel(), topk);
+              token_to_seq.numel(), topk, use_full_row_shortcut);
     }
   } else if (use_blockselect) {
     deepseek_v4_indexer_topk_prefill_q_cache_blockselect_kernel<OutT>
