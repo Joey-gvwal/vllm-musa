@@ -687,6 +687,15 @@ def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Te
                     "def _musa_try_fill_prefill_topk_from_indexer_cache_native"
                     in normalized
                 )
+                assert (
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+                    in normalized
+                )
+                assert (
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
+                    in normalized
+                )
+                assert "deepseek_v4_indexer_rerank_prefill" in normalized
                 assert "deepseek_v4_indexer_topk_prefill" in normalized
                 break
         else:
