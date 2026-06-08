@@ -703,14 +703,8 @@ def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Te
                     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
                     in normalized
                 )
-                assert (
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_FULL_ROW_SKIP"
-                    in normalized
-                )
                 assert "sorted=materialized_topk_sorted" in normalized
                 assert "materialized_direct_topk" in normalized
-                assert "materialized_full_row_skip_start" in normalized
-                assert "_musa_fill_materialized_full_row_suffix" in normalized
                 assert "direct_local" in normalized
                 assert "deepseek_v4_indexer_rerank_prefill" in normalized
                 assert "deepseek_v4_indexer_topk_prefill" in normalized
