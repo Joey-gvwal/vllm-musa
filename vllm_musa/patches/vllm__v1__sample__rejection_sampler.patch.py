@@ -55,21 +55,6 @@ PATCHES = [
         return False
 
 
-def _musa_skip_unused_bonus_logprobs_enabled() -> bool:
-    value = __import__("os").environ.get(
-        "VLLM_MUSA_SKIP_UNUSED_BONUS_LOGPROBS",
-        "0",
-    )
-    if value.lower() in ("0", "false", "no", "off"):
-        return False
-    try:
-        from vllm.platforms import current_platform
-
-        return current_platform.is_musa()
-    except Exception:
-        return False
-
-
 def _musa_sample_first_target_token(
     sampler: Sampler,
     target_logits: torch.Tensor,
@@ -108,51 +93,6 @@ def _musa_sample_first_target_token(
 
 
 def rejection_sample(
-""",
-    ),
-    (
-        """        bonus_sampler_output = self.sampler(
-            logits=bonus_logits,
-            sampling_metadata=replace(
-                sampling_metadata,
-                max_num_logprobs=-1,
-            ),
-            predict_bonus_token=True,
-            # Override the logprobs mode to return logits because they are
-            # needed later to compute the accepted token logprobs.
-            logprobs_mode_override="processed_logits"
-            if self.is_processed_logprobs_mode
-            else "raw_logits",
-        )
-        bonus_token_ids = bonus_sampler_output.sampled_token_ids
-""",
-        """        if (
-            sampling_metadata.max_num_logprobs is None
-            and not sampling_metadata.logprob_token_ids
-            and _musa_skip_unused_bonus_logprobs_enabled()
-        ):
-            # The no-logprobs path only consumes sampled bonus token ids.
-            # Keep the full raw-logits sampler call for logprob requests.
-            bonus_sampler_output = self.sampler(
-                logits=bonus_logits,
-                sampling_metadata=sampling_metadata,
-                predict_bonus_token=True,
-            )
-        else:
-            bonus_sampler_output = self.sampler(
-                logits=bonus_logits,
-                sampling_metadata=replace(
-                    sampling_metadata,
-                    max_num_logprobs=-1,
-                ),
-                predict_bonus_token=True,
-                # Override the logprobs mode to return logits because they are
-                # needed later to compute the accepted token logprobs.
-                logprobs_mode_override="processed_logits"
-                if self.is_processed_logprobs_mode
-                else "raw_logits",
-            )
-        bonus_token_ids = bonus_sampler_output.sampled_token_ids
 """,
     ),
     (
