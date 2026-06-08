@@ -418,46 +418,6 @@ _NEW_ISINSTANCE = """        if self.method in ("eagle3", "dflash"):
                 ),
             )"""
 
-# ---- MUSA-3441: diagnostic gate for MTP topk_indices_buffer sharing ----
-_OLD_MTP_TOPK_SHARE = """        if hasattr(target_language_model.model, "topk_indices_buffer"):
-            if hasattr(self.model.model, "topk_indices_buffer"):
-                del self.model.model.topk_indices_buffer
-            self.model.model.topk_indices_buffer = (
-                target_language_model.model.topk_indices_buffer
-            )
-            logger.info(
-                "Detected MTP model with topk_indices_buffer. "
-                "Sharing target model topk_indices_buffer with the draft model."
-            )"""
-
-_NEW_MTP_TOPK_SHARE = """        import os as _musa_topk_os
-        share_mtp_topk_buffer = (
-            not current_platform.is_musa()
-            or _musa_topk_os.environ.get(
-                "VLLM_MUSA_SHARE_MTP_TOPK_BUFFER", "1"
-            ).lower()
-            not in ("0", "false", "no", "off")
-        )
-        if (
-            share_mtp_topk_buffer
-            and hasattr(target_language_model.model, "topk_indices_buffer")
-        ):
-            if hasattr(self.model.model, "topk_indices_buffer"):
-                del self.model.model.topk_indices_buffer
-            self.model.model.topk_indices_buffer = (
-                target_language_model.model.topk_indices_buffer
-            )
-            logger.info(
-                "Detected MTP model with topk_indices_buffer. "
-                "Sharing target model topk_indices_buffer with the draft model."
-            )
-        elif current_platform.is_musa() and hasattr(
-            target_language_model.model, "topk_indices_buffer"
-        ):
-            logger.info(
-                "MUSA diagnostic: keeping separate MTP topk_indices_buffer."
-            )"""
-
 PATCHES = [
     (_OLD_IMPORTS, _NEW_IMPORTS),
     (_OLD_DISPATCHER_INIT, _NEW_DISPATCHER_INIT),
@@ -472,5 +432,4 @@ PATCHES = [
     (_OLD_QSL_REASSIGN, _NEW_QSL_REASSIGN),
     (_OLD_DUMMY_RUN, _NEW_DUMMY_RUN),
     (_OLD_ISINSTANCE, _NEW_ISINSTANCE),
-    (_OLD_MTP_TOPK_SHARE, _NEW_MTP_TOPK_SHARE),
 ]
