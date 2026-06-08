@@ -44,6 +44,13 @@ def _musa_sparse_indexer_materialized_prefill_chunk_rows(rows: int) -> int:
     return max(1, min(chunk_rows, int(rows)))
 
 
+def _musa_sparse_indexer_materialized_prefill_topk_sorted() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
+        "1",
+    ) != "0"
+
+
 def _musa_try_fill_prefill_topk_from_materialized_logits(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -95,6 +102,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
     materialized_chunk_rows = _musa_sparse_indexer_materialized_prefill_chunk_rows(
         rows
     )
+    materialized_topk_sorted = _musa_sparse_indexer_materialized_prefill_topk_sorted()
 
     def _musa_fill_chunk_from_logits(
         logits: torch.Tensor,
@@ -114,7 +122,12 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
         )
         logits.masked_fill_(~valid_positions, float("-inf"))
 
-        approx_abs = torch.topk(logits, overselect, dim=-1).indices.contiguous()
+        approx_abs = torch.topk(
+            logits,
+            overselect,
+            dim=-1,
+            sorted=materialized_topk_sorted,
+        ).indices.contiguous()
         _musa_custom_ops.deepseek_v4_indexer_rerank_prefill(
             q_quant[row_start:row_end],
             kv_cache,
