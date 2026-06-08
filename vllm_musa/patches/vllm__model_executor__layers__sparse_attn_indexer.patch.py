@@ -58,6 +58,13 @@ def _musa_sparse_indexer_materialized_prefill_direct_topk_enabled() -> bool:
     ) == "1"
 
 
+def _musa_sparse_indexer_materialized_prefill_full_row_skip_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_FULL_ROW_SKIP",
+        "0",
+    ) == "1"
+
+
 def _musa_try_fill_prefill_topk_from_materialized_logits(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -113,6 +120,42 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
     materialized_direct_topk = (
         _musa_sparse_indexer_materialized_prefill_direct_topk_enabled()
     )
+    materialized_full_row_skip_start = rows
+    if (
+        materialized_direct_topk
+        and _musa_sparse_indexer_materialized_prefill_full_row_skip_enabled()
+        and rows == total_seq_lens
+        and total_seq_lens == 4096
+        and topk == 512
+        and int(chunk.num_reqs) == 1
+    ):
+        materialized_full_row_skip_start = max(0, total_seq_lens - topk)
+
+    def _musa_fill_materialized_full_row_suffix(
+        row_start: int,
+        row_end: int,
+    ) -> int:
+        suffix_start = max(row_start, materialized_full_row_skip_start)
+        if suffix_start >= row_end:
+            return row_end
+
+        suffix_rows = row_end - suffix_start
+        ranks = torch.arange(topk, device=q_quant.device, dtype=torch.long)
+        lengths = (
+            total_seq_lens
+            - torch.arange(
+                suffix_start,
+                row_end,
+                device=q_quant.device,
+                dtype=torch.long,
+            )
+        ).clamp(min=0, max=topk)
+        values = ranks.to(topk_indices.dtype).unsqueeze(0).expand(suffix_rows, -1)
+        valid = ranks.unsqueeze(0) < lengths.unsqueeze(1)
+        topk_indices[suffix_start:row_end, :topk].copy_(
+            torch.where(valid, values, torch.full_like(values, -1))
+        )
+        return suffix_start
 
     def _musa_fill_chunk_from_logits(
         logits: torch.Tensor,
@@ -210,6 +253,9 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
 
         for row_start in range(0, rows, materialized_chunk_rows):
             row_end = min(row_start + materialized_chunk_rows, rows)
+            row_end = _musa_fill_materialized_full_row_suffix(row_start, row_end)
+            if row_end <= row_start:
+                continue
             chunk_rows = row_end - row_start
             context_chunk = context_lens[row_start:row_end].contiguous()
             schedule_meta = _musa_deep_gemm.get_paged_mqa_logits_metadata(
@@ -232,6 +278,9 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
     def _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm) -> bool:
         for row_start in range(0, rows, materialized_chunk_rows):
             row_end = min(row_start + materialized_chunk_rows, rows)
+            row_end = _musa_fill_materialized_full_row_suffix(row_start, row_end)
+            if row_end <= row_start:
+                continue
             chunk_rows = row_end - row_start
             context_chunk = context_lens[row_start:row_end].contiguous()
             schedule_meta = _vllm_deep_gemm.get_paged_mqa_logits_metadata(
