@@ -138,7 +138,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
                 logits,
                 direct_width,
                 dim=-1,
-                sorted=True,
+                sorted=materialized_topk_sorted,
             ).indices
             row_lens = (ends - starts).clamp(min=0, max=total_seq_lens)
             direct_local = torch.full(
