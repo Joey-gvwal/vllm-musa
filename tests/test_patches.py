@@ -318,8 +318,11 @@ class TestRejectionSamplerPatch:
 
                 assert "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK" in new_source
                 assert "_musa_sample_first_target_token" in new_source
+                assert "VLLM_MUSA_SKIP_UNUSED_BONUS_LOGPROBS" in new_source
+                assert "_musa_skip_unused_bonus_logprobs_enabled" in new_source
                 assert "not sampling_metadata.all_greedy" in new_source
                 assert "sampling_metadata.max_num_logprobs is None" in new_source
+                assert "not sampling_metadata.logprob_token_ids" in new_source
                 assert "PLACEHOLDER_TOKEN_ID" in new_source
                 break
         else:
