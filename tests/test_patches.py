@@ -364,8 +364,15 @@ class TestGPUModelRunnerPatch:
                 assert "_spec_logits_indices" in new_source
                 assert "_spec_target_logits_indices" in new_source
                 assert "_spec_bonus_logits_indices" in new_source
+                assert "_spec_single_req_cached_draft_len" in new_source
                 assert "current_platform.is_musa()" in new_source
                 assert "copy_to_gpu(num_sampled_total)" in new_source
+                assert "VLLM_MUSA_SPEC_METADATA_SINGLE_REQ_CACHE" in new_source
+                assert "single_req_cache_enabled" in new_source
+                assert "draft_token_ids from the current input_ids.gpu below" in (
+                    new_source
+                )
+                assert "_spec_draft_token_ids" not in new_source
                 musa_branch = new_source.split("MUSA-3406: copy through", 1)[
                     1
                 ].split("else:", 1)[0]

@@ -177,7 +177,8 @@ _NEW_SPEC_METADATA_BUFFERS_INIT = """        self.query_pos = self._make_buffer(
         )
         self._spec_bonus_logits_indices = self._make_buffer(
             self.max_num_reqs, dtype=torch.int32
-        )"""
+        )
+        self._spec_single_req_cached_draft_len = -1"""
 
 _OLD_SPEC_METADATA_TO_DEVICE = """        # TODO: Optimize the CPU -> GPU copy.
         cu_num_draft_tokens = torch.from_numpy(cu_num_draft_tokens).to(
@@ -202,20 +203,56 @@ _NEW_SPEC_METADATA_TO_DEVICE = """        if current_platform.is_musa():
             num_reqs = num_draft_tokens.shape[0]
             num_sampled_total = int(cu_num_sampled_tokens[-1])
             num_draft_total = int(cu_num_draft_tokens[-1])
-
-            self._spec_cu_num_draft_tokens.np[:num_reqs] = cu_num_draft_tokens
-            self._spec_cu_num_sampled_tokens.np[:num_reqs] = cu_num_sampled_tokens
-            self._spec_logits_indices.np[:num_sampled_total] = logits_indices
-            self._spec_target_logits_indices.np[:num_draft_total] = (
-                target_logits_indices
+            single_req_cache_enabled = (
+                __import__("os").environ.get(
+                    "VLLM_MUSA_SPEC_METADATA_SINGLE_REQ_CACHE", "0"
+                ).lower()
+                in ("1", "true", "yes", "on")
+                and num_reqs == 1
+                and int(num_draft_tokens[0]) > 0
+                and num_sampled_total == int(num_draft_tokens[0]) + 1
+                and num_draft_total == int(num_draft_tokens[0])
+                and int(cu_num_scheduled_tokens[0]) == num_sampled_total
             )
-            self._spec_bonus_logits_indices.np[:num_reqs] = bonus_logits_indices
 
-            self._spec_cu_num_draft_tokens.copy_to_gpu(num_reqs)
-            self._spec_cu_num_sampled_tokens.copy_to_gpu(num_reqs)
-            self._spec_logits_indices.copy_to_gpu(num_sampled_total)
-            self._spec_target_logits_indices.copy_to_gpu(num_draft_total)
-            self._spec_bonus_logits_indices.copy_to_gpu(num_reqs)
+            if single_req_cache_enabled:
+                # MUSA-3463: in the TP8 single-request MTP decode path the
+                # metadata indices are constant for each draft length. Upload
+                # them once, then reuse the GPU views while still recomputing
+                # draft_token_ids from the current input_ids.gpu below.
+                draft_len = int(num_draft_tokens[0])
+                if self._spec_single_req_cached_draft_len != draft_len:
+                    self._spec_cu_num_draft_tokens.np[0] = draft_len
+                    self._spec_cu_num_sampled_tokens.np[0] = draft_len + 1
+                    self._spec_logits_indices.np[: draft_len + 1] = (
+                        self._arange_scratch[: draft_len + 1]
+                    )
+                    self._spec_target_logits_indices.np[:draft_len] = (
+                        self._arange_scratch[:draft_len]
+                    )
+                    self._spec_bonus_logits_indices.np[0] = draft_len
+
+                    self._spec_cu_num_draft_tokens.copy_to_gpu(1)
+                    self._spec_cu_num_sampled_tokens.copy_to_gpu(1)
+                    self._spec_logits_indices.copy_to_gpu(draft_len + 1)
+                    self._spec_target_logits_indices.copy_to_gpu(draft_len)
+                    self._spec_bonus_logits_indices.copy_to_gpu(1)
+                    self._spec_single_req_cached_draft_len = draft_len
+            else:
+                self._spec_cu_num_draft_tokens.np[:num_reqs] = cu_num_draft_tokens
+                self._spec_cu_num_sampled_tokens.np[:num_reqs] = cu_num_sampled_tokens
+                self._spec_logits_indices.np[:num_sampled_total] = logits_indices
+                self._spec_target_logits_indices.np[:num_draft_total] = (
+                    target_logits_indices
+                )
+                self._spec_bonus_logits_indices.np[:num_reqs] = bonus_logits_indices
+
+                self._spec_cu_num_draft_tokens.copy_to_gpu(num_reqs)
+                self._spec_cu_num_sampled_tokens.copy_to_gpu(num_reqs)
+                self._spec_logits_indices.copy_to_gpu(num_sampled_total)
+                self._spec_target_logits_indices.copy_to_gpu(num_draft_total)
+                self._spec_bonus_logits_indices.copy_to_gpu(num_reqs)
+                self._spec_single_req_cached_draft_len = -1
 
             cu_num_draft_tokens = self._spec_cu_num_draft_tokens.gpu[:num_reqs]
             cu_num_sampled_tokens = self._spec_cu_num_sampled_tokens.gpu[:num_reqs]
