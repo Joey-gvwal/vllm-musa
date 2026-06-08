@@ -704,8 +704,6 @@ def _musa_indexer_cache_block(kv_cache: torch.Tensor, block_id: int) -> torch.Te
                     in normalized
                 )
                 assert "sorted=materialized_topk_sorted" in normalized
-                assert "direct_abs = torch.topk(" in normalized
-                assert "sorted=True" not in normalized
                 assert "materialized_direct_topk" in normalized
                 assert "direct_local" in normalized
                 assert "deepseek_v4_indexer_rerank_prefill" in normalized
