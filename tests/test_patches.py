@@ -439,6 +439,27 @@ class TestLLMBaseProposerPatch:
         else:
             raise AssertionError("llm_base_proposer patch file was not found")
 
+    def test_mtp_topk_buffer_share_has_musa_diagnostic_gate(self):
+        from vllm_musa.patches import _get_patch_files, _load_patch_config
+
+        patch_files = _get_patch_files()
+
+        for module_name, patch_path in patch_files:
+            if module_name == "vllm.v1.spec_decode.llm_base_proposer":
+                patches = _load_patch_config(patch_path)
+                new_source = "\n".join(new for _, new in patches)
+
+                assert "VLLM_MUSA_SHARE_MTP_TOPK_BUFFER" in new_source
+                assert "share_mtp_topk_buffer" in new_source
+                assert "not current_platform.is_musa()" in new_source
+                assert (
+                    "MUSA diagnostic: keeping separate MTP topk_indices_buffer"
+                    in new_source
+                )
+                break
+        else:
+            raise AssertionError("llm_base_proposer patch file was not found")
+
 
 class TestDeepSeekV4AttentionPatch:
     """Tests for the MUSA DeepSeek-V4 attention patch."""
