@@ -1580,8 +1580,10 @@ class TestMUSAPlatformDefaults:
                 == "0"
             )
             assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
-                not in os.environ
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
+                ]
+                == "1"
             )
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "1"
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"] == "1"
@@ -1612,7 +1614,7 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED": "1",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT": "1",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT": "0",
             "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED": "0",
             "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL": "0",
         }
@@ -1672,7 +1674,7 @@ class TestMUSAPlatformDefaults:
                 os.environ[
                     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
                 ]
-                == "1"
+                == "0"
             )
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "0"
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"] == "0"
