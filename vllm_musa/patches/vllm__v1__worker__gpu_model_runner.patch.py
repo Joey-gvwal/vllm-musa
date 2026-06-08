@@ -197,6 +197,18 @@ _OLD_SPEC_METADATA_TO_DEVICE = """        # TODO: Optimize the CPU -> GPU copy.
         )"""
 
 _NEW_SPEC_METADATA_TO_DEVICE = """        if current_platform.is_musa():
+            import os as _musa_spec_metadata_os
+
+            _use_musa_spec_metadata_buffer = (
+                _musa_spec_metadata_os.environ.get(
+                    "VLLM_MUSA_SPEC_METADATA_BUFFER", "1"
+                ).lower()
+                not in ("0", "false", "no", "off")
+            )
+        else:
+            _use_musa_spec_metadata_buffer = False
+
+        if _use_musa_spec_metadata_buffer:
             # MUSA-3406: copy through persistent pinned CPU buffers so the
             # per-step metadata uploads do not allocate pageable CPU tensors.
             num_reqs = num_draft_tokens.shape[0]

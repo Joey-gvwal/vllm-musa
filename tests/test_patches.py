@@ -365,10 +365,12 @@ class TestGPUModelRunnerPatch:
                 assert "_spec_target_logits_indices" in new_source
                 assert "_spec_bonus_logits_indices" in new_source
                 assert "current_platform.is_musa()" in new_source
+                assert "VLLM_MUSA_SPEC_METADATA_BUFFER" in new_source
+                assert '("0", "false", "no", "off")' in new_source
                 assert "copy_to_gpu(num_sampled_total)" in new_source
-                musa_branch = new_source.split("MUSA-3406: copy through", 1)[
-                    1
-                ].split("else:", 1)[0]
+                musa_branch = new_source.split(
+                    "if _use_musa_spec_metadata_buffer:", 1
+                )[1].split("else:", 1)[0]
                 assert "torch.from_numpy(cu_num_draft_tokens).to" not in musa_branch
                 assert "torch.from_numpy(cu_num_sampled_tokens).to" not in musa_branch
                 assert "torch.from_numpy(logits_indices).to" not in musa_branch
