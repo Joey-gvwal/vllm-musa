@@ -58,6 +58,13 @@ def _musa_sparse_indexer_materialized_prefill_direct_topk_enabled() -> bool:
     ) == "1"
 
 
+def _musa_sparse_indexer_materialized_prefill_start_only_mask_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_START_ONLY_MASK",
+        "0",
+    ) == "1"
+
+
 def _musa_try_fill_prefill_topk_from_materialized_logits(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -113,6 +120,10 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
     materialized_direct_topk = (
         _musa_sparse_indexer_materialized_prefill_direct_topk_enabled()
     )
+    materialized_start_only_mask = (
+        materialized_direct_topk
+        and _musa_sparse_indexer_materialized_prefill_start_only_mask_enabled()
+    )
 
     def _musa_fill_chunk_from_logits(
         logits: torch.Tensor,
@@ -126,10 +137,11 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
         logits = logits[:chunk_rows, :total_seq_lens]
         starts = row_starts[row_start:row_end]
         ends = row_ends[row_start:row_end]
-        valid_positions = (
-            (positions.unsqueeze(0) >= starts.unsqueeze(1))
-            & (positions.unsqueeze(0) < ends.unsqueeze(1))
-        )
+        valid_positions = positions.unsqueeze(0) >= starts.unsqueeze(1)
+        if not materialized_start_only_mask:
+            valid_positions = valid_positions & (
+                positions.unsqueeze(0) < ends.unsqueeze(1)
+            )
         logits.masked_fill_(~valid_positions, float("-inf"))
 
         if materialized_direct_topk:
