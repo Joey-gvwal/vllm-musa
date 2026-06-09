@@ -58,13 +58,6 @@ def _musa_sparse_indexer_materialized_prefill_direct_topk_enabled() -> bool:
     ) == "1"
 
 
-def _musa_sparse_indexer_materialized_prefill_direct_fast_local_enabled() -> bool:
-    return os.getenv(
-        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT_FAST_LOCAL",
-        "0",
-    ) == "1"
-
-
 def _musa_try_fill_prefill_topk_from_materialized_logits(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -120,9 +113,6 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
     materialized_direct_topk = (
         _musa_sparse_indexer_materialized_prefill_direct_topk_enabled()
     )
-    materialized_direct_fast_local = (
-        _musa_sparse_indexer_materialized_prefill_direct_fast_local_enabled()
-    )
 
     def _musa_fill_chunk_from_logits(
         logits: torch.Tensor,
@@ -158,19 +148,16 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
                 dtype=torch.long,
             )
             local_prefix = direct_abs - starts.unsqueeze(1)
-            if materialized_direct_fast_local:
-                direct_local[:, :direct_width].copy_(local_prefix)
-            else:
-                prefix_valid = (
-                    (local_prefix >= 0) & (local_prefix < row_lens.unsqueeze(1))
+            prefix_valid = (
+                (local_prefix >= 0) & (local_prefix < row_lens.unsqueeze(1))
+            )
+            direct_local[:, :direct_width].copy_(
+                torch.where(
+                    prefix_valid,
+                    local_prefix,
+                    torch.full_like(local_prefix, -1),
                 )
-                direct_local[:, :direct_width].copy_(
-                    torch.where(
-                        prefix_valid,
-                        local_prefix,
-                        torch.full_like(local_prefix, -1),
-                    )
-                )
+            )
             topk_offsets = torch.arange(topk, device=q_quant.device, dtype=torch.long)
             full_valid = topk_offsets.unsqueeze(0) < row_lens.unsqueeze(1)
             full_local = torch.where(
