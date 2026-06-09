@@ -223,7 +223,7 @@ def _will_capture_piecewise_cudagraph(vllm_config: Any) -> bool:
     if getattr(vllm_config.model_config, "enforce_eager", False):
         return False
     comp = vllm_config.compilation_config
-    if comp.mode == CompilationMode.NONE:
+    if getattr(comp, "mode", None) == CompilationMode.NONE:
         return False
     cg_mode = getattr(comp, "cudagraph_mode", None)
     if cg_mode is not None and not cg_mode.has_piecewise_cudagraphs():
