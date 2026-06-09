@@ -553,6 +553,7 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
             "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
@@ -589,6 +590,10 @@ class TestMUSAPlatformDefaults:
                 "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
                 not in os.environ
             )
+            assert (
+                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
+                not in os.environ
+            )
             assert "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED" not in os.environ
 
     def test_deepseek_v4_tp8_profile_sets_missing_envs(self):
@@ -613,6 +618,7 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
             "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
@@ -661,6 +667,10 @@ class TestMUSAPlatformDefaults:
                 "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
                 not in os.environ
             )
+            assert (
+                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
+                not in os.environ
+            )
             assert "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED" not in os.environ
             assert vllm_config.cache_config.block_size == 256
 
@@ -686,6 +696,7 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
             "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
@@ -741,6 +752,12 @@ class TestMUSAPlatformDefaults:
                 ]
                 == "1"
             )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
+                ]
+                == "1"
+            )
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "1"
             assert vllm_config.cache_config.block_size == 256
 
@@ -767,6 +784,7 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT": "0",
             "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED": "0",
         }
 
@@ -806,6 +824,12 @@ class TestMUSAPlatformDefaults:
             assert (
                 os.environ[
                     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
+                ]
+                == "0"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
                 ]
                 == "0"
             )
