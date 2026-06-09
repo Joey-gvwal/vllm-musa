@@ -51,6 +51,13 @@ def _musa_sparse_indexer_materialized_prefill_topk_sorted() -> bool:
     ) != "0"
 
 
+def _musa_sparse_indexer_materialized_prefill_direct_topk_enabled() -> bool:
+    return os.getenv(
+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
+        "0",
+    ) == "1"
+
+
 def _musa_try_fill_prefill_topk_from_materialized_logits(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
@@ -103,6 +110,9 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
         rows
     )
     materialized_topk_sorted = _musa_sparse_indexer_materialized_prefill_topk_sorted()
+    materialized_direct_topk = (
+        _musa_sparse_indexer_materialized_prefill_direct_topk_enabled()
+    )
 
     def _musa_fill_chunk_from_logits(
         logits: torch.Tensor,
@@ -121,6 +131,54 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
             & (positions.unsqueeze(0) < ends.unsqueeze(1))
         )
         logits.masked_fill_(~valid_positions, float("-inf"))
+
+        if materialized_direct_topk:
+            direct_width = min(topk, total_seq_lens)
+            direct_abs = torch.topk(
+                logits,
+                direct_width,
+                dim=-1,
+                sorted=True,
+            ).indices
+            row_lens = (ends - starts).clamp(min=0, max=total_seq_lens)
+            direct_local = torch.full(
+                (chunk_rows, topk),
+                -1,
+                device=q_quant.device,
+                dtype=torch.long,
+            )
+            local_prefix = direct_abs - starts.unsqueeze(1)
+            prefix_valid = (
+                (local_prefix >= 0) & (local_prefix < row_lens.unsqueeze(1))
+            )
+            direct_local[:, :direct_width].copy_(
+                torch.where(
+                    prefix_valid,
+                    local_prefix,
+                    torch.full_like(local_prefix, -1),
+                )
+            )
+            topk_offsets = torch.arange(topk, device=q_quant.device, dtype=torch.long)
+            full_valid = topk_offsets.unsqueeze(0) < row_lens.unsqueeze(1)
+            full_local = torch.where(
+                full_valid,
+                topk_offsets.unsqueeze(0).expand(chunk_rows, -1),
+                torch.full(
+                    (chunk_rows, topk),
+                    -1,
+                    device=q_quant.device,
+                    dtype=torch.long,
+                ),
+            )
+            direct_local = torch.where(
+                (row_lens <= topk).unsqueeze(1),
+                full_local,
+                direct_local,
+            )
+            topk_indices[row_start:row_end, :topk].copy_(
+                direct_local.to(topk_indices.dtype)
+            )
+            return True
 
         approx_abs = torch.topk(
             logits,
