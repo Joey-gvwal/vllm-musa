@@ -1447,6 +1447,27 @@ class TestBuildTimeSeries:
         ba = self._load_build_apply()
         assert ba.apply_patch_series(tmp_path, tmp_path / "nope") == []
 
+    def test_deepseek_v4_spec_metadata_upload_series_patch_present(self):
+        series = (
+            self._SERIES_DIR / "0035-MUSA-vllm.v1.worker.gpu_model_runner.patch"
+        ).read_text()
+
+        assert "_spec_cu_num_draft_tokens" in series
+        assert "_spec_cu_num_sampled_tokens" in series
+        assert "_spec_logits_indices" in series
+        assert "_spec_target_logits_indices" in series
+        assert "_spec_bonus_logits_indices" in series
+        assert "current_platform.is_musa()" in series
+        assert "copy_to_gpu(num_sampled_total)" in series
+        musa_branch = series.split("MUSA-3406: copy through", 1)[1].split(
+            "else:", 1
+        )[0]
+        assert "torch.from_numpy(cu_num_draft_tokens).to" not in musa_branch
+        assert "torch.from_numpy(cu_num_sampled_tokens).to" not in musa_branch
+        assert "torch.from_numpy(logits_indices).to" not in musa_branch
+        assert "torch.from_numpy(target_logits_indices).to" not in musa_branch
+        assert "torch.from_numpy(bonus_logits_indices).to" not in musa_branch
+
     @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
     def test_apply_patch_idempotent_and_loud_on_conflict(self, tmp_path):
         # End-to-end on a throwaway git repo: first apply == "applied", re-apply
