@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.model
  1 file changed, 16 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
-index 25f0a73..d434c32 100644
+index 25f0a730f..d434c320e 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
 @@ -1,5 +1,6 @@

@@ -132,6 +132,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
                 &deepseek_v4_indexer_topk_prefill);
 
   musa_ops.def(
+      "deepseek_v4_indexer_rerank_prefill(Tensor q_quant, Tensor kv_cache, "
+      "Tensor weights, Tensor block_table, Tensor cu_seq_lens, Tensor "
+      "token_to_seq, Tensor cu_seqlen_ks, Tensor cu_seqlen_ke, Tensor "
+      "candidate_abs_indices, Tensor! topk_indices, int topk) -> ()");
+  musa_ops.impl("deepseek_v4_indexer_rerank_prefill", torch::kMUSA,
+                &deepseek_v4_indexer_rerank_prefill);
+
+  musa_ops.def(
       "deepseek_v4_sparse_flashmla_decode(Tensor q, Tensor k_cache, "
       "Tensor indices, Tensor? topk_length, Tensor? attn_sink, "
       "Tensor? extra_k_cache, Tensor? extra_indices, Tensor? "

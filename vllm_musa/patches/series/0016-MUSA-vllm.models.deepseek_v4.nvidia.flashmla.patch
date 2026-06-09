@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.flashmla
  1 file changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/flashmla.py b/vllm/models/deepseek_v4/nvidia/flashmla.py
-index 5c8b08d..5ea2810 100644
+index 5c8b08d4c..5ea281055 100644
 --- a/vllm/models/deepseek_v4/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v4/nvidia/flashmla.py
 @@ -21,7 +21,7 @@ from vllm.v1.attention.backends.mla.flashmla_sparse import (

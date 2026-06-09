@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.spec_decode.dflash
  1 file changed, 34 insertions(+), 9 deletions(-)
 
 diff --git a/vllm/v1/spec_decode/dflash.py b/vllm/v1/spec_decode/dflash.py
-index db74044f4..d0d694c19 100644
+index db74044f4..162ac75db 100644
 --- a/vllm/v1/spec_decode/dflash.py
 +++ b/vllm/v1/spec_decode/dflash.py
 @@ -194,6 +194,7 @@ class DFlashProposer(SpecDecodeBaseProposer):

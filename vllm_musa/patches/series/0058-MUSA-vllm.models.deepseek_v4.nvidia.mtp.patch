@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.mtp
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
-index 9d0ac43..62de7c0 100644
+index 9d0ac4353..62de7c08a 100644
 --- a/vllm/models/deepseek_v4/nvidia/mtp.py
 +++ b/vllm/models/deepseek_v4/nvidia/mtp.py
 @@ -147,7 +147,7 @@ class DeepSeekV4MultiTokenPredictorLayer(nn.Module):

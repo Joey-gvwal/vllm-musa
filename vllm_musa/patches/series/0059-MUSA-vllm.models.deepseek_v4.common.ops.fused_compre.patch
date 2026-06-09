@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA:
  1 file changed, 40 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-index 9a5e478..4ec4d72 100644
+index 9a5e478e3..4ec4d7290 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 @@ -23,11 +23,26 @@ from typing import Any

@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.sample.rejection_sampler
  1 file changed, 91 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
-index 678654cb7..3aebfa25a 100644
+index 678654cb7..c78cb5241 100644
 --- a/vllm/v1/sample/rejection_sampler.py
 +++ b/vllm/v1/sample/rejection_sampler.py
 @@ -156,6 +156,23 @@ class RejectionSampler(nn.Module):
