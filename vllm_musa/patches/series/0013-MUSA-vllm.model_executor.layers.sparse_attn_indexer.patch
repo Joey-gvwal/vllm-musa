@@ -4,11 +4,11 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.model_executor.layers.sparse_attn_indexer
 
 ---
- .../layers/sparse_attn_indexer.py             | 940 ++++++++++++++++++
- 1 file changed, 940 insertions(+)
+ .../layers/sparse_attn_indexer.py             | 953 ++++++++++++++++++
+ 1 file changed, 953 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 9597708b6..db7e44a41 100644
+index 9597708b6..cc0f5c251 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,9 +2,12 @@
@@ -24,7 +24,7 @@ index 9597708b6..db7e44a41 100644
  from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
-@@ -31,6 +34,909 @@ from vllm.v1.worker.workspace import current_workspace_manager
+@@ -31,6 +34,922 @@ from vllm.v1.worker.workspace import current_workspace_manager
  
  logger = init_logger(__name__)
  
@@ -233,6 +233,13 @@ index 9597708b6..db7e44a41 100644
 +    return max(1, min(chunk_rows, int(rows)))
 +
 +
++def _musa_sparse_indexer_materialized_prefill_topk_sorted() -> bool:
++    return os.getenv(
++        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
++        "1",
++    ) != "0"
++
++
 +def _musa_decode_block_table_for_token_rows(
 +    block_table: torch.Tensor,
 +    rows: int,
@@ -342,6 +349,7 @@ index 9597708b6..db7e44a41 100644
 +    materialized_chunk_rows = _musa_sparse_indexer_materialized_prefill_chunk_rows(
 +        rows
 +    )
++    materialized_topk_sorted = _musa_sparse_indexer_materialized_prefill_topk_sorted()
 +
 +    def _musa_fill_chunk_from_logits(
 +        logits: torch.Tensor,
@@ -361,7 +369,12 @@ index 9597708b6..db7e44a41 100644
 +        )
 +        logits.masked_fill_(~valid_positions, float("-inf"))
 +
-+        approx_abs = torch.topk(logits, overselect, dim=-1).indices.contiguous()
++        approx_abs = torch.topk(
++            logits,
++            overselect,
++            dim=-1,
++            sorted=materialized_topk_sorted,
++        ).indices.contiguous()
 +        _musa_custom_ops.deepseek_v4_indexer_rerank_prefill(
 +            q_quant[row_start:row_end],
 +            kv_cache,
@@ -934,7 +947,7 @@ index 9597708b6..db7e44a41 100644
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
  
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
-@@ -456,6 +1362,40 @@ class SparseAttnIndexer(CustomOp):
+@@ -456,6 +1375,40 @@ class SparseAttnIndexer(CustomOp):
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
              return self.forward_hip(hidden_states, q_quant, k, weights)
