@@ -549,6 +549,18 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
+            "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
 
@@ -587,6 +599,18 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
+            "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
 
@@ -618,6 +642,11 @@ class TestMUSAPlatformDefaults:
                 == "2048"
             )
             assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL" not in os.environ
+            assert (
+                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+                not in os.environ
+            )
+            assert "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL" not in os.environ
             assert vllm_config.cache_config.block_size == 256
 
     def test_deepseek_v4_tp8_aggressive_profile_sets_mhc_deepgemm(self):
@@ -638,6 +667,18 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
+            "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
 
@@ -671,6 +712,69 @@ class TestMUSAPlatformDefaults:
             assert (
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "deepgemm_big_fuse"
             )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
+                ]
+                == "640"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
+                ]
+                == "512"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
+                ]
+                == "0"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"]
+                == "1"
+            )
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"] == "1"
             assert vllm_config.cache_config.block_size == 256
 
     def test_deepseek_v4_tp8_profile_preserves_explicit_overrides(self):
@@ -692,6 +796,13 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS": "0",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "0",
             "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL": "native",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT": "256",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS": "128",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED": "1",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL": "0",
         }
 
         with patch.dict(os.environ, env, clear=False):
@@ -712,6 +823,40 @@ class TestMUSAPlatformDefaults:
                 os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"] == "0"
             )
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_IMPL"] == "native"
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+                ]
+                == "0"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
+                ]
+                == "256"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
+                ]
+                == "128"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
+                ]
+                == "0"
+            )
+            assert (
+                os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "0"
+            )
+            assert os.environ["VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"] == "0"
             assert vllm_config.cache_config.block_size == 64
 
     def test_deepseek_v4_tp8_profile_rejects_unknown_name(self):
@@ -1348,6 +1493,40 @@ class TestBuildTimeSeries:
     def test_apply_patch_series_missing_dir_is_noop(self, tmp_path):
         ba = self._load_build_apply()
         assert ba.apply_patch_series(tmp_path, tmp_path / "nope") == []
+
+    def test_deepseek_v4_materialized_indexer_series_patch_present(self):
+        series = (
+            self._SERIES_DIR
+            / "0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch"
+        ).read_text()
+
+        assert "_musa_sparse_indexer_materialized_prefill_enabled" in series
+        assert (
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+            in series
+        )
+        assert (
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
+            in series
+        )
+        assert (
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
+            in series
+        )
+        assert "sorted=materialized_topk_sorted" in series
+        assert "deepseek_v4_indexer_rerank_prefill" in series
+
+    def test_deepseek_v4_spec_metadata_upload_series_patch_present(self):
+        series = (
+            self._SERIES_DIR
+            / "0035-MUSA-vllm.v1.worker.gpu_model_runner.patch"
+        ).read_text()
+
+        assert "_spec_cu_num_draft_tokens" in series
+        assert "_spec_logits_indices" in series
+        assert "current_platform.is_musa()" in series
+        assert "copy_to_gpu(num_sampled_total)" in series
+        assert "torch.from_numpy(cu_num_draft_tokens).to" in series
 
     @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
     def test_apply_patch_idempotent_and_loud_on_conflict(self, tmp_path):
