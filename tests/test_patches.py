@@ -1446,6 +1446,20 @@ class TestObjectPatchPhase:
             assert e.get("object_patch") is True, e
 
 
+class TestDeepSeekV4NativeOptimizations:
+    _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+    def test_qnorm_rope_kv_insert_fused_env_has_native_kernel(self):
+        source = (
+            self._REPO_ROOT
+            / "csrc/musa/attention/deepseek_v4_cache_store.mu"
+        ).read_text()
+
+        assert "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED" in source
+        assert "deepseek_v4_qnorm_rope_kv_pack_fused_kernel" in source
+        assert "env_flag_enabled(kFusedQKVInsertEnv)" in source
+
+
 class TestBuildTimeSeries:
     """vLLM source edits ship as a build-time ``git format-patch``
     series in ``vllm_musa/patches/series/`` and are applied to the cloned vLLM at
