@@ -1,7 +1,10 @@
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 
+#include <musa_bf16.h>
 #include <musa_fp8.h>
 #include <musa_runtime.h>
 #include <torch/all.h>
@@ -20,6 +23,8 @@ constexpr int64_t kMaxTopK = 512;
 constexpr int kThreads = 256;
 constexpr int kIndexInt32 = 1;
 constexpr int kIndexInt64 = 2;
+constexpr const char *kPrefillQCacheEnv =
+    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE";
 
 __device__ __forceinline__ float dequant_fp8_e4m3(uint8_t byte) {
   __mt_fp8_e4m3 packed;
@@ -60,6 +65,11 @@ __device__ __forceinline__ bool better_pair(float lhs_value, int lhs_index,
   return lhs_value > rhs_value ||
          (lhs_value == rhs_value &&
           (rhs_index < 0 || (lhs_index >= 0 && lhs_index < rhs_index)));
+}
+
+bool env_flag_enabled(const char *name) {
+  const char *value = std::getenv(name);
+  return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
 template <typename OutT>
@@ -304,6 +314,148 @@ __global__ void deepseek_v4_indexer_topk_prefill_kernel(
 }
 
 template <typename OutT>
+__global__ void deepseek_v4_indexer_topk_prefill_q_cache_kernel(
+    const uint8_t *__restrict__ q_quant, int64_t q_stride0, int64_t q_stride1,
+    int64_t q_stride2, const uint8_t *__restrict__ kv_cache,
+    int64_t num_blocks, int64_t block_size, int64_t block_stride,
+    const float *__restrict__ weights, int64_t weights_stride0,
+    int64_t weights_stride1, const void *__restrict__ block_table,
+    int block_table_kind, int64_t block_table_stride,
+    const void *__restrict__ cu_seq_lens, int cu_seq_lens_kind,
+    int64_t cu_seq_lens_stride, const void *__restrict__ token_to_seq,
+    int token_to_seq_kind, int64_t token_to_seq_stride,
+    const void *__restrict__ cu_seqlen_ks, int cu_seqlen_ks_kind,
+    int64_t cu_seqlen_ks_stride, const void *__restrict__ cu_seqlen_ke,
+    int cu_seqlen_ke_kind, int64_t cu_seqlen_ke_stride,
+    OutT *__restrict__ topk_indices, int64_t topk_stride0,
+    int64_t topk_stride1, int64_t rows, int64_t total_seq_lens,
+    int64_t topk) {
+  const int64_t row = static_cast<int64_t>(blockIdx.x);
+  if (row >= rows) {
+    return;
+  }
+
+  __shared__ __mt_bfloat16 q_deq[kNumHeads * kHeadDim];
+  __shared__ float weight_cache[kNumHeads];
+  __shared__ float scores[kMaxSeqLen];
+  __shared__ float reduce_values[kThreads];
+  __shared__ int reduce_indices[kThreads];
+
+  const int tid = threadIdx.x;
+  for (int64_t elem = tid; elem < kNumHeads * kHeadDim; elem += blockDim.x) {
+    const int64_t head = elem / kHeadDim;
+    const int64_t dim = elem - head * kHeadDim;
+    const uint8_t *q_ptr = q_quant + row * q_stride0 + head * q_stride1;
+    q_deq[elem] = __float2bfloat16(dequant_fp8_e4m3(q_ptr[dim * q_stride2]));
+  }
+  for (int64_t head = tid; head < kNumHeads; head += blockDim.x) {
+    weight_cache[head] =
+        weights[row * weights_stride0 + head * weights_stride1];
+  }
+  __syncthreads();
+
+  const int64_t row_start =
+      load_index(cu_seqlen_ks, cu_seqlen_ks_kind, row * cu_seqlen_ks_stride);
+  const int64_t row_end =
+      load_index(cu_seqlen_ke, cu_seqlen_ke_kind, row * cu_seqlen_ke_stride);
+  const int64_t raw_row_len = row_end - row_start;
+  const int64_t row_len =
+      raw_row_len < kMaxSeqLen ? (raw_row_len > 0 ? raw_row_len : 0)
+                               : kMaxSeqLen;
+
+  for (int64_t rel_pos = tid; rel_pos < kMaxSeqLen; rel_pos += blockDim.x) {
+    float score = -INFINITY;
+    if (rel_pos < row_len) {
+      const int64_t abs_pos = row_start + rel_pos;
+      if (abs_pos >= 0 && abs_pos < total_seq_lens) {
+        const int64_t req_idx = load_index(
+            token_to_seq, token_to_seq_kind, abs_pos * token_to_seq_stride);
+        const int64_t req_start = load_index(
+            cu_seq_lens, cu_seq_lens_kind, req_idx * cu_seq_lens_stride);
+        const int64_t local_pos = abs_pos - req_start;
+        const int64_t logical_block = local_pos / block_size;
+        const int64_t pos_in_block = local_pos - logical_block * block_size;
+        const int64_t physical_block =
+            load_index(block_table, block_table_kind,
+                       req_idx * block_table_stride + logical_block);
+
+        if (physical_block >= 0 && physical_block < num_blocks &&
+            pos_in_block >= 0 && pos_in_block < block_size) {
+          const uint8_t *block_ptr = kv_cache + physical_block * block_stride;
+          const uint8_t *k_ptr = block_ptr + pos_in_block * kHeadDim;
+          const uint8_t *scale_ptr =
+              block_ptr + block_size * kHeadDim + pos_in_block * kScaleBytes;
+          const float k_scale = *reinterpret_cast<const float *>(scale_ptr);
+
+          float accum = 0.0f;
+          for (int64_t head = 0; head < kNumHeads; ++head) {
+            const __mt_bfloat16 *q_ptr = q_deq + head * kHeadDim;
+            float dot = 0.0f;
+#pragma unroll 4
+            for (int64_t dim = 0; dim < kHeadDim; ++dim) {
+              dot += __bfloat162float(q_ptr[dim]) *
+                     dequant_fp8_e4m3(k_ptr[dim]);
+            }
+            accum += fmaxf(dot, 0.0f) * weight_cache[head];
+          }
+          score = accum * k_scale;
+        }
+      }
+    }
+    scores[rel_pos] = score;
+  }
+  __syncthreads();
+
+  const int64_t effective_topk =
+      topk < row_len ? (topk < kMaxTopK ? topk : kMaxTopK)
+                     : (row_len < kMaxTopK ? row_len : kMaxTopK);
+
+  for (int64_t rank = 0; rank < effective_topk; ++rank) {
+    float local_value = -INFINITY;
+    int local_index = -1;
+    for (int64_t rel_pos = tid; rel_pos < row_len; rel_pos += blockDim.x) {
+      const float value = scores[rel_pos];
+      if (better_pair(value, static_cast<int>(rel_pos), local_value,
+                      local_index)) {
+        local_value = value;
+        local_index = static_cast<int>(rel_pos);
+      }
+    }
+    reduce_values[tid] = local_value;
+    reduce_indices[tid] = local_index;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+      if (tid < stride) {
+        const float other_value = reduce_values[tid + stride];
+        const int other_index = reduce_indices[tid + stride];
+        if (better_pair(other_value, other_index, reduce_values[tid],
+                        reduce_indices[tid])) {
+          reduce_values[tid] = other_value;
+          reduce_indices[tid] = other_index;
+        }
+      }
+      __syncthreads();
+    }
+
+    if (tid == 0) {
+      const int selected = reduce_indices[0];
+      topk_indices[row * topk_stride0 + rank * topk_stride1] =
+          static_cast<OutT>(selected);
+      if (selected >= 0) {
+        scores[selected] = -INFINITY;
+      }
+    }
+    __syncthreads();
+  }
+
+  for (int64_t rank = effective_topk + tid; rank < topk; rank += blockDim.x) {
+    topk_indices[row * topk_stride0 + rank * topk_stride1] =
+        static_cast<OutT>(-1);
+  }
+}
+
+template <typename OutT>
 void launch_indexer_topk_decode(const torch::Tensor &q_quant,
                                 const torch::Tensor &kv_cache,
                                 const torch::Tensor &weights,
@@ -332,25 +484,47 @@ void launch_indexer_topk_prefill(
     const torch::Tensor &weights, const torch::Tensor &block_table,
     const torch::Tensor &cu_seq_lens, const torch::Tensor &token_to_seq,
     const torch::Tensor &cu_seqlen_ks, const torch::Tensor &cu_seqlen_ke,
-    torch::Tensor &topk_indices, int64_t topk, musaStream_t stream) {
+    torch::Tensor &topk_indices, int64_t topk, bool use_q_cache,
+    musaStream_t stream) {
   const dim3 grid(static_cast<unsigned int>(q_quant.size(0)));
   const dim3 block(kThreads);
-  deepseek_v4_indexer_topk_prefill_kernel<OutT><<<grid, block, 0, stream>>>(
-      static_cast<const uint8_t *>(q_quant.data_ptr()), q_quant.stride(0),
-      q_quant.stride(1), q_quant.stride(2),
-      static_cast<const uint8_t *>(kv_cache.data_ptr()), kv_cache.size(0),
-      kv_cache.size(1), kv_cache.stride(0),
-      static_cast<const float *>(weights.data_ptr()), weights.stride(0),
-      weights.stride(1), block_table.data_ptr(),
-      index_kind(block_table, "block_table"), block_table.stride(0),
-      cu_seq_lens.data_ptr(), index_kind(cu_seq_lens, "cu_seq_lens"),
-      cu_seq_lens.stride(0), token_to_seq.data_ptr(),
-      index_kind(token_to_seq, "token_to_seq"), token_to_seq.stride(0),
-      cu_seqlen_ks.data_ptr(), index_kind(cu_seqlen_ks, "cu_seqlen_ks"),
-      cu_seqlen_ks.stride(0), cu_seqlen_ke.data_ptr(),
-      index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
-      static_cast<OutT *>(topk_indices.data_ptr()), topk_indices.stride(0),
-      topk_indices.stride(1), q_quant.size(0), token_to_seq.numel(), topk);
+  if (use_q_cache) {
+    deepseek_v4_indexer_topk_prefill_q_cache_kernel<OutT>
+        <<<grid, block, 0, stream>>>(
+            static_cast<const uint8_t *>(q_quant.data_ptr()), q_quant.stride(0),
+            q_quant.stride(1), q_quant.stride(2),
+            static_cast<const uint8_t *>(kv_cache.data_ptr()), kv_cache.size(0),
+            kv_cache.size(1), kv_cache.stride(0),
+            static_cast<const float *>(weights.data_ptr()), weights.stride(0),
+            weights.stride(1), block_table.data_ptr(),
+            index_kind(block_table, "block_table"), block_table.stride(0),
+            cu_seq_lens.data_ptr(), index_kind(cu_seq_lens, "cu_seq_lens"),
+            cu_seq_lens.stride(0), token_to_seq.data_ptr(),
+            index_kind(token_to_seq, "token_to_seq"), token_to_seq.stride(0),
+            cu_seqlen_ks.data_ptr(), index_kind(cu_seqlen_ks, "cu_seqlen_ks"),
+            cu_seqlen_ks.stride(0), cu_seqlen_ke.data_ptr(),
+            index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
+            static_cast<OutT *>(topk_indices.data_ptr()),
+            topk_indices.stride(0), topk_indices.stride(1), q_quant.size(0),
+            token_to_seq.numel(), topk);
+  } else {
+    deepseek_v4_indexer_topk_prefill_kernel<OutT><<<grid, block, 0, stream>>>(
+        static_cast<const uint8_t *>(q_quant.data_ptr()), q_quant.stride(0),
+        q_quant.stride(1), q_quant.stride(2),
+        static_cast<const uint8_t *>(kv_cache.data_ptr()), kv_cache.size(0),
+        kv_cache.size(1), kv_cache.stride(0),
+        static_cast<const float *>(weights.data_ptr()), weights.stride(0),
+        weights.stride(1), block_table.data_ptr(),
+        index_kind(block_table, "block_table"), block_table.stride(0),
+        cu_seq_lens.data_ptr(), index_kind(cu_seq_lens, "cu_seq_lens"),
+        cu_seq_lens.stride(0), token_to_seq.data_ptr(),
+        index_kind(token_to_seq, "token_to_seq"), token_to_seq.stride(0),
+        cu_seqlen_ks.data_ptr(), index_kind(cu_seqlen_ks, "cu_seqlen_ks"),
+        cu_seqlen_ks.stride(0), cu_seqlen_ke.data_ptr(),
+        index_kind(cu_seqlen_ke, "cu_seqlen_ke"), cu_seqlen_ke.stride(0),
+        static_cast<OutT *>(topk_indices.data_ptr()), topk_indices.stride(0),
+        topk_indices.stride(1), q_quant.size(0), token_to_seq.numel(), topk);
+  }
 }
 
 } // namespace
@@ -493,15 +667,16 @@ void deepseek_v4_indexer_topk_prefill(
   }
 
   const at::musa::OptionalMUSAGuard device_guard(device_of(q_quant));
+  const bool use_q_cache = env_flag_enabled(kPrefillQCacheEnv);
   musaStream_t stream = at::musa::getCurrentMUSAStream();
   if (topk_indices.scalar_type() == torch::kInt32) {
     launch_indexer_topk_prefill<int32_t>(
         q_quant, kv_cache, weights, block_table, cu_seq_lens, token_to_seq,
-        cu_seqlen_ks, cu_seqlen_ke, topk_indices, topk, stream);
+        cu_seqlen_ks, cu_seqlen_ke, topk_indices, topk, use_q_cache, stream);
   } else if (topk_indices.scalar_type() == torch::kInt64) {
     launch_indexer_topk_prefill<int64_t>(
         q_quant, kv_cache, weights, block_table, cu_seq_lens, token_to_seq,
-        cu_seqlen_ks, cu_seqlen_ke, topk_indices, topk, stream);
+        cu_seqlen_ks, cu_seqlen_ke, topk_indices, topk, use_q_cache, stream);
   } else {
     TORCH_CHECK(false, "topk_indices must be int32 or int64");
   }
