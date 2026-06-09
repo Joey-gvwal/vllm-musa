@@ -554,6 +554,9 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
             "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED",
             "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV",
         ]
@@ -758,6 +761,24 @@ class TestMUSAPlatformDefaults:
                 ]
                 == "1"
             )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+                ]
+                == "1"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
+                ]
+                == "640"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
+                ]
+                == "512"
+            )
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "1"
             assert vllm_config.cache_config.block_size == 256
 
@@ -785,6 +806,9 @@ class TestMUSAPlatformDefaults:
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER": "0",
             "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS": "0",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT": "384",
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS": "128",
             "VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED": "0",
         }
 
@@ -832,6 +856,24 @@ class TestMUSAPlatformDefaults:
                     "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
                 ]
                 == "0"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+                ]
+                == "0"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
+                ]
+                == "384"
+            )
+            assert (
+                os.environ[
+                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
+                ]
+                == "128"
             )
             assert os.environ["VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_FUSED"] == "0"
             assert vllm_config.cache_config.block_size == 64
@@ -1491,6 +1533,23 @@ class TestBuildTimeSeries:
         assert "torch.from_numpy(logits_indices).to" not in musa_branch
         assert "torch.from_numpy(target_logits_indices).to" not in musa_branch
         assert "torch.from_numpy(bonus_logits_indices).to" not in musa_branch
+
+    def test_deepseek_v4_materialized_indexer_series_patch_present(self):
+        series = (
+            self._SERIES_DIR
+            / "0013-MUSA-vllm.model_executor.layers.sparse_attn_indexer.patch"
+        ).read_text()
+
+        assert (
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
+            in series
+        )
+        assert (
+            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
+            in series
+        )
+        assert "deepseek_v4_indexer_rerank_prefill" in series
+        assert "_musa_try_fill_prefill_topk_from_materialized_logits" in series
 
     @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
     def test_apply_patch_idempotent_and_loud_on_conflict(self, tmp_path):
