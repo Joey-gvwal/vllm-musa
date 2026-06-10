@@ -141,15 +141,6 @@ void deepseek_v4_indexer_rerank_prefill(
     const torch::Tensor &cu_seqlen_ks, const torch::Tensor &cu_seqlen_ke,
     const torch::Tensor &candidate_abs_indices, torch::Tensor &topk_indices,
     int64_t topk);
-std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_sparse_flashmla_decode(
-    const torch::Tensor &q, const torch::Tensor &k_cache,
-    const torch::Tensor &indices,
-    const c10::optional<torch::Tensor> &topk_length,
-    const c10::optional<torch::Tensor> &attn_sink,
-    const c10::optional<torch::Tensor> &extra_k_cache,
-    const c10::optional<torch::Tensor> &extra_indices,
-    const c10::optional<torch::Tensor> &extra_topk_length, torch::Tensor &out,
-    double softmax_scale);
 std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
     const torch::Tensor &o, const torch::Tensor &positions,
     const torch::Tensor &cos_sin_cache, int64_t n_groups,
