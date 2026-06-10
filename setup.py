@@ -322,6 +322,8 @@ class _CustomBuildExt(BuildExtension):
         else:
             subprocess.check_call(["git", "fetch", "--all"], cwd=repo_path)
             subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
+        subprocess.check_call(["git", "reset", "--hard", git_tag], cwd=repo_path)
+        subprocess.check_call(["git", "clean", "-fdx"], cwd=repo_path)
 
     @staticmethod
     def _install_vllm(repo_path):
@@ -334,9 +336,16 @@ class _CustomBuildExt(BuildExtension):
         # always editable; compat (path-based .pth) -- the default PEP 660 finder
         # mis-resolves vLLM's submodules and loses to a system vLLM.
         vllm_install_cmd = [
-            sys.executable, "-m", "pip", "install",
-            "-e", str(source_dir), "--config-settings", "editable_mode=compat",
-            "--no-build-isolation", "-v",
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-e",
+            str(source_dir),
+            "--config-settings",
+            "editable_mode=compat",
+            "--no-build-isolation",
+            "-v",
         ]
 
         steps = [

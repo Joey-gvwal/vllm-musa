@@ -40,8 +40,8 @@ the ``vllm_musa`` package (works before install, in plain CI).
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import difflib
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -51,7 +51,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # tools/ -> repo root
 PATCHES = ROOT / "vllm_musa" / "patches"
 SERIES_DIR = PATCHES / "series"
-MODULE_DRIFT_DIR = PATCHES / "module-drift"  # cat-4a drift tripwires (never build-applied)
+MODULE_DRIFT_DIR = (
+    PATCHES / "module-drift"
+)  # cat-4a drift tripwires (never build-applied)
 WORKDIR = ROOT / "third_party" / "vllm"
 PINS = ROOT / "third_party" / "PINS"
 VLLM_URL = "https://github.com/vllm-project/vllm.git"
@@ -81,7 +83,9 @@ def read_pin(key: str, default: str | None = None) -> str | None:
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True
+    )
 
 
 def _probe_upstream(clone: Path, upstream_path: str | None) -> bool:
@@ -129,9 +133,9 @@ def cmd_apply(args) -> int:
 # -------------------------------------------------------------------------- verify
 # Map a build_apply check_only status (vs a pristine clone) to a verify verdict.
 _VERIFY_STATUS = {
-    "would-apply": "clean",        # applies cleanly to pristine upstream
+    "would-apply": "clean",  # applies cleanly to pristine upstream
     "already-applied": "obsolete",  # already in upstream -> candidate for removal
-    "conflict": "conflict",         # drifted -> needs re-anchor/retire
+    "conflict": "conflict",  # drifted -> needs re-anchor/retire
 }
 _BAD = {"conflict", "missing-symbol", "missing-target", "orphaned", "drifted-copy"}
 
@@ -145,7 +149,9 @@ def _ensure_clone(target: str, repo_arg: str | None):
     clone = tmp / "vllm"
     subprocess.run(
         ["git", "clone", "--depth", "1", "--branch", target, VLLM_URL, str(clone)],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return clone, True
 
@@ -168,24 +174,49 @@ def _verify_rows(clone: Path) -> list[tuple]:
             if cur is None:
                 rows.append((e.id, e.category, "missing-target", e.upstream_path or ""))
             elif not stored.is_file():
-                rows.append((e.id, e.category, "no-tripwire", "run `regen --area module`"))
+                rows.append(
+                    (e.id, e.category, "no-tripwire", "run `regen --area module`")
+                )
             elif stored.read_text() == cur:
                 rows.append((e.id, e.category, "clean", "tripwire matches upstream"))
             else:
-                rows.append((e.id, e.category, "drifted-copy", "upstream changed under the copy"))
+                rows.append(
+                    (
+                        e.id,
+                        e.category,
+                        "drifted-copy",
+                        "upstream changed under the copy",
+                    )
+                )
         elif e.category == "5":
             ok = _probe_upstream(clone, e.upstream_path)
-            rows.append((e.id, e.category, "present" if ok else "missing-symbol", e.upstream_path or ""))
+            rows.append(
+                (
+                    e.id,
+                    e.category,
+                    "present" if ok else "missing-symbol",
+                    e.upstream_path or "",
+                )
+            )
         elif e.category == "6":
             ok = _probe_upstream(clone, e.upstream_path)
-            rows.append((e.id, e.category, "present" if ok else "missing-target", e.upstream_path or ""))
+            rows.append(
+                (
+                    e.id,
+                    e.category,
+                    "present" if ok else "missing-target",
+                    e.upstream_path or "",
+                )
+            )
     return rows
 
 
 def cmd_verify(args) -> int:
     target = args.target or read_pin("VLLM_TAG")
     if not target:
-        print("ERROR: no target tag (pass --target or set VLLM_TAG in third_party/PINS)")
+        print(
+            "ERROR: no target tag (pass --target or set VLLM_TAG in third_party/PINS)"
+        )
         return 2
     clone, temp = _ensure_clone(target, args.repo)
     try:
@@ -211,7 +242,9 @@ def cmd_verify(args) -> int:
 # -------------------------------------------------------------------- rebase / regen
 def _checkout(target: str) -> int:
     if not WORKDIR.exists():
-        r = subprocess.run(["git", "clone", VLLM_URL, str(WORKDIR)], capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", "clone", VLLM_URL, str(WORKDIR)], capture_output=True, text=True
+        )
         if r.returncode:
             print(r.stderr)
             return 1
@@ -270,13 +303,22 @@ def cmd_regen(args) -> int:
     target = read_pin("VLLM_TAG")
     SERIES_DIR.mkdir(parents=True, exist_ok=True)
     r = _git(
-        WORKDIR, "format-patch", "--no-signature", "--no-numbered", "--zero-commit",
-        "-o", str(SERIES_DIR.resolve()), target,
+        WORKDIR,
+        "format-patch",
+        "--no-signature",
+        "--no-numbered",
+        "--zero-commit",
+        "-o",
+        str(SERIES_DIR.resolve()),
+        target,
     )
     if r.returncode:
         print(r.stderr)
         return 1
-    print(r.stdout.strip() or f"regenerated series in {SERIES_DIR} from vllm@{target}..HEAD")
+    print(
+        r.stdout.strip()
+        or f"regenerated series in {SERIES_DIR} from vllm@{target}..HEAD"
+    )
     return 0
 
 
@@ -294,7 +336,9 @@ def cmd_report(args) -> int:
                 f"{e.upstream_path or ''} | {e.intent} |"
             )
         return 0
-    print(f"MDM manifest: {len(manifest.ENTRIES)} divergences by category {dict(sorted(by_cat.items()))}")
+    print(
+        f"MDM manifest: {len(manifest.ENTRIES)} divergences by category {dict(sorted(by_cat.items()))}"
+    )
     for e in manifest.ENTRIES:
         print(f"  [{e.category:>2}] {e.apply_phase:<11} {e.id}")
     return 0
@@ -304,19 +348,29 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="musa_sync", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("apply", help="build-time: apply the diff series to a cloned vLLM")
+    p = sub.add_parser(
+        "apply", help="build-time: apply the diff series to a cloned vLLM"
+    )
     p.add_argument("repo")
     p.add_argument("--phase", default=None, help="restrict to one apply_phase")
     p.add_argument("--check-only", action="store_true")
     p.add_argument("--no-strict", action="store_true")
     p.set_defaults(func=cmd_apply)
 
-    p = sub.add_parser("verify", help="offline pre-bump gate: status of every divergence")
-    p.add_argument("--target", default=None, help="vLLM tag (default: VLLM_TAG from PINS)")
-    p.add_argument("--repo", default=None, help="use an existing checkout instead of cloning")
+    p = sub.add_parser(
+        "verify", help="offline pre-bump gate: status of every divergence"
+    )
+    p.add_argument(
+        "--target", default=None, help="vLLM tag (default: VLLM_TAG from PINS)"
+    )
+    p.add_argument(
+        "--repo", default=None, help="use an existing checkout instead of cloning"
+    )
     p.set_defaults(func=cmd_verify)
 
-    p = sub.add_parser("rebase", help="git am -3 the series onto vllm@<tag> in third_party/vllm")
+    p = sub.add_parser(
+        "rebase", help="git am -3 the series onto vllm@<tag> in third_party/vllm"
+    )
     p.add_argument("tag", nargs="?", default=None)
     p.set_defaults(func=cmd_rebase)
 
@@ -325,7 +379,9 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_regen)
 
     p = sub.add_parser("report", help="manifest census")
-    p.add_argument("--doc", action="store_true", help="render the Markdown census table")
+    p.add_argument(
+        "--doc", action="store_true", help="render the Markdown census table"
+    )
     p.set_defaults(func=cmd_report)
 
     args = ap.parse_args(argv)

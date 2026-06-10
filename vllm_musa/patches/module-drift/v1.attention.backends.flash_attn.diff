@@ -5,9 +5,9 @@
 +# 2026 - Modified by MetaX Integrated Circuits (Shanghai) Co., Ltd. All Rights Reserved.
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
  """Attention layer with FlashAttention."""
- 
+
 @@ -8,39 +9,34 @@
- 
+
  import numpy as np
  import torch
 -
@@ -41,7 +41,7 @@
 -from vllm.v1.attention.ops.dcp_alltoall import dcp_a2a_lse_reduce
 -from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 -from vllm.v1.worker.workspace import current_workspace_manager
- 
+
  if is_flash_attn_varlen_func_available():
 -    from vllm.v1.attention.backends.fa_utils import (
 +    from vllm_musa.v1.attention.backends.fa_utils import (
@@ -67,9 +67,9 @@
 +from vllm.v1.attention.ops.common import cp_lse_ag_out_rs
 +from vllm.v1.attention.ops.dcp_alltoall import dcp_a2a_lse_reduce
  from vllm.v1.kv_cache_interface import AttentionSpec
- 
+
  logger = init_logger(__name__)
- 
+
 -
 -class FlashAttentionBackend(AttentionBackend):
 +from vllm.v1.attention.backends.registry import AttentionBackendEnum, register_backend
@@ -143,13 +143,13 @@
 -        "float16",
 -        "bfloat16",
 -    ]
- 
+
      @staticmethod
      def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
 @@ -95,22 +153,36 @@
- 
+
      forward_includes_kv_cache_update: bool = False
- 
+
 -    @classmethod
 -    def get_preferred_block_size(cls, default_block_size: int) -> int:
 -        if current_platform.is_xpu():
@@ -159,14 +159,14 @@
      @staticmethod
      def get_name() -> str:
          return "FLASH_ATTN"
- 
+
      @classmethod
      def supports_batch_invariance(cls) -> bool:
 +        # mate flash_attn_varlen_func(deterministic=True) is
 +        # batch-invariant (probe: seq0 solo vs batched max_abs_err=0.0), matching
 +        # upstream FlashAttentionBackend. Probe: generated/musa0400/probe_fa_caps.py.
          return True
- 
+
      @classmethod
      def supports_non_causal(cls) -> bool:
 +        # mate's FA3 wrapper (flash_attn_varlen_func) plumbs causal= through;
@@ -187,10 +187,10 @@
 +        # mask (not causal/window/chunk) would be wrong on this path — none is
 +        # currently known or tested; revisit if such a model is served on FLASH_ATTN.
          return True
- 
+
      @classmethod
 @@ -125,8 +197,12 @@
- 
+
      @classmethod
      def supports_per_head_quant_scales(cls) -> bool:
 -        fa_version = get_flash_attn_version()
@@ -201,13 +201,13 @@
 +        # flash_attn_supports_fp8()=False and get_fp8_dtype_for_flashattn raising
 +        # NotImplementedError. Probe: generated/musa0400/probe_fa_caps.py.
 +        return False
- 
+
      @staticmethod
      def get_impl_cls() -> type["FlashAttentionImpl"]:
 @@ -169,27 +245,22 @@
              raise ValueError(f"Unknown cache layout format {cache_layout}.")
          return stride_order
- 
+
 +    @staticmethod
 +    def get_fp8_dtype_for_flashattn(kv_cache_dtype: str) -> torch.dtype:
 +        raise NotImplementedError(
@@ -224,7 +224,7 @@
 -            return head_size <= 512
 -        return False
 +        return head_size % 8 == 0 and head_size <= 512
- 
+
      @classmethod
      def supports_kv_cache_dtype(cls, kv_cache_dtype: CacheDType | None) -> bool:
          if kv_cache_dtype is None:
@@ -239,15 +239,15 @@
 +        if kv_cache_dtype.startswith("fp8"):
 +            return flash_attn_supports_fp8()
          return kv_cache_dtype in ["auto", "float16", "bfloat16"]
- 
+
      @classmethod
 @@ -200,7 +271,7 @@
- 
+
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
 -        return capability >= DeviceCapability(8, 0)
 +        return True
- 
+
      @classmethod
      def supports_combination(
 @@ -214,6 +285,10 @@
@@ -264,7 +264,7 @@
 @@ -237,6 +312,21 @@
      block_table: torch.Tensor
      slot_mapping: torch.Tensor
- 
+
 +    # ==================== MUSA ADAPTATION ====================
 +    num_decodes: int
 +    num_decode_tokens: int
@@ -309,7 +309,7 @@
 +    # ==================== MUSA ADAPTATION ====================
 +    reorder_batch_threshold: int = 1
 +    # ========================== END ==========================
- 
+
      @classmethod
      def get_cudagraph_support(
 @@ -350,6 +440,9 @@
@@ -319,13 +319,13 @@
 +        # ==================== MUSA ADAPTATION ====================
 +        self._cu_seqlens_k_buffer: torch.Tensor | None = None
 +        # ========================== END ==========================
- 
+
          if self.use_full_cuda_graph and self.aot_schedule:
              # FA3 scheduler_metadata size: 1 + round_up(batch_size, 4) * 4
 @@ -373,13 +466,14 @@
                  self.attention_config.flash_attn_max_num_splits_for_cuda_graph
              )
- 
+
 -        if self.dcp_world_size > 1:
 -            max_num_reqs = vllm_config.scheduler_config.max_num_seqs
 -            self._dcp_context_kv_lens = torch.zeros(
@@ -338,13 +338,13 @@
                  device=self.device,
              )
 +        # ========================== END ==========================
- 
+
          # Sliding window size to be used with the AOT scheduler will be
          # populated on first build() call.
 @@ -405,11 +499,21 @@
          slot_mapping = common_attn_metadata.slot_mapping
          causal = common_attn_metadata.causal
- 
+
 -        # Disable AOT schedule for spec-decode proposer (not worth the overhead)
 -        # and for batch invariance (schedule varies with max_seqlen_q/k).
 -        aot_schedule = (
@@ -365,13 +365,13 @@
 +
 +        # the overhead of the aot schedule is not worth it for spec-decode
 +        aot_schedule = self.aot_schedule and not fast_build
- 
+
          if self.aot_sliding_window is None:
              self.aot_sliding_window = (-1, -1)
 @@ -439,6 +543,33 @@
              # we only set num_splits when using cuda graphs.
              max_num_splits = self.max_num_splits
- 
+
 +        # ==================== MUSA ADAPTATION ====================
 +        if num_decodes > 0:
 +            decode_query_start_loc = common_attn_metadata.query_start_loc[
@@ -401,7 +401,7 @@
 +
          if envs.VLLM_BATCH_INVARIANT:
              max_num_splits = 1
- 
+
 @@ -446,8 +577,10 @@
              batch_size, cu_query_lens, max_query_len, seqlens, max_seq_len, causal
          ):
@@ -418,13 +418,13 @@
 @@ -472,24 +605,22 @@
          max_dcp_context_kv_len = 0
          dcp_context_kv_lens = None
- 
+
 +        cu_seqlens_k = None
          cu_prefix_query_lens = None
          prefix_kv_lens = None
          suffix_kv_lens = None
          prefix_scheduler_metadata = None
- 
+
          if self.dcp_world_size > 1:
 -            query_lens = query_start_loc[1:] - query_start_loc[:-1]
 -            context_kv_lens = seq_lens - query_lens
@@ -497,7 +497,7 @@
 +        )
          new_metadata.slot_mapping = slot_mapping
          return new_metadata
- 
+
 @@ -636,21 +798,27 @@
          logger.info_once(
              "Using FlashAttention version %s",
@@ -506,7 +506,7 @@
          )
          # Cache the batch invariant result for use in forward passes
          self.batch_invariant_enabled = envs.VLLM_BATCH_INVARIANT
- 
+
 +        if is_quantized_kv_cache(self.kv_cache_dtype) and not flash_attn_supports_fp8():
 +            raise NotImplementedError(
 +                "FlashAttention does not support fp8 kv-cache on this device."
@@ -524,10 +524,10 @@
                  "Sinks must have the same number of heads as the number of "
                  "heads in the layer"
              )
- 
+
 -        self.supports_quant_query_input = flash_attn_supports_quant_query_input()
 +        self.supports_quant_query_input = False
- 
+
          vllm_config = get_current_vllm_config_or_none()
          dcp_a2a = (
 @@ -658,11 +826,9 @@
@@ -542,7 +542,7 @@
 +        # ==================== MUSA ADAPTATION ====================
 +        self.dcp_combine = dcp_a2a_lse_reduce if dcp_a2a else _musa_cp_lse_ag_out_rs
 +        # ========================== END ==========================
- 
+
      def forward(
          self,
 @@ -672,7 +838,7 @@
@@ -565,11 +565,11 @@
 +        assert (
 +            self.vllm_flash_attn_version is not None
 +        ), "FlashAttention version not detected."
- 
+
          if output_scale is not None or output_block_scale is not None:
              raise NotImplementedError(
 @@ -732,28 +899,14 @@
- 
+
          # For decoder and cross-attention, use KV cache as before
          key_cache, value_cache = kv_cache.unbind(0)
 -        # Fix degenerate strides on size-1 dims (e.g. num_kv_heads=1 with TP).
@@ -601,13 +601,13 @@
 +            )
 +            key_cache = key_cache.view(dtype)
 +            value_cache = value_cache.view(dtype)
- 
+
          if not attn_metadata.use_cascade:
              cu_seqlens_q = attn_metadata.query_start_loc
 @@ -765,11 +918,7 @@
- 
+
              descale_shape = (cu_seqlens_q.shape[0] - 1, self.num_kv_heads)
- 
+
 -            q_descale = (
 -                layer._q_scale.expand(descale_shape)
 -                if self.supports_quant_query_input
@@ -616,7 +616,7 @@
 +            q_descale = layer._q_scale.expand(descale_shape)
              k_descale = layer._k_scale.expand(descale_shape)
              v_descale = layer._v_scale.expand(descale_shape)
- 
+
 @@ -793,31 +942,77 @@
                      if self.sliding_window is not None
                      else None
@@ -712,7 +712,7 @@
 +                # ========================== END ==========================
 +
                  return output
- 
+
 +        # XXX (MUSA): Requires adaptation for Cascade attention
          # Cascade attention (rare case).
          cascade_attention(
@@ -720,7 +720,7 @@
 @@ -847,6 +1042,196 @@
          )
          return output
- 
+
 +    @staticmethod
 +    def _view_attn_output(
 +        attn_output: torch.Tensor,
@@ -917,16 +917,16 @@
 @@ -860,8 +1245,6 @@
              # we use direct Q, K, V tensors without caching
              return
- 
+
 -        # Scatter write into the KV cache using slot_mapping indices.
 -        # No TMA kernel is invoked here, so stride canonicalization is not needed.
          key_cache, value_cache = kv_cache.unbind(0)
- 
+
          # Reshape the input keys and values and store them in the cache.
 @@ -882,105 +1265,6 @@
              layer._v_scale,
          )
- 
+
 -    def _forward_with_dcp(
 -        self,
 -        query: torch.Tensor,
@@ -1039,7 +1039,7 @@
 +        assert (
 +            self.vllm_flash_attn_version is not None
 +        ), "FlashAttention version not detected."
- 
+
          # For encoder attention, process FP8 quantization if needed
 -        if is_quantized_kv_cache(self.kv_cache_dtype):
 +        if self.kv_cache_dtype.startswith("fp8"):
@@ -1078,9 +1078,9 @@
 +        )
 +        output.copy_(encoder_output)
 +        # ========================== END ==========================
- 
+
          return output
- 
+
 @@ -1157,9 +1435,10 @@
  ) -> torch.Tensor:
      assert alibi_slopes is None, "Cascade attention does not support ALiBi."
@@ -1092,6 +1092,6 @@
 +        -1,
 +        -1,
 +    ), "Cascade attention does not support sliding window."
- 
+
      num_tokens = query.shape[0]
      block_size = key_cache.shape[-3]

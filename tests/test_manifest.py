@@ -51,13 +51,18 @@ def _make_patch(tmp_path: Path, sub: str):
     _git(repo, "add", "f.txt")
     _git(repo, "commit", "-qm", "base")
     base = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     (repo / "f.txt").write_text("a\nB\n")
     _git(repo, "commit", "-aqm", "ch")
     patch = subprocess.run(
         ["git", "-C", str(repo), "format-patch", "-1", "--stdout"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     _git(repo, "reset", "-q", "--hard", base)
     pf = tmp_path / f"{sub}.patch"
@@ -66,6 +71,7 @@ def _make_patch(tmp_path: Path, sub: str):
 
 
 # ---------------- manifest.py ----------------
+
 
 def test_entries_nonempty_and_valid(manifest):
     assert manifest.ENTRIES
@@ -114,7 +120,9 @@ def test_entries_for_phase(manifest):
     runtime = manifest.entries_for_phase("runtime")
     # runtime = cat-5 tracked modules + cat-6 object patches
     assert runtime and all(e.category in ("5", "6") for e in runtime)
-    assert len(runtime) == len([e for e in manifest.ENTRIES if e.category in ("5", "6")])
+    assert len(runtime) == len(
+        [e for e in manifest.ENTRIES if e.category in ("5", "6")]
+    )
     assert all(e.category == "1" for e in manifest.entries_for_phase("pre-install"))
     # cat-4a drift tripwires are never build-applied (apply_phase = "none")
     assert all(e.category == "4a" for e in manifest.entries_for_phase("none"))
@@ -125,7 +133,9 @@ def test_series_apply_order_resolves(manifest):
     assert order, "no build-applied entries"
     assert all(p.is_file() for p in order), "a series_apply_order path is missing"
     # only cat-1 is seeded so far → order == the series patches
-    assert len(order) == len([e for e in manifest.ENTRIES if e.category in ("1", "2", "3", "4b")])
+    assert len(order) == len(
+        [e for e in manifest.ENTRIES if e.category in ("1", "2", "3", "4b")]
+    )
     # phase-filtered: pre-compile order == the cat-2/3 csrc patches
     assert len(manifest.series_apply_order(phase="pre-compile")) == len(
         [e for e in manifest.ENTRIES if e.category in ("2", "3")]
@@ -140,6 +150,7 @@ def test_divspec_validates(manifest):
 
 
 # ---------------- build_apply apply_phase / --check-only ----------------
+
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git unavailable")
 def test_build_apply_check_only_does_not_mutate(build_apply, tmp_path):

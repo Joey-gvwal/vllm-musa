@@ -202,9 +202,9 @@ def _dequant_weight(
         in_blocks,
         _GROUP_SIZE,
     )
-    return (
-        weight_blocks * scales[:, :, None, :, None]
-    ).reshape(groups, out_dim, in_dim)
+    return (weight_blocks * scales[:, :, None, :, None]).reshape(
+        groups, out_dim, in_dim
+    )
 
 
 def try_musa_deepseek_v4_fp8_einsum(

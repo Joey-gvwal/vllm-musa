@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.v1.spec_decode.llm_base_proposer
  1 file changed, 124 insertions(+), 23 deletions(-)
 
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index 9979a0517..3819012a3 100644
+index 9979a0517..e53a3199d 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
 @@ -13,8 +13,9 @@ from vllm.config import (

@@ -509,6 +509,34 @@ def deepseek_v4_indexer_topk_prefill(
     )
 
 
+def deepseek_v4_indexer_rerank_prefill(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    block_table: torch.Tensor,
+    cu_seq_lens: torch.Tensor,
+    token_to_seq: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    candidate_abs_indices: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_indexer_rerank_prefill(
+        q_quant,
+        kv_cache,
+        weights,
+        block_table,
+        cu_seq_lens,
+        token_to_seq,
+        cu_seqlen_ks,
+        cu_seqlen_ke,
+        candidate_abs_indices,
+        topk_indices,
+        topk,
+    )
+
+
 def deepseek_v4_sparse_flashmla_decode(
     q: torch.Tensor,
     k_cache: torch.Tensor,

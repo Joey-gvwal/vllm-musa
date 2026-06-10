@@ -20,7 +20,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture(scope="module")
 def ms():
-    spec = importlib.util.spec_from_file_location("musa_sync_under_test", ROOT / "tools" / "musa_sync.py")
+    spec = importlib.util.spec_from_file_location(
+        "musa_sync_under_test", ROOT / "tools" / "musa_sync.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["musa_sync_under_test"] = mod
     spec.loader.exec_module(mod)

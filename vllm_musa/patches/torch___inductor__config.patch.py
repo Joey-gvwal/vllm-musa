@@ -22,4 +22,6 @@ def apply() -> None:
     if getattr(original_patch, "_musa_filters_missing_config_keys", False):
         return
 
-    inductor_config.__dict__["patch"] = make_config_patch_filter(original_patch, inductor_config)
+    inductor_config.__dict__["patch"] = make_config_patch_filter(
+        original_patch, inductor_config
+    )

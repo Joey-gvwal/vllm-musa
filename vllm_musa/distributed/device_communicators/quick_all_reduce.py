@@ -76,8 +76,7 @@ class QuickAllReduce:
 
         if world_size not in self._SUPPORTED_WORLD_SIZES:
             logger.warning(
-                "QuickAllReduce disabled — world_size=%d "
-                "not in supported set %s.",
+                "QuickAllReduce disabled — world_size=%d " "not in supported set %s.",
                 world_size,
                 self._SUPPORTED_WORLD_SIZES,
             )
@@ -90,9 +89,7 @@ class QuickAllReduce:
         try:
             self.fptr = torch.ops._C_quick_ar.init(rank, world_size, self.max_size)
         except Exception as exc:
-            logger.warning(
-                "QuickAllReduce init failed (%s); disabling.", exc
-            )
+            logger.warning("QuickAllReduce init failed (%s); disabling.", exc)
             self.disabled = True
             self.fptr = 0
             return
@@ -111,8 +108,7 @@ class QuickAllReduce:
             torch.ops._C_quick_ar.open_handles(self.fptr, all_handles)
         except Exception as exc:
             logger.warning(
-                "QuickAllReduce IPC handle exchange failed "
-                "(%s); disabling.",
+                "QuickAllReduce IPC handle exchange failed " "(%s); disabling.",
                 exc,
             )
             self.disabled = True

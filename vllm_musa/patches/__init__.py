@@ -48,7 +48,9 @@ class PatchSpec:
     file: str
     kind: str  # "source-transform" | "side-effect"
     phase: str = "plugin-load"
-    process_scope: str = "disk-persistent"  # source-transform; "process-local" for side-effect
+    process_scope: str = (
+        "disk-persistent"  # source-transform; "process-local" for side-effect
+    )
     required: bool = True
     version_range: str | None = None
     removal_condition: str | None = None
@@ -297,7 +299,11 @@ def apply_object_patches(force: bool = False) -> list[dict]:
         apply_fn = getattr(patch_module, "apply", None)
         if not callable(apply_fn):
             continue
-        entry: dict = {"module": module_name, "file": patch_file.name, "status": "applied"}
+        entry: dict = {
+            "module": module_name,
+            "file": patch_file.name,
+            "status": "applied",
+        }
         try:
             apply_fn()
             logger.info(f"Applied object-patch {module_name}")

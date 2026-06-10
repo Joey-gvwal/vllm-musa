@@ -1,18 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import json
 import os
+import time
 
 import torch
 from vllm import _custom_ops as ops
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.utils import (
     disable_inplace,
+    moe_kernel_quantize_input,
 )
 from vllm.model_executor.layers.quantization.utils.mxfp4_utils import dequant_mxfp4
 from vllm.model_executor.layers.quantization.utils.mxfp6_utils import dequant_mxfp6
 from vllm.model_executor.layers.quantization.utils.ocp_mx_utils import OCP_MX_Scheme
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
+    get_fp8_min_max,
     kFp8Dynamic128Sym,
     kFp8DynamicTensorSym,
     kFp8DynamicTokenSym,
@@ -26,6 +30,461 @@ from vllm.triton_utils import tl
 from vllm_musa import _custom_ops as musa_ops
 
 logger = init_logger(__name__)
+
+_MOE_SHAPE_INVENTORY_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY"
+_MOE_SHAPE_INVENTORY_PATH_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY_PATH"
+_MOE_SHAPE_INVENTORY_MIN_TOKENS_ENV = (
+    "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY_MIN_TOKENS"
+)
+_MOE_SHAPE_INVENTORY_MAX_RECORDS_ENV = (
+    "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY_MAX_RECORDS"
+)
+_MOE_SHAPE_INVENTORY_DEFAULT_PATH = (
+    "/tmp/vllm_omni_musa_outputs/deepseek_v4_moe_shape_inventory.jsonl"
+)
+_MOE_SHAPE_INVENTORY_RECORDS = 0
+_MOE_SHAPE_INVENTORY_WARNED = False
+_DEEPGEMM_PREFILL_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"
+_DEEPGEMM_PREFILL_MIN_TOKENS_ENV = (
+    "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
+)
+_DEEPGEMM_PREFILL_WARNED = False
+
+
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+def _tensor_meta(tensor: torch.Tensor | None) -> dict[str, object] | None:
+    if tensor is None:
+        return None
+    return {
+        "shape": list(tensor.shape),
+        "dtype": str(tensor.dtype),
+        "device": str(tensor.device),
+        "stride": list(tensor.stride()),
+        "is_contiguous": tensor.is_contiguous(),
+    }
+
+
+def _routed_token_histogram(
+    topk_ids: torch.Tensor,
+    num_experts: int,
+) -> dict[str, object]:
+    ids_cpu = topk_ids.detach().to(device="cpu", dtype=torch.int64)
+    flat_ids = ids_cpu.reshape(-1)
+    valid_mask = flat_ids >= 0
+    if num_experts > 0:
+        valid_mask &= flat_ids < num_experts
+    valid_ids = flat_ids[valid_mask]
+
+    histogram_size = num_experts
+    if histogram_size <= 0 and valid_ids.numel() > 0:
+        histogram_size = int(valid_ids.max().item()) + 1
+
+    if histogram_size > 0:
+        histogram = torch.bincount(valid_ids, minlength=histogram_size).tolist()
+    else:
+        histogram = []
+
+    slot_histograms = []
+    for slot in range(ids_cpu.shape[1] if ids_cpu.dim() >= 2 else 0):
+        slot_ids = ids_cpu[:, slot].reshape(-1)
+        slot_valid = slot_ids >= 0
+        if num_experts > 0:
+            slot_valid &= slot_ids < num_experts
+        if histogram_size > 0:
+            slot_histograms.append(
+                torch.bincount(slot_ids[slot_valid], minlength=histogram_size).tolist()
+            )
+        else:
+            slot_histograms.append([])
+
+    nonzero = [count for count in histogram if count]
+    return {
+        "histogram": histogram,
+        "slot_histograms": slot_histograms,
+        "invalid_count": int((~valid_mask).sum().item()),
+        "nonzero_experts": len(nonzero),
+        "max_routes_per_expert": max(nonzero) if nonzero else 0,
+        "min_routes_per_nonzero_expert": min(nonzero) if nonzero else 0,
+    }
+
+
+def _maybe_record_deepseek_v4_moe_shape_inventory(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    global_num_experts: int,
+) -> None:
+    global _MOE_SHAPE_INVENTORY_RECORDS
+    global _MOE_SHAPE_INVENTORY_WARNED
+
+    if not _env_flag_enabled(_MOE_SHAPE_INVENTORY_ENV):
+        return
+
+    num_tokens = hidden_states.size(0)
+    min_tokens = _env_int(_MOE_SHAPE_INVENTORY_MIN_TOKENS_ENV, 4096)
+    if num_tokens < min_tokens:
+        return
+
+    max_records = _env_int(_MOE_SHAPE_INVENTORY_MAX_RECORDS_ENV, 64)
+    if max_records >= 0 and _MOE_SHAPE_INVENTORY_RECORDS >= max_records:
+        return
+
+    try:
+        E, N, _ = w1.size()
+        K = w2.size(1)
+        num_experts = global_num_experts if global_num_experts > 0 else E
+        route_stats = _routed_token_histogram(topk_ids, num_experts)
+        record = {
+            "event": "deepseek_v4_moe_shape_inventory",
+            "time": time.time(),
+            "pid": os.getpid(),
+            "record_index": _MOE_SHAPE_INVENTORY_RECORDS,
+            "num_tokens": num_tokens,
+            "top_k": topk_ids.size(1),
+            "num_local_experts": E,
+            "global_num_experts": num_experts,
+            "w1_intermediate_size": N,
+            "w2_output_size": K,
+            "hidden_states": _tensor_meta(hidden_states),
+            "w1": _tensor_meta(w1),
+            "w2": _tensor_meta(w2),
+            "topk_weights": _tensor_meta(topk_weights),
+            "topk_ids": _tensor_meta(topk_ids),
+            "w1_scale": _tensor_meta(w1_scale),
+            "w2_scale": _tensor_meta(w2_scale),
+            "a1_scale": _tensor_meta(a1_scale),
+            "a2_scale": _tensor_meta(a2_scale),
+            "block_shape": block_shape,
+            "activation": activation,
+            "apply_router_weight_on_input": apply_router_weight_on_input,
+            "use_fp8_w8a8": use_fp8_w8a8,
+            "use_int8_w8a8": use_int8_w8a8,
+            "use_int8_w8a16": use_int8_w8a16,
+            "use_int4_w4a16": use_int4_w4a16,
+            "ocp_mx_scheme": ocp_mx_scheme,
+            "per_channel_quant": per_channel_quant,
+            "routed_token_stats": route_stats,
+        }
+
+        output_path = os.environ.get(
+            _MOE_SHAPE_INVENTORY_PATH_ENV, _MOE_SHAPE_INVENTORY_DEFAULT_PATH
+        )
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        with open(output_path, "a", encoding="utf-8") as inventory_file:
+            inventory_file.write(json.dumps(record, sort_keys=True) + "\n")
+        _MOE_SHAPE_INVENTORY_RECORDS += 1
+    except Exception as exc:
+        if not _MOE_SHAPE_INVENTORY_WARNED:
+            logger.warning("Failed to write DeepSeek-V4 MoE shape inventory: %s", exc)
+            _MOE_SHAPE_INVENTORY_WARNED = True
+
+
+def _can_use_deepseek_v4_moe_deepgemm_prefill(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    if not _env_flag_enabled(_DEEPGEMM_PREFILL_ENV):
+        return False
+
+    min_tokens = _env_int(_DEEPGEMM_PREFILL_MIN_TOKENS_ENV, 4096)
+    if hidden_states.size(0) < min_tokens:
+        return False
+
+    if (
+        not use_fp8_w8a8
+        or use_int8_w8a8
+        or use_int8_w8a16
+        or use_int4_w4a16
+        or ocp_mx_scheme is not None
+        or per_channel_quant
+        or expert_map is not None
+        or w1_scale is None
+        or w2_scale is None
+        or a1_scale is not None
+        or a2_scale is not None
+        or w1_bias is not None
+        or w2_bias is not None
+    ):
+        return False
+
+    if activation != "silu" or apply_router_weight_on_input:
+        return False
+
+    if block_shape != [128, 128]:
+        return False
+
+    if topk_ids.size(1) != 6:
+        return False
+
+    if hidden_states.dtype != torch.bfloat16:
+        return False
+
+    if w1.dtype != torch.float8_e4m3fn or w2.dtype != torch.float8_e4m3fn:
+        return False
+
+    if w1_scale.dtype != torch.float32 or w2_scale.dtype != torch.float32:
+        return False
+
+    if topk_ids.dtype != torch.int32:
+        return False
+
+    if not (
+        hidden_states.is_contiguous() and w1.is_contiguous() and w2.is_contiguous()
+    ):
+        return False
+
+    E, N, K = w1.shape
+    return (
+        E == 256
+        and N == 512
+        and K == hidden_states.size(1)
+        and w2.shape == (E, K, N // 2)
+        and w1_scale.shape == (E, N // 128, K // 128)
+        and w2_scale.shape == (E, K // 128, (N // 2) // 128)
+    )
+
+
+def _silu_mul_per_token_group_fp8_quant_musa_large(
+    input_tensor: torch.Tensor,
+    output: torch.Tensor,
+    group_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    assert input_tensor.dim() == 2
+    assert input_tensor.is_contiguous()
+    assert input_tensor.shape[-1] % (2 * group_size) == 0
+    tokens = input_tensor.shape[0]
+    hidden = input_tensor.shape[-1] // 2
+    output_s = torch.empty(
+        (tokens, hidden // group_size),
+        device=input_tensor.device,
+        dtype=torch.float32,
+    )
+    fp8_min, fp8_max = get_fp8_min_max()
+    torch.ops._C_musa_ops.silu_and_mul_per_token_group_fp8_quant(
+        input_tensor,
+        output,
+        output_s,
+        group_size,
+        1e-10,
+        fp8_min,
+        fp8_max,
+    )
+    return output, output_s
+
+
+def _deepseek_v4_moe_deepgemm_prefill_impl(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    inplace: bool,
+) -> torch.Tensor:
+    from vllm.model_executor.layers.fused_moe.deep_gemm_utils import (
+        deepgemm_moe_permute,
+        deepgemm_unpermute_and_reduce,
+    )
+    from vllm.utils.deep_gemm import m_grouped_fp8_gemm_nt_contiguous
+
+    logger.info_once(
+        "Using DeepSeek-V4 MUSA grouped DeepGEMM MoE prefill path "
+        "(set %s=0 to disable).",
+        _DEEPGEMM_PREFILL_ENV,
+    )
+
+    qhidden, a1_scale = moe_kernel_quantize_input(
+        A=hidden_states,
+        A_scale=None,
+        quant_dtype=torch.float8_e4m3fn,
+        per_act_token_quant=False,
+        block_shape=[128, 128],
+    )
+
+    qhidden_perm, qhidden_scale_perm, expert_ids, inv_perm = deepgemm_moe_permute(
+        aq=qhidden,
+        aq_scale=a1_scale,
+        topk_ids=topk_ids,
+        local_num_experts=w1.shape[0],
+        expert_map=None,
+        expert_tokens_meta=None,
+    )
+
+    _, N, K = w1.shape
+    mm1_out = torch.empty(
+        (qhidden_perm.shape[0], N),
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+    m_grouped_fp8_gemm_nt_contiguous(
+        (qhidden_perm, qhidden_scale_perm.contiguous()),
+        (w1, w1_scale.contiguous()),
+        mm1_out,
+        expert_ids,
+    )
+
+    a2q = torch.empty(
+        (qhidden_perm.shape[0], N // 2),
+        device=hidden_states.device,
+        dtype=torch.float8_e4m3fn,
+    )
+    a2q, a2q_scale = _silu_mul_per_token_group_fp8_quant_musa_large(
+        mm1_out.view(-1, N),
+        a2q,
+        group_size=128,
+    )
+
+    mm2_out = torch.empty(
+        (qhidden_perm.shape[0], K),
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+    m_grouped_fp8_gemm_nt_contiguous(
+        (a2q, a2q_scale.contiguous()),
+        (w2, w2_scale.contiguous()),
+        mm2_out,
+        expert_ids,
+    )
+
+    if inplace and not disable_inplace():
+        output = hidden_states
+    else:
+        output = torch.empty_like(hidden_states)
+
+    deepgemm_unpermute_and_reduce(
+        a=mm2_out,
+        topk_ids=topk_ids,
+        topk_weights=topk_weights,
+        inv_perm=inv_perm,
+        expert_map=None,
+        output=output,
+    )
+    return output
+
+
+def _maybe_deepseek_v4_moe_deepgemm_prefill(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    inplace: bool,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> torch.Tensor | None:
+    global _DEEPGEMM_PREFILL_WARNED
+
+    if not _can_use_deepseek_v4_moe_deepgemm_prefill(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_ids=topk_ids,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        expert_map=expert_map,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        w1_bias=w1_bias,
+        w2_bias=w2_bias,
+    ):
+        return None
+
+    try:
+        assert w1_scale is not None
+        assert w2_scale is not None
+        return _deepseek_v4_moe_deepgemm_prefill_impl(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            inplace=inplace,
+        )
+    except Exception as exc:
+        if not _DEEPGEMM_PREFILL_WARNED:
+            logger.warning(
+                "DeepSeek-V4 grouped DeepGEMM MoE prefill path failed; "
+                "falling back to native GEMV path: %s",
+                exc,
+            )
+            _DEEPGEMM_PREFILL_WARNED = True
+        return None
 
 
 def _musa_fp8_moe_scale_block_size(input_size: int) -> int:
@@ -197,6 +656,55 @@ def fused_experts_impl(
     if use_fp8_w8a8:
         w1_scale = _maybe_expand_fp8_moe_per_tensor_scale(w1_scale, w1)
         w2_scale = _maybe_expand_fp8_moe_per_tensor_scale(w2_scale, w2)
+
+    _maybe_record_deepseek_v4_moe_shape_inventory(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        global_num_experts=global_num_experts,
+    )
+
+    deepgemm_prefill_output = _maybe_deepseek_v4_moe_deepgemm_prefill(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        inplace=inplace,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        expert_map=expert_map,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        w1_bias=w1_bias,
+        w2_bias=w2_bias,
+    )
+    if deepgemm_prefill_output is not None:
+        return deepgemm_prefill_output
 
     if inplace and not disable_inplace():
         out_hidden_states = hidden_states

@@ -24,7 +24,9 @@ PATCHES = ROOT / "vllm_musa" / "patches"
 
 @pytest.fixture(scope="module")
 def m():
-    spec = importlib.util.spec_from_file_location("musa_manifest_completeness", PATCHES / "manifest.py")
+    spec = importlib.util.spec_from_file_location(
+        "musa_manifest_completeness", PATCHES / "manifest.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["musa_manifest_completeness"] = mod
     spec.loader.exec_module(mod)

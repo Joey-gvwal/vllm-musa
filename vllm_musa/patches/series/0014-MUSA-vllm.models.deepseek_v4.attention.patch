@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.attention
  1 file changed, 102 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index d052b41..fcec8f6 100644
+index d052b41fc..fcec8f6ae 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -76,6 +76,61 @@ if TYPE_CHECKING:

@@ -141,9 +141,7 @@ def apply() -> None:
     ``vllm_musa.patches.apply_object_patches()`` at plugin load.
     """
     if not _ENABLED:
-        _log.debug(
-            "draft-TP=1 patch dormant (set VLLM_MUSA_DRAFT_TP1=1 to enable)"
-        )
+        _log.debug("draft-TP=1 patch dormant (set VLLM_MUSA_DRAFT_TP1=1 to enable)")
         return
 
     # CRITICAL ORDER (same hazard as the eagle patch): importing

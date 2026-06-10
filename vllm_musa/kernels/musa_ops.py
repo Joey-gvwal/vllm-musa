@@ -32,9 +32,7 @@ def _has_C_rms_norm() -> bool:
     try:
         if not hasattr(torch.ops._C, "rms_norm"):
             return False
-        return torch._C._dispatch_has_kernel_for_dispatch_key(
-            "_C::rms_norm", "MUSA"
-        )
+        return torch._C._dispatch_has_kernel_for_dispatch_key("_C::rms_norm", "MUSA")
     except Exception:
         return False
 

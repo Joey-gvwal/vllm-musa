@@ -35,7 +35,9 @@ def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
     )
 
 
-def apply_patch(repo: Path, patch: Path, strip: int = 1, check_only: bool = False) -> str:
+def apply_patch(
+    repo: Path, patch: Path, strip: int = 1, check_only: bool = False
+) -> str:
     """Idempotently apply one unified-diff ``patch`` to ``repo``.
 
     Returns ``"already-applied"`` (reverse-applies cleanly → skip),
@@ -46,7 +48,7 @@ def apply_patch(repo: Path, patch: Path, strip: int = 1, check_only: bool = Fals
     ``"would-apply"`` (forward-checks clean), or ``"conflict"``. This is the
     non-mutating dry run used by ``musa_sync verify``.
     """
-    p = ["-p", str(strip)]
+    p = ["--recount", "-p", str(strip)]
     # Already applied? (the reverse patch applies cleanly to the current tree.)
     if _git(repo, ["apply", "--reverse", "--check", *p, str(patch)]).returncode == 0:
         return "already-applied"
@@ -117,12 +119,23 @@ def main(argv: list[str] | None = None) -> int:
         description="Apply the vLLM-MUSA build-time patch series."
     )
     ap.add_argument("repo", help="path to the cloned vLLM checkout (a git repo)")
-    ap.add_argument("series_dir", help="dir of .patch files (+ optional `series` manifest)")
-    ap.add_argument("--no-strict", action="store_true", help="warn instead of failing on conflict")
-    ap.add_argument("--check-only", action="store_true", help="dry-run: report status without applying")
+    ap.add_argument(
+        "series_dir", help="dir of .patch files (+ optional `series` manifest)"
+    )
+    ap.add_argument(
+        "--no-strict", action="store_true", help="warn instead of failing on conflict"
+    )
+    ap.add_argument(
+        "--check-only",
+        action="store_true",
+        help="dry-run: report status without applying",
+    )
     a = ap.parse_args(argv)
     results = apply_patch_series(
-        Path(a.repo), Path(a.series_dir), strict=not a.no_strict, check_only=a.check_only
+        Path(a.repo),
+        Path(a.series_dir),
+        strict=not a.no_strict,
+        check_only=a.check_only,
     )
     for name, status in results:
         print(f"{status:16} {name}")
@@ -130,7 +143,9 @@ def main(argv: list[str] | None = None) -> int:
     n_applied = sum(1 for _, s in results if s in ("applied", "would-apply"))
     n_skip = sum(1 for _, s in results if s == "already-applied")
     verb = "would-apply" if a.check_only else "applied"
-    print(f"--- {n_applied} {verb}, {n_skip} already-applied, {n_conflict} conflict ---")
+    print(
+        f"--- {n_applied} {verb}, {n_skip} already-applied, {n_conflict} conflict ---"
+    )
     return 1 if n_conflict else 0
 
 

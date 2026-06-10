@@ -57,7 +57,9 @@ class DivSpec:
 
     id: str
     category: str  # one of VALID_CATEGORIES
-    path: str  # repo-relative: the .patch (cat 1/2/3/4b), tripwire (4a), or source (5/6)
+    path: (
+        str  # repo-relative: the .patch (cat 1/2/3/4b), tripwire (4a), or source (5/6)
+    )
     upstream_path: Optional[str] = None  # the vllm path this targets / the seam owner
     apply_phase: str = "pre-install"  # one of VALID_PHASES
     required: bool = True
@@ -67,8 +69,12 @@ class DivSpec:
     after: tuple = ()  # ordering deps by id (e.g. eagle after parallel_state)
 
     def __post_init__(self):
-        assert self.category in VALID_CATEGORIES, f"{self.id}: bad category {self.category!r}"
-        assert self.apply_phase in VALID_PHASES, f"{self.id}: bad apply_phase {self.apply_phase!r}"
+        assert (
+            self.category in VALID_CATEGORIES
+        ), f"{self.id}: bad category {self.category!r}"
+        assert (
+            self.apply_phase in VALID_PHASES
+        ), f"{self.id}: bad apply_phase {self.apply_phase!r}"
 
 
 def _patch_target(patch_path: Path) -> str:
@@ -241,7 +247,7 @@ def _module_entries() -> list:
     for cat, path, upstream, intent in _SHADOW_MODULES:
         out.append(
             DivSpec(
-                id=path[len("vllm_musa/"):].rsplit(".py", 1)[0].replace("/", "."),
+                id=path[len("vllm_musa/") :].rsplit(".py", 1)[0].replace("/", "."),
                 category=cat,
                 path=path,
                 upstream_path=upstream,

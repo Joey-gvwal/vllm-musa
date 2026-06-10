@@ -217,10 +217,14 @@ def mhc_pre_musa_with_norm(
         hc_post_mult_value,
         sinkhorn_repeat,
     )
-    return post_mix, comb_mix, _apply_optional_rms_norm(
-        layer_input,
-        norm_weight,
-        norm_eps,
+    return (
+        post_mix,
+        comb_mix,
+        _apply_optional_rms_norm(
+            layer_input,
+            norm_weight,
+            norm_eps,
+        ),
     )
 
 
@@ -971,9 +975,7 @@ def mhc_post_musa(
                 x, residual, post_layer_mix, comb_res_mix
             )
         except (ImportError, OSError, NotImplementedError):
-            return mhc_post_torch_fallback(
-                x, residual, post_layer_mix, comb_res_mix
-            )
+            return mhc_post_torch_fallback(x, residual, post_layer_mix, comb_res_mix)
     if impl in {"tilelang", "jit", "native", "musa", "mu"}:
         return _mhc_post_tilelang_provider(x, residual, post_layer_mix, comb_res_mix)
     if impl in {"torch", "fallback"}:

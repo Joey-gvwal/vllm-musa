@@ -59,9 +59,13 @@ def has_musa_rotary_embedding_kernel() -> bool:
     try:
         import torch
 
-        if not hasattr(torch.ops, "_C") or not hasattr(torch.ops._C, "rotary_embedding"):
+        if not hasattr(torch.ops, "_C") or not hasattr(
+            torch.ops._C, "rotary_embedding"
+        ):
             return False
-        return torch._C._dispatch_has_kernel_for_dispatch_key("_C::rotary_embedding", "MUSA")
+        return torch._C._dispatch_has_kernel_for_dispatch_key(
+            "_C::rotary_embedding", "MUSA"
+        )
     except Exception:
         return False
 
@@ -106,8 +110,17 @@ def musa_safe_rotary_embedding(
             key.copy_(key_rot)
         return
     if rope_dim_offset == 0 and not inverse:
-        torch.ops._C.rotary_embedding(positions, query, key, head_size, cos_sin_cache, is_neox)
+        torch.ops._C.rotary_embedding(
+            positions, query, key, head_size, cos_sin_cache, is_neox
+        )
     else:
         torch.ops._C.rotary_embedding(
-            positions, query, key, head_size, cos_sin_cache, is_neox, rope_dim_offset, inverse
+            positions,
+            query,
+            key,
+            head_size,
+            cos_sin_cache,
+            is_neox,
+            rope_dim_offset,
+            inverse,
         )

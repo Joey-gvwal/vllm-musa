@@ -16,7 +16,9 @@ PATCHES: list = []
 
 def apply() -> None:
     try:
-        compiler_interface = importlib.import_module("vllm.compilation.compiler_interface")
+        compiler_interface = importlib.import_module(
+            "vllm.compilation.compiler_interface"
+        )
         from torch._functorch import config as functorch_config
     except Exception as e:
         logger.debug("Skipping functorch config patch: %s", e)

@@ -1,6 +1,7 @@
 import math
 
 import torch
+from vllm import envs as vllm_envs
 from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
     fused_topk,
     fused_topk_bias,
@@ -8,7 +9,6 @@ from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
 from vllm.model_executor.utils import maybe_disable_graph_partition
 from vllm.platforms import current_platform
 
-from vllm import envs as vllm_envs
 from vllm_musa.utils.environ import envs as musa_envs
 
 try:

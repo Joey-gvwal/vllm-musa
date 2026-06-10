@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc-file): csrc/custom_all_reduce.cu
  1 file changed, 84 insertions(+), 12 deletions(-)
 
 diff --git a/csrc/custom_all_reduce.cu b/csrc/custom_all_reduce.cu
-index a38d6fa24..583f3a8a5 100644
+index a38d6fa24..4ae105171 100644
 --- a/csrc/custom_all_reduce.cu
 +++ b/csrc/custom_all_reduce.cu
 @@ -70,31 +70,89 @@ void all_reduce(fptr_t _fa, torch::Tensor& inp, torch::Tensor& out,
