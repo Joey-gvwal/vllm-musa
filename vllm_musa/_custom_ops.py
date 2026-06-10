@@ -347,20 +347,6 @@ def min_p_sampling_from_probs(
     )
 
 
-def deepseek_v4_store_sparse_kv(
-    normed: torch.Tensor,
-    kv_cache: torch.Tensor,
-    slot_mapping: torch.Tensor,
-    write_mask: torch.Tensor,
-) -> None:
-    return torch.ops._C_musa_ops.deepseek_v4_store_sparse_kv(
-        normed,
-        kv_cache,
-        slot_mapping,
-        write_mask,
-    )
-
-
 def deepseek_v4_qnorm_rope_kv_insert(
     q: torch.Tensor,
     kv: torch.Tensor,
@@ -384,82 +370,6 @@ def deepseek_v4_qnorm_rope_kv_insert(
         cos_sin_cache,
         eps,
         cache_block_size,
-    )
-
-
-def deepseek_v4_fused_q_kv_rmsnorm(
-    q: torch.Tensor,
-    kv: torch.Tensor,
-    q_weight: torch.Tensor,
-    kv_weight: torch.Tensor,
-    eps: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    return torch.ops._C_musa_ops.deepseek_v4_fused_q_kv_rmsnorm(
-        q,
-        kv,
-        q_weight,
-        kv_weight,
-        eps,
-    )
-
-
-def deepseek_v4_dequantize_and_gather_k_cache(
-    out: torch.Tensor,
-    k_cache: torch.Tensor,
-    seq_lens: torch.Tensor,
-    gather_lens: torch.Tensor | None,
-    block_table: torch.Tensor,
-    block_size: int,
-    offset: int,
-) -> None:
-    return torch.ops._C_musa_ops.deepseek_v4_dequantize_and_gather_k_cache(
-        out,
-        k_cache,
-        seq_lens,
-        gather_lens,
-        block_table,
-        block_size,
-        offset,
-    )
-
-
-def deepseek_v4_compute_global_topk_indices_and_lens(
-    topk_indices: torch.Tensor,
-    token_to_req_indices: torch.Tensor,
-    block_table: torch.Tensor,
-    block_size: int,
-    is_valid_token: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    return torch.ops._C_musa_ops.deepseek_v4_compute_global_topk_indices_and_lens(
-        topk_indices,
-        token_to_req_indices,
-        block_table,
-        block_size,
-        is_valid_token,
-    )
-
-
-def deepseek_v4_combine_topk_swa_indices(
-    topk_indices: torch.Tensor,
-    query_start_loc: torch.Tensor,
-    seq_lens: torch.Tensor,
-    gather_lens: torch.Tensor,
-    window_size: int,
-    compress_ratio: int,
-    topk: int,
-    M: int,
-    N: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    return torch.ops._C_musa_ops.deepseek_v4_combine_topk_swa_indices(
-        topk_indices,
-        query_start_loc,
-        seq_lens,
-        gather_lens,
-        window_size,
-        compress_ratio,
-        topk,
-        M,
-        N,
     )
 
 
@@ -558,30 +468,6 @@ def deepseek_v4_fused_inv_rope_fp8_quant(
         rope_dim,
         quant_group_size,
         tma_aligned_scales,
-    )
-
-
-def deepseek_v4_topk_softplus_sqrt(
-    topk_weights: torch.Tensor,
-    topk_indices: torch.Tensor,
-    token_expert_indices: torch.Tensor,
-    gating_output: torch.Tensor,
-    renormalize: bool = False,
-    routed_scaling_factor: float = 1.0,
-    e_score_correction_bias: torch.Tensor | None = None,
-    input_tokens: torch.Tensor | None = None,
-    hash_indices_table: torch.Tensor | None = None,
-) -> None:
-    return torch.ops._C_musa_ops.deepseek_v4_topk_softplus_sqrt(
-        topk_weights,
-        topk_indices,
-        token_expert_indices,
-        gating_output,
-        renormalize,
-        routed_scaling_factor,
-        e_score_correction_bias,
-        input_tokens,
-        hash_indices_table,
     )
 
 

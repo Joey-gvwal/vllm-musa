@@ -176,12 +176,9 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/fused_add_rmsnorm.mu",
     "csrc/musa/cache_kernels.mu",
     "csrc/musa/attention/deepseek_v4_cache_store.mu",
-    "csrc/musa/attention/deepseek_v4_fused_qkv_rmsnorm.mu",
-    "csrc/musa/attention/deepseek_v4_cache_utils.mu",
     "csrc/musa/attention/deepseek_v4_indexer_topk.mu",
     "csrc/musa/attention/deepseek_v4_inv_rope_fp8_quant.mu",
     "csrc/musa/mhc/deepseek_v4_mhc_pre.mu",
-    "csrc/musa/moe/deepseek_v4_topk_softplus_sqrt.mu",
     # XXX (MUSA): non-stable -- upstream v0.22 moved this under csrc/libtorch_stable,
     # which needs stable-ABI headers not yet on MUSA.
     "csrc/musa/quantization/per_token_group_quant.cu",
