@@ -3,16 +3,9 @@
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 _GROUP_SIZE = 128
-_IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_IMPL"
-
-
-def _impl_mode() -> str:
-    return os.getenv(_IMPL_ENV, "auto").strip().lower()
 
 
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
@@ -87,9 +80,6 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
     equation: str,
 ) -> tuple[bool, str]:
     """Try the native MUSA GEMV path for ``bhr,hdr->bhd`` FP8 einsum."""
-    mode = _impl_mode()
-    if mode in {"torch", "fallback", "off", "0"}:
-        return False, f"disabled by {_IMPL_ENV}"
     if equation != "bhr,hdr->bhd":
         return False, f"unsupported equation {equation!r}"
     if activation.dim() != 3 or out.dim() != 3:
@@ -122,8 +112,6 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
             groups,
         )
     except Exception as exc:
-        if mode in {"gemv", "native", "force"}:
-            raise
         return False, f"{type(exc).__name__}: {exc}"
 
     if normalized_in_dim != in_dim or out.shape != (tokens, groups, out_dim):
@@ -145,15 +133,9 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
             )
             out[:, group_idx, :].copy_(group_out)
     except Exception as exc:
-        if mode in {"gemv", "native", "force"}:
-            raise
         return False, f"{type(exc).__name__}: {exc}"
 
     return True, "musa_fused_gemv"
-
-
-def _torch_fp8_einsum_fallback_enabled() -> bool:
-    return os.getenv("VLLM_MUSA_ENABLE_TORCH_FP8_EINSUM_FALLBACK", "0") == "1"
 
 
 def _validate_group_size_divisible(name: str, size: int) -> None:
@@ -226,8 +208,6 @@ def try_musa_deepseek_v4_fp8_einsum(
     )
     if handled:
         return True, reason
-    if not _torch_fp8_einsum_fallback_enabled():
-        return False, reason
     if equation != "bhr,hdr->bhd":
         return False, f"unsupported equation {equation!r}"
 

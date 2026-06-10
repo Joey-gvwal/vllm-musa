@@ -11,12 +11,10 @@ diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_exec
 index 9597708b6..da27c5ab2 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -2,9 +2,12 @@
+@@ -2,9 +2,10 @@
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
  """Custom Sparse Attention Indexer layers."""
 
-+import os
-+
  import torch
 
  import vllm.envs as envs
@@ -84,7 +82,7 @@ index 9597708b6..da27c5ab2 100644
 +    if topk <= 0:
 +        return topk_indices_buffer
 +
-+    cap = int(os.getenv("VLLM_MUSA_SPARSE_INDEXER_FALLBACK_TOPK", "16"))
++    cap = 16
 +    cap = max(0, min(cap, topk))
 +    if cap == 0:
 +        return topk_indices_buffer
@@ -139,7 +137,7 @@ index 9597708b6..da27c5ab2 100644
 +    if topk <= 0:
 +        return topk_indices_buffer
 +
-+    cap = int(os.getenv("VLLM_MUSA_SPARSE_INDEXER_FALLBACK_TOPK", "16"))
++    cap = 16
 +    cap = max(0, min(cap, topk))
 +    if cap == 0:
 +        return topk_indices_buffer
@@ -190,61 +188,38 @@ index 9597708b6..da27c5ab2 100644
 +    # The exact graph decode path is still diagnostic: it removes the recent
 +    # window approximation, but regresses DeepSeek-V4-Flash-Base graph+MTP TPS
 +    # at long context until the exact provider is fully optimized.
-+    return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
++    return False
 +
 +
 +def _musa_sparse_indexer_native_decode_enabled() -> bool:
-+    return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_NATIVE", "1") == "1"
++    return True
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_enabled() -> bool:
-+    return os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
-+        "0",
-+    ) == "1"
++    return True
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_overselect(
 +    topk: int,
 +    total_seq_lens: int,
 +) -> int:
-+    raw_width = os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
-+        "640",
-+    )
-+    try:
-+        width = int(raw_width)
-+    except ValueError:
-+        width = 640
++    width = 640
 +    width = max(width, int(topk))
 +    return max(0, min(width, int(total_seq_lens)))
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_chunk_rows(rows: int) -> int:
-+    raw_rows = os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
-+        "128",
-+    )
-+    try:
-+        chunk_rows = int(raw_rows)
-+    except ValueError:
-+        chunk_rows = 128
++    chunk_rows = 512
 +    chunk_rows = max(1, min(chunk_rows, 1024))
 +    return max(1, min(chunk_rows, int(rows)))
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_topk_sorted() -> bool:
-+    return os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
-+        "1",
-+    ) != "0"
++    return False
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_direct_topk_enabled() -> bool:
-+    return os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-+        "0",
-+    ) == "1"
++    return True
 +
 +
 +def _musa_decode_block_table_for_token_rows(
@@ -1011,21 +986,7 @@ index 9597708b6..da27c5ab2 100644
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
              return self.forward_hip(hidden_states, q_quant, k, weights)
-+        elif (
-+            current_platform.is_musa()
-+            and (
-+                os.getenv(
-+                    "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL",
-+                    "1",
-+                )
-+                == "1"
-+                or os.getenv(
-+                    "VLLM_MUSA_ENABLE_TORCH_SPARSE_ATTN_INDEXER_FALLBACK",
-+                    "0",
-+                )
-+                == "1"
-+            )
-+        ):
++        elif current_platform.is_musa():
 +            try:
 +                return _musa_fill_exact_sparse_indexer_indices(
 +                    hidden_states,

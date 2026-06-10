@@ -9,7 +9,6 @@ must leave the existing torch correctness fallback available.
 from __future__ import annotations
 
 import logging
-import os
 
 import torch
 
@@ -139,22 +138,13 @@ def try_tilelang_qnorm_rope_kv_insert(
 ) -> tuple[bool, str]:
     """Try the TileLang path and report whether it handled the call."""
     global _AUTO_DISABLED_REASON
-    mode = (
-        os.environ.get("VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_IMPL", "native")
-        .strip()
-        .lower()
-    )
-    if mode in {"torch", "fallback", "0", "off"}:
-        return False, "disabled by VLLM_MUSA_DEEPSEEK_V4_QNORM_ROPE_KV_INSERT_IMPL"
-    if mode == "auto" and _AUTO_DISABLED_REASON is not None:
+    if _AUTO_DISABLED_REASON is not None:
         return False, _AUTO_DISABLED_REASON
 
     supported, reason = _guard_tilelang_qnorm_rope_kv_insert(
         q, kv, k_cache_2d, slot_mapping, positions, cos_sin_cache, block_size
     )
     if not supported:
-        if mode in {"tilelang", "jit", "force"}:
-            raise NotImplementedError(reason)
         return False, reason
 
     try:
@@ -183,8 +173,6 @@ def try_tilelang_qnorm_rope_kv_insert(
         )
         q.copy_(q_out)
     except Exception as exc:
-        if mode in {"tilelang", "jit", "force"}:
-            raise
         _AUTO_DISABLED_REASON = f"{type(exc).__name__}: {exc}"
         return False, _AUTO_DISABLED_REASON
     return True, "tilelang"

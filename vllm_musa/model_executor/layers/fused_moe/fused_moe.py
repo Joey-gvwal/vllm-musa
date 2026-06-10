@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-import json
-import os
-import time
-
 import torch
 from vllm import _custom_ops as ops
 from vllm.logger import init_logger
@@ -31,184 +27,10 @@ from vllm_musa import _custom_ops as musa_ops
 
 logger = init_logger(__name__)
 
-_MOE_SHAPE_INVENTORY_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY"
-_MOE_SHAPE_INVENTORY_PATH_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY_PATH"
-_MOE_SHAPE_INVENTORY_MIN_TOKENS_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY_MIN_TOKENS"
-)
-_MOE_SHAPE_INVENTORY_MAX_RECORDS_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_MOE_SHAPE_INVENTORY_MAX_RECORDS"
-)
-_MOE_SHAPE_INVENTORY_DEFAULT_PATH = (
-    "/tmp/vllm_omni_musa_outputs/deepseek_v4_moe_shape_inventory.jsonl"
-)
-_MOE_SHAPE_INVENTORY_RECORDS = 0
-_MOE_SHAPE_INVENTORY_WARNED = False
-_DEEPGEMM_PREFILL_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"
-_DEEPGEMM_PREFILL_MIN_TOKENS_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
-)
 _DEEPGEMM_PREFILL_WARNED = False
 
 
-def _env_flag_enabled(name: str) -> bool:
-    value = os.environ.get(name, "")
-    return value.lower() not in {"", "0", "false", "no", "off"}
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except ValueError:
-        return default
-
-
-def _tensor_meta(tensor: torch.Tensor | None) -> dict[str, object] | None:
-    if tensor is None:
-        return None
-    return {
-        "shape": list(tensor.shape),
-        "dtype": str(tensor.dtype),
-        "device": str(tensor.device),
-        "stride": list(tensor.stride()),
-        "is_contiguous": tensor.is_contiguous(),
-    }
-
-
-def _routed_token_histogram(
-    topk_ids: torch.Tensor,
-    num_experts: int,
-) -> dict[str, object]:
-    ids_cpu = topk_ids.detach().to(device="cpu", dtype=torch.int64)
-    flat_ids = ids_cpu.reshape(-1)
-    valid_mask = flat_ids >= 0
-    if num_experts > 0:
-        valid_mask &= flat_ids < num_experts
-    valid_ids = flat_ids[valid_mask]
-
-    histogram_size = num_experts
-    if histogram_size <= 0 and valid_ids.numel() > 0:
-        histogram_size = int(valid_ids.max().item()) + 1
-
-    if histogram_size > 0:
-        histogram = torch.bincount(valid_ids, minlength=histogram_size).tolist()
-    else:
-        histogram = []
-
-    slot_histograms = []
-    for slot in range(ids_cpu.shape[1] if ids_cpu.dim() >= 2 else 0):
-        slot_ids = ids_cpu[:, slot].reshape(-1)
-        slot_valid = slot_ids >= 0
-        if num_experts > 0:
-            slot_valid &= slot_ids < num_experts
-        if histogram_size > 0:
-            slot_histograms.append(
-                torch.bincount(slot_ids[slot_valid], minlength=histogram_size).tolist()
-            )
-        else:
-            slot_histograms.append([])
-
-    nonzero = [count for count in histogram if count]
-    return {
-        "histogram": histogram,
-        "slot_histograms": slot_histograms,
-        "invalid_count": int((~valid_mask).sum().item()),
-        "nonzero_experts": len(nonzero),
-        "max_routes_per_expert": max(nonzero) if nonzero else 0,
-        "min_routes_per_nonzero_expert": min(nonzero) if nonzero else 0,
-    }
-
-
-def _maybe_record_deepseek_v4_moe_shape_inventory(
-    *,
-    hidden_states: torch.Tensor,
-    w1: torch.Tensor,
-    w2: torch.Tensor,
-    topk_weights: torch.Tensor,
-    topk_ids: torch.Tensor,
-    w1_scale: torch.Tensor | None,
-    w2_scale: torch.Tensor | None,
-    a1_scale: torch.Tensor | None,
-    a2_scale: torch.Tensor | None,
-    block_shape: list[int] | None,
-    activation: str,
-    apply_router_weight_on_input: bool,
-    use_fp8_w8a8: bool,
-    use_int8_w8a8: bool,
-    use_int8_w8a16: bool,
-    use_int4_w4a16: bool,
-    ocp_mx_scheme: str | None,
-    per_channel_quant: bool,
-    global_num_experts: int,
-) -> None:
-    global _MOE_SHAPE_INVENTORY_RECORDS
-    global _MOE_SHAPE_INVENTORY_WARNED
-
-    if not _env_flag_enabled(_MOE_SHAPE_INVENTORY_ENV):
-        return
-
-    num_tokens = hidden_states.size(0)
-    min_tokens = _env_int(_MOE_SHAPE_INVENTORY_MIN_TOKENS_ENV, 4096)
-    if num_tokens < min_tokens:
-        return
-
-    max_records = _env_int(_MOE_SHAPE_INVENTORY_MAX_RECORDS_ENV, 64)
-    if max_records >= 0 and _MOE_SHAPE_INVENTORY_RECORDS >= max_records:
-        return
-
-    try:
-        E, N, _ = w1.size()
-        K = w2.size(1)
-        num_experts = global_num_experts if global_num_experts > 0 else E
-        route_stats = _routed_token_histogram(topk_ids, num_experts)
-        record = {
-            "event": "deepseek_v4_moe_shape_inventory",
-            "time": time.time(),
-            "pid": os.getpid(),
-            "record_index": _MOE_SHAPE_INVENTORY_RECORDS,
-            "num_tokens": num_tokens,
-            "top_k": topk_ids.size(1),
-            "num_local_experts": E,
-            "global_num_experts": num_experts,
-            "w1_intermediate_size": N,
-            "w2_output_size": K,
-            "hidden_states": _tensor_meta(hidden_states),
-            "w1": _tensor_meta(w1),
-            "w2": _tensor_meta(w2),
-            "topk_weights": _tensor_meta(topk_weights),
-            "topk_ids": _tensor_meta(topk_ids),
-            "w1_scale": _tensor_meta(w1_scale),
-            "w2_scale": _tensor_meta(w2_scale),
-            "a1_scale": _tensor_meta(a1_scale),
-            "a2_scale": _tensor_meta(a2_scale),
-            "block_shape": block_shape,
-            "activation": activation,
-            "apply_router_weight_on_input": apply_router_weight_on_input,
-            "use_fp8_w8a8": use_fp8_w8a8,
-            "use_int8_w8a8": use_int8_w8a8,
-            "use_int8_w8a16": use_int8_w8a16,
-            "use_int4_w4a16": use_int4_w4a16,
-            "ocp_mx_scheme": ocp_mx_scheme,
-            "per_channel_quant": per_channel_quant,
-            "routed_token_stats": route_stats,
-        }
-
-        output_path = os.environ.get(
-            _MOE_SHAPE_INVENTORY_PATH_ENV, _MOE_SHAPE_INVENTORY_DEFAULT_PATH
-        )
-        output_dir = os.path.dirname(output_path)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        with open(output_path, "a", encoding="utf-8") as inventory_file:
-            inventory_file.write(json.dumps(record, sort_keys=True) + "\n")
-        _MOE_SHAPE_INVENTORY_RECORDS += 1
-    except Exception as exc:
-        if not _MOE_SHAPE_INVENTORY_WARNED:
-            logger.warning("Failed to write DeepSeek-V4 MoE shape inventory: %s", exc)
-            _MOE_SHAPE_INVENTORY_WARNED = True
-
-
-def _can_use_deepseek_v4_moe_deepgemm_prefill(
+def _matches_deepseek_v4_flash_base_moe_contract(
     *,
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -230,11 +52,8 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     block_shape: list[int] | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    min_tokens: int = 0,
 ) -> bool:
-    if not _env_flag_enabled(_DEEPGEMM_PREFILL_ENV):
-        return False
-
-    min_tokens = _env_int(_DEEPGEMM_PREFILL_MIN_TOKENS_ENV, 4096)
     if hidden_states.size(0) < min_tokens:
         return False
 
@@ -292,6 +111,54 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     )
 
 
+def _can_use_deepseek_v4_moe_deepgemm_prefill(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    return _matches_deepseek_v4_flash_base_moe_contract(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_ids=topk_ids,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        expert_map=expert_map,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        w1_bias=w1_bias,
+        w2_bias=w2_bias,
+        min_tokens=4096,
+    )
+
+
 def _silu_mul_per_token_group_fp8_quant_musa_large(
     input_tensor: torch.Tensor,
     output: torch.Tensor,
@@ -338,9 +205,7 @@ def _deepseek_v4_moe_deepgemm_prefill_impl(
     from vllm.utils.deep_gemm import m_grouped_fp8_gemm_nt_contiguous
 
     logger.info_once(
-        "Using DeepSeek-V4 MUSA grouped DeepGEMM MoE prefill path "
-        "(set %s=0 to disable).",
-        _DEEPGEMM_PREFILL_ENV,
+        "Using DeepSeek-V4 MUSA grouped DeepGEMM MoE prefill path.",
     )
 
     qhidden, a1_scale = moe_kernel_quantize_input(
@@ -657,28 +522,6 @@ def fused_experts_impl(
         w1_scale = _maybe_expand_fp8_moe_per_tensor_scale(w1_scale, w1)
         w2_scale = _maybe_expand_fp8_moe_per_tensor_scale(w2_scale, w2)
 
-    _maybe_record_deepseek_v4_moe_shape_inventory(
-        hidden_states=hidden_states,
-        w1=w1,
-        w2=w2,
-        topk_weights=topk_weights,
-        topk_ids=topk_ids,
-        w1_scale=w1_scale,
-        w2_scale=w2_scale,
-        a1_scale=a1_scale,
-        a2_scale=a2_scale,
-        block_shape=block_shape,
-        activation=activation,
-        apply_router_weight_on_input=apply_router_weight_on_input,
-        use_fp8_w8a8=use_fp8_w8a8,
-        use_int8_w8a8=use_int8_w8a8,
-        use_int8_w8a16=use_int8_w8a16,
-        use_int4_w4a16=use_int4_w4a16,
-        ocp_mx_scheme=ocp_mx_scheme,
-        per_channel_quant=per_channel_quant,
-        global_num_experts=global_num_experts,
-    )
-
     deepgemm_prefill_output = _maybe_deepseek_v4_moe_deepgemm_prefill(
         hidden_states=hidden_states,
         w1=w1,
@@ -812,6 +655,102 @@ def fused_experts_impl(
     return out_hidden_states
 
 
+_FUSED_EXPERTS_IMPL_ARG_NAMES = (
+    "hidden_states",
+    "w1",
+    "w2",
+    "topk_weights",
+    "topk_ids",
+    "inplace",
+    "activation",
+    "apply_router_weight_on_input",
+    "use_fp8_w8a8",
+    "use_int8_w8a8",
+    "use_int8_w8a16",
+    "use_int4_w4a16",
+    "ocp_mx_scheme",
+    "per_channel_quant",
+    "global_num_experts",
+    "expert_map",
+    "w1_scale",
+    "w2_scale",
+    "w1_zp",
+    "w2_zp",
+    "a1_scale",
+    "a2_scale",
+    "block_shape",
+    "w1_bias",
+    "w2_bias",
+)
+
+_FUSED_EXPERTS_IMPL_DEFAULTS = {
+    "inplace": False,
+    "activation": "silu",
+    "apply_router_weight_on_input": False,
+    "use_fp8_w8a8": False,
+    "use_int8_w8a8": False,
+    "use_int8_w8a16": False,
+    "use_int4_w4a16": False,
+    "ocp_mx_scheme": None,
+    "per_channel_quant": False,
+    "global_num_experts": -1,
+    "expert_map": None,
+    "w1_scale": None,
+    "w2_scale": None,
+    "w1_zp": None,
+    "w2_zp": None,
+    "a1_scale": None,
+    "a2_scale": None,
+    "block_shape": None,
+    "w1_bias": None,
+    "w2_bias": None,
+}
+
+
+def _fused_experts_impl_arg(args, kwargs, name: str):
+    try:
+        position = _FUSED_EXPERTS_IMPL_ARG_NAMES.index(name)
+    except ValueError:
+        raise KeyError(name) from None
+    if position < len(args):
+        return args[position]
+    if name in kwargs:
+        return kwargs[name]
+    return _FUSED_EXPERTS_IMPL_DEFAULTS.get(name)
+
+
+def _is_deepseek_v4_flash_base_moe_call(args, kwargs) -> bool:
+    try:
+        return _matches_deepseek_v4_flash_base_moe_contract(
+            hidden_states=_fused_experts_impl_arg(args, kwargs, "hidden_states"),
+            w1=_fused_experts_impl_arg(args, kwargs, "w1"),
+            w2=_fused_experts_impl_arg(args, kwargs, "w2"),
+            topk_ids=_fused_experts_impl_arg(args, kwargs, "topk_ids"),
+            activation=_fused_experts_impl_arg(args, kwargs, "activation"),
+            apply_router_weight_on_input=_fused_experts_impl_arg(
+                args, kwargs, "apply_router_weight_on_input"
+            ),
+            use_fp8_w8a8=_fused_experts_impl_arg(args, kwargs, "use_fp8_w8a8"),
+            use_int8_w8a8=_fused_experts_impl_arg(args, kwargs, "use_int8_w8a8"),
+            use_int8_w8a16=_fused_experts_impl_arg(args, kwargs, "use_int8_w8a16"),
+            use_int4_w4a16=_fused_experts_impl_arg(args, kwargs, "use_int4_w4a16"),
+            ocp_mx_scheme=_fused_experts_impl_arg(args, kwargs, "ocp_mx_scheme"),
+            per_channel_quant=_fused_experts_impl_arg(
+                args, kwargs, "per_channel_quant"
+            ),
+            expert_map=_fused_experts_impl_arg(args, kwargs, "expert_map"),
+            w1_scale=_fused_experts_impl_arg(args, kwargs, "w1_scale"),
+            w2_scale=_fused_experts_impl_arg(args, kwargs, "w2_scale"),
+            a1_scale=_fused_experts_impl_arg(args, kwargs, "a1_scale"),
+            a2_scale=_fused_experts_impl_arg(args, kwargs, "a2_scale"),
+            block_shape=_fused_experts_impl_arg(args, kwargs, "block_shape"),
+            w1_bias=_fused_experts_impl_arg(args, kwargs, "w1_bias"),
+            w2_bias=_fused_experts_impl_arg(args, kwargs, "w2_bias"),
+        )
+    except (AttributeError, IndexError, KeyError):
+        return False
+
+
 import vllm.model_executor.layers.fused_moe.fused_moe
 
 _upstream_fused_moe = vllm.model_executor.layers.fused_moe.fused_moe
@@ -822,11 +761,9 @@ if not hasattr(_upstream_fused_moe, "_musa_original_fused_experts_impl"):
 
 
 def _musa_fused_experts_impl_dispatch(*args, **kwargs) -> torch.Tensor:
-    # The native GEMV MoE path (fused_experts_impl) is opt-in: it can hurt some
-    # prefill workloads, but DeepSeek-V4-Flash-Base TP8 graph+MTP decode depends
-    # on it for its accepted baseline. Default to the upstream implementation for
-    # other models; platform.py opts DeepSeek-V4 in per serving process.
-    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV", "0") == "1":
+    # The native GEMV MoE path is the accepted DeepSeek-V4-Flash-Base path. Keep
+    # it shape-gated here because this dispatcher also sees other models.
+    if _is_deepseek_v4_flash_base_moe_call(args, kwargs):
         return fused_experts_impl(*args, **kwargs)
     return _upstream_fused_moe._musa_original_fused_experts_impl(*args, **kwargs)
 

@@ -1,4 +1,3 @@
-import os
 from typing import ClassVar
 
 import torch
@@ -24,58 +23,7 @@ from vllm_musa.model_executor.layers.quantization.utils.fp8_utils import (
 
 
 def _use_row_major_activation_scales(use_deep_gemm_e8m0: bool) -> bool:
-    if use_deep_gemm_e8m0:
-        return False
-    value = os.getenv("VLLM_MUSA_DEEPGEMM_ROW_MAJOR_ACT_SCALES", "1").lower()
-    return value not in ("0", "false", "no", "off")
-
-
-def _read_int_env(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-
-
-_MUSA_FP8_SMALL_M_GEMV_ENABLED = os.getenv(
-    "VLLM_MUSA_FP8_SMALL_M_GEMV", "0"
-).lower() in ("1", "true", "yes", "on")
-_MUSA_FP8_SMALL_M_GEMV_MAX_M = _read_int_env("VLLM_MUSA_FP8_SMALL_M_GEMV_MAX_M", 3)
-
-
-def _should_use_musa_fp8_small_m_gemv(
-    input: torch.Tensor,
-    weight: torch.Tensor,
-    weight_scale: torch.Tensor,
-    group_size: int,
-    use_deep_gemm_e8m0: bool,
-) -> bool:
-    if (
-        not _MUSA_FP8_SMALL_M_GEMV_ENABLED
-        or not current_platform.is_musa()
-        or use_deep_gemm_e8m0
-        or group_size != 128
-        or input.dim() != 2
-        or weight.dim() != 2
-        or weight_scale.dim() != 2
-        or input.shape[0] < 1
-        or input.shape[0] > _MUSA_FP8_SMALL_M_GEMV_MAX_M
-        or input.shape[1] != weight.shape[1]
-        or weight.shape[1] % group_size != 0
-        or input.dtype != torch.bfloat16
-        or weight.dtype != current_platform.fp8_dtype()
-        or weight_scale.dtype != torch.float32
-        or not input.is_contiguous()
-        or not weight.is_contiguous()
-        or not weight_scale.is_contiguous()
-    ):
-        return False
-
-    expected_scale_shape = (
-        (weight.shape[0] + group_size - 1) // group_size,
-        weight.shape[1] // group_size,
-    )
-    return tuple(weight_scale.shape) == expected_scale_shape
+    return not use_deep_gemm_e8m0
 
 
 class MUSADeepGemmFp8BlockScaledMMKernel(Fp8BlockScaledMMLinearKernel):
@@ -165,14 +113,6 @@ def run_deepgemm(
     group_size: int,
     use_deep_gemm_e8m0: bool,
 ) -> torch.Tensor:
-    if _should_use_musa_fp8_small_m_gemv(
-        input, weight, weight_scale, group_size, use_deep_gemm_e8m0
-    ):
-        return torch.ops.vllm.musa_fp8_small_m_gemv_op(
-            input,
-            weight,
-            weight_scale,
-        )
     return torch.ops.vllm.musa_deepgemm_fp8_op(
         input,
         weight,
@@ -212,44 +152,6 @@ def _musa_deepgemm_fp8_op(
     return output
 
 
-def _musa_fp8_small_m_gemv_op(
-    input: torch.Tensor,
-    weight: torch.Tensor,
-    weight_scale: torch.Tensor,
-) -> torch.Tensor:
-    output = torch.empty(
-        (input.shape[0], weight.shape[0]),
-        dtype=torch.bfloat16,
-        device=input.device,
-    )
-    torch.ops._C_musa_ops.musa_fused_gemv(
-        input,
-        weight,
-        output,
-        None,
-        weight_scale,
-        False,
-        False,
-        False,
-        None,
-        1e-6,
-    )
-    return output
-
-
-def _musa_fp8_small_m_gemv_op_fake(
-    input: torch.Tensor,
-    weight: torch.Tensor,
-    weight_scale: torch.Tensor,
-) -> torch.Tensor:
-    del weight_scale
-    return torch.empty(
-        (input.shape[0], weight.shape[0]),
-        dtype=torch.bfloat16,
-        device=input.device,
-    )
-
-
 def _musa_deepgemm_fp8_op_fake(
     input: torch.Tensor,
     weight: torch.Tensor,
@@ -263,12 +165,6 @@ def _musa_deepgemm_fp8_op_fake(
         device=input.device,
     )
 
-
-direct_register_custom_op(
-    "musa_fp8_small_m_gemv_op",
-    _musa_fp8_small_m_gemv_op,
-    fake_impl=_musa_fp8_small_m_gemv_op_fake,
-)
 
 direct_register_custom_op(
     "musa_deepgemm_fp8_op",

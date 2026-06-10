@@ -21,13 +21,11 @@ index d51bf2284..2787db6ab 100644
          # Set up speculative decoding.
          # NOTE(Jiayi): currently we put the entire draft model on
          # the last PP rank. This is not ideal if there are many
-@@ -584,6 +587,9 @@ class GPUModelRunner(
+@@ -584,6 +587,7 @@ class GPUModelRunner(
              elif self.speculative_config.use_dflash():
                  self.drafter = DFlashProposer(self.vllm_config, self.device, self)
                  self.use_aux_hidden_state_outputs = True
-+                import os as _dflash_os
-+                if _dflash_os.environ.get("VLLM_MUSA_DFLASH_FULL_WRAP", "1") != "0":
-+                    self.supports_sd_full_graph = True
++                self.supports_sd_full_graph = True
              elif self.speculative_config.method == "suffix":
                  self.drafter = SuffixDecodingProposer(self.vllm_config)
              elif self.speculative_config.use_eagle():
@@ -137,18 +135,13 @@ index d51bf2284..2787db6ab 100644
 
          # Compute the draft token ids.
          # draft_token_indices:      [  1,   2,   3, 105, 106, 208]
-@@ -4407,6 +4466,20 @@ class GPUModelRunner(
+@@ -4407,6 +4466,15 @@ class GPUModelRunner(
                  spec_decode_common_attn_metadata.max_seq_len + self.num_spec_tokens
                  <= self.effective_drafter_max_model_len
              )
 +            if (
 +                current_platform.is_musa()
 +                and not self.input_batch.sampling_metadata.all_greedy
-+                and __import__("os").environ.get(
-+                    "VLLM_MUSA_SPEC_DECODE_RANDOM_FALLBACK",
-+                    "1",
-+                ).lower()
-+                not in ("0", "false", "no", "off")
 +            ):
 +                # The MUSA random rejection-sampling kernel is not
 +                # correctness-stable yet. Do not run the drafter for

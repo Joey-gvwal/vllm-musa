@@ -32,59 +32,59 @@ class _TileLangStub:
         return kwargs
 
 
-def test_pass_config_default_is_disabled(monkeypatch):
-    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", raising=False)
-    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", raising=False)
-
-    assert kernel_common._tilelang_musa_pass_configs(_TileLangStub()) is None
-
-
-def test_old_pass_config_env_preserves_opt1_flags(monkeypatch):
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", "1")
-    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", raising=False)
-
+def test_pass_config_defaults_to_dsa_full_profile():
     configs = kernel_common._tilelang_musa_pass_configs(_TileLangStub())
+
+    assert configs["disable_host_asserts"] is True
+    assert "-mtgpu-combine-instr-with-burst=1" in configs["compile_flags"]
+
+
+def test_pass_config_can_be_disabled_explicitly():
+    assert (
+        kernel_common._tilelang_musa_pass_configs(
+            _TileLangStub(),
+            compile_profile="none",
+        )
+        is None
+    )
+
+
+def test_burst_reduce_pass_config_uses_default_profile():
+    configs = kernel_common._tilelang_musa_burst_reduce_pass_configs(_TileLangStub())
 
     assert configs["burst"] is True
     assert configs["reduce_burst"] is True
-    assert "-mtgpu-opt-level=1" in configs["compile_flags"]
+    assert configs["disable_host_asserts"] is True
+    assert "-mtgpu-combine-instr-with-burst=1" in configs["compile_flags"]
 
 
-def test_compile_profile_and_aggressive_switches(monkeypatch):
-    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", raising=False)
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", "ls")
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_AGGRESSIVE_PASS_CONFIG", "1")
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_INDEX_PROMOTION", "1")
-
-    configs = kernel_common._tilelang_musa_pass_configs(_TileLangStub())
+def test_explicit_compile_profile_override():
+    configs = kernel_common._tilelang_musa_pass_configs(
+        _TileLangStub(),
+        compile_profile="ls",
+    )
 
     assert "-mtgpu-load-store-opt=1" in configs["compile_flags"]
+    assert "disable_thread_storage_sync" not in configs
+    assert "disable_safe_memory" not in configs
+
+
+def test_aggressive_pass_configs_are_code_selected():
+    configs = kernel_common._tilelang_musa_aggressive_pass_configs(
+        _TileLangStub(),
+        disable_index_promotion=True,
+    )
+
+    assert configs["disable_host_asserts"] is True
     assert configs["disable_thread_storage_sync"] is True
     assert configs["disable_safe_memory"] is True
     assert configs["lower_ldgstg"] is True
     assert configs["lower_ldgstg_predicated"] is True
     assert configs["disable_index_promotion"] is True
-
-
-def test_host_asserts_can_be_disabled_without_aggressive_pass(monkeypatch):
-    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", raising=False)
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", "dsa_full")
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS", "1")
-    monkeypatch.delenv(
-        "VLLM_MUSA_DEEPSEEK_V4_TILELANG_AGGRESSIVE_PASS_CONFIG", raising=False
-    )
-
-    configs = kernel_common._tilelang_musa_pass_configs(_TileLangStub())
-
-    assert configs["disable_host_asserts"] is True
-    assert "disable_thread_storage_sync" not in configs
-    assert "disable_safe_memory" not in configs
     assert "-mtgpu-combine-instr-with-burst=1" in configs["compile_flags"]
 
 
-def test_explicit_dsa_profile_helper(monkeypatch):
-    monkeypatch.delenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", raising=False)
-
+def test_explicit_dsa_profile_helper():
     configs = kernel_common._tilelang_musa_dsa_pass_configs(
         _TileLangStub(),
         full=True,
@@ -96,19 +96,18 @@ def test_explicit_dsa_profile_helper(monkeypatch):
     assert "-mtgpu-combine-instr-with-burst=1" in configs["compile_flags"]
 
 
-def test_tilelang_jit_uses_name_target_and_pass_configs(monkeypatch):
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", "1")
+def test_tilelang_jit_uses_name_target_and_pass_configs():
     tilelang = _TileLangStub()
 
     result = kernel_common._tilelang_jit(tilelang, "kernel_name")
 
     assert result["name"] == "kernel_name"
     assert result["target"] == "musa"
-    assert result["pass_configs"]["burst"] is True
+    assert result["pass_configs"]["disable_host_asserts"] is True
+    assert "-mtgpu-combine-instr-with-burst=1" in result["pass_configs"]["compile_flags"]
 
 
-def test_tilelang_jit_falls_back_for_old_tilelang_apis(monkeypatch):
-    monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG", "1")
+def test_tilelang_jit_falls_back_for_old_tilelang_apis():
     tilelang = _TileLangStub(unsupported={"name", "pass_configs"})
 
     result = kernel_common._tilelang_jit(tilelang, "kernel_name")
