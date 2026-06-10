@@ -128,19 +128,8 @@ void dispatch_fused_add_rmsnorm(T* input, T* residual, const T* weight,
                                 musaStream_t stream) {
   const int vec_hidden_size = hidden_size / 8;
 
-  static const int forced_block = []() {
-    const char* env = std::getenv("VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X");
-    return env == nullptr ? 0 : std::atoi(env);
-  }();
-
   int block_x;
-  if (forced_block > 0) {
-    TORCH_CHECK(forced_block == 128 || forced_block == 256 ||
-                    forced_block == 512 || forced_block == 1024,
-                "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X must be one of "
-                "128, 256, 512, or 1024");
-    block_x = forced_block;
-  } else if (rows >= 512 && vec_hidden_size <= 640) {
+  if (rows >= 512 && vec_hidden_size <= 640) {
     block_x = 128;
   } else if (rows >= 256) {
     block_x = 256;

@@ -515,36 +515,9 @@ struct BlockConfig {
     bool valid;
 };
 
-constexpr const char* kGemvMoeBlockEnv = "VLLM_MUSA_GEMV_MOE_BLOCK";
-constexpr const char* kDeepSeekFp8W1BlockEnv =
-    "VLLM_MUSA_DEEPSEEK_FP8_W1_32X4";
-
-bool ParseForcedBlockConfig(BlockConfig* config) {
-    const char* value = std::getenv(kGemvMoeBlockEnv);
-    if (value == nullptr || value[0] == '\0') {
-        return false;
-    }
-
-    int block_n = 0;
-    int block_k = 0;
-    if (std::sscanf(value, "%dx%d", &block_n, &block_k) != 2) {
-        TORCH_CHECK(false, kGemvMoeBlockEnv, " must use '<block_n>x<block_k>', got ", value);
-    }
-    TORCH_CHECK(block_n > 0 && block_k > 0, kGemvMoeBlockEnv, " must use positive block sizes, got ", value);
-    TORCH_CHECK(block_n * block_k <= 512, kGemvMoeBlockEnv, " block_n * block_k must be <= 512, got ", value);
-
-    *config = BlockConfig{block_n, block_k, 0.f, true};
-    return true;
-}
-
-bool IsForcedBlockConfigValid(const BlockConfig& config, int nr_n, int hidden_size, int vlen) {
+bool IsBlockConfigValid(const BlockConfig& config, int nr_n, int hidden_size, int vlen) {
     return (nr_n % config.block_n == 0) &&
            (hidden_size % (config.block_k * vlen) == 0);
-}
-
-bool IsDeepSeekFp8W1BlockEnabled() {
-    const char* value = std::getenv(kDeepSeekFp8W1BlockEnv);
-    return value == nullptr || value[0] != '0';
 }
 
 bool ShouldUseQwenFp8Moe32x4(
@@ -563,7 +536,7 @@ bool ShouldUseQwenFp8Moe32x4(
     const bool qwen_w2_project = !use_swigelu && hidden_size == 768 && nr_n == 2048;
     const BlockConfig config{32, 4, 0.f, true};
     return (qwen_w1_swiglu || qwen_w2_project) &&
-           IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
+           IsBlockConfigValid(config, nr_n, hidden_size, vlen);
 }
 
 bool ShouldUseDeepSeekFp8W1Moe32x4(
@@ -578,8 +551,7 @@ bool ShouldUseDeepSeekFp8W1Moe32x4(
     int nr_n,
     int vlen) {
     const BlockConfig config{32, 4, 0.f, true};
-    return IsDeepSeekFp8W1BlockEnabled() &&
-           is_fp8 &&
+    return is_fp8 &&
            use_swigelu &&
            !use_int4_w4a16 &&
            topk == 6 &&
@@ -587,7 +559,7 @@ bool ShouldUseDeepSeekFp8W1Moe32x4(
            reduce_size == 2816 &&
            num_experts == 64 &&
            scale_k_group_tile == 128 &&
-           IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
+           IsBlockConfigValid(config, nr_n, hidden_size, vlen);
 }
 
 void musa_fused_gemv(
@@ -703,20 +675,10 @@ void musa_fused_gemv(
     if (current_arch < 300) {
         fallback_config = BlockConfig{128, 1, -1.0f, false};
     }
-    BlockConfig forced_config{0, 0, 0.f, false};
     BlockConfig* best_config = &fallback_config;
-    if (ParseForcedBlockConfig(&forced_config)) {
-        TORCH_CHECK(
-            IsForcedBlockConfigValid(forced_config, nr_n, hidden_size, vlen),
-            kGemvMoeBlockEnv, "=", forced_config.block_n, "x",
-            forced_config.block_k, " is invalid for nr_n=", nr_n,
-            ", hidden_size=", hidden_size, ", vlen=", vlen);
-        best_config = &forced_config;
-    } else {
-        for (auto& config : configs) {
-            if (config.valid && config.score > best_config->score) {
-                best_config = &config;
-            }
+    for (auto& config : configs) {
+        if (config.valid && config.score > best_config->score) {
+            best_config = &config;
         }
     }
 
@@ -870,18 +832,10 @@ void musa_fused_gemv_moe(
     if (current_arch < 300) {
         fallback_config = BlockConfig{128, 1, -1.0f, false};
     }
-    BlockConfig forced_config{0, 0, 0.f, false};
     BlockConfig qwen_fp8_moe_config{32, 4, 0.f, true};
     BlockConfig deepseek_fp8_w1_config{32, 4, 0.f, true};
     BlockConfig* best_config = &fallback_config;
-    if (ParseForcedBlockConfig(&forced_config)) {
-        TORCH_CHECK(
-            IsForcedBlockConfigValid(forced_config, nr_n, hidden_size, vlen),
-            kGemvMoeBlockEnv, "=", forced_config.block_n, "x",
-            forced_config.block_k, " is invalid for nr_n=", nr_n,
-            ", hidden_size=", hidden_size, ", vlen=", vlen);
-        best_config = &forced_config;
-    } else if (ShouldUseQwenFp8Moe32x4(
+    if (ShouldUseQwenFp8Moe32x4(
                    current_arch,
                    is_fp8,
                    use_swigelu,

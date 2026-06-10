@@ -234,8 +234,9 @@ class TestNativeGemvSource:
     def test_deepseek_fp8_w1_uses_32x4_shape_gate(self):
         source = Path("csrc/musa/gemv.mu").read_text()
 
-        assert "kDeepSeekFp8W1BlockEnv" in source
-        assert '"VLLM_MUSA_DEEPSEEK_FP8_W1_32X4"' in source
+        removed_env = "VLLM_MUSA_" + "DEEP" + "SEEK_FP8_W1_32X4"
+        assert "kDeepSeekFp8W1BlockEnv" not in source
+        assert removed_env not in source
         assert "ShouldUseDeepSeekFp8W1Moe32x4(" in source
         assert "topk == 6" in source
         assert "hidden_size == 2048" in source
@@ -244,13 +245,15 @@ class TestNativeGemvSource:
         assert "BlockConfig deepseek_fp8_w1_config{32, 4" in source
         assert "best_config = &deepseek_fp8_w1_config" in source
 
-    def test_gemv_block_override_validates_env_config(self):
+    def test_gemv_block_selection_does_not_use_env_override(self):
         source = Path("csrc/musa/gemv.mu").read_text()
 
-        assert 'kGemvMoeBlockEnv = "VLLM_MUSA_GEMV_MOE_BLOCK"' in source
-        assert "std::getenv(kGemvMoeBlockEnv)" in source
-        assert "must use '<block_n>x<block_k>'" in source
-        assert "IsForcedBlockConfigValid(forced_config" in source
+        removed_env = "VLLM_MUSA_" + "GEMV_MOE_BLOCK"
+        assert removed_env not in source
+        removed_helper = "ParseForced" + "BlockConfig"
+        assert removed_helper not in source
+        assert "std::getenv" not in source
+        assert "IsBlockConfigValid(config" in source
 
 
 class TestNonMtmlMUSAPlatform:

@@ -11,22 +11,18 @@ diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/n
 index 25f0a730f..d434c320e 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
-@@ -1,5 +1,6 @@
+@@ -1,5 +1,5 @@
  # SPDX-License-Identifier: Apache-2.0
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-+import os
  import typing
  from collections.abc import Callable, Iterable
  from itertools import islice
-@@ -65,6 +66,13 @@ from vllm.sequence import IntermediateTensors
+@@ -65,6 +65,10 @@ from vllm.sequence import IntermediateTensors
  from vllm.utils.torch_utils import direct_register_custom_op
  
  
 +def _musa_deepseek_v4_disable_aux_overlap() -> bool:
-+    return (
-+        current_platform.is_musa()
-+        and os.getenv("VLLM_MUSA_DEEPSEEK_V4_DISABLE_AUX_OVERLAP", "0") == "1"
-+    )
++    return current_platform.is_musa()
 +
 +
  class DeepseekV4MLP(nn.Module):

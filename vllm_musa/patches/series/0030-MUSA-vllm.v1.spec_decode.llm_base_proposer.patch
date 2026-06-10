@@ -114,7 +114,7 @@ index 9979a0517..e53a3199d 100644
                  slot_mapping=self._get_slot_mapping(input_batch_size),
              ):
                  ret_hidden_states = self.model(**model_kwargs)
-@@ -1190,6 +1220,29 @@ class SpecDecodeBaseProposer:
+@@ -1190,6 +1220,22 @@ class SpecDecodeBaseProposer:
          )
  
          self.model = self._get_model()
@@ -122,18 +122,11 @@ index 9979a0517..e53a3199d 100644
 +        # CUDAGraphWrapper when target uses FULL captures. CUDAGraphWrapper
 +        # is a no-op when the runtime mode at call time doesn't match FULL,
 +        # so this is safe when target is PIECEWISE-only.
-+        # Gated by VLLM_MUSA_DRAFT_FULL_WRAP. Default OFF on MUSA after the
-+        # v0.20.0-dev rebase because the wrapped DeepSeek-V4 MTP draft model
-+        # can fail graph memory profiling; set to "1" to re-enable for
-+        # diagnostics after the draft FULL graph path is fixed.
-+        import os as _os
++        # Keep this disabled on MUSA because the wrapped DeepSeek-V4 MTP draft
++        # model can fail graph memory profiling in this path.
 +        cudagraph_mode = self.compilation_config.cudagraph_mode
-+        draft_full_wrap_default = "0" if current_platform.is_musa() else "1"
 +        if (
-+            _os.environ.get(
-+                "VLLM_MUSA_DRAFT_FULL_WRAP", draft_full_wrap_default
-+            )
-+            == "1"
++            not current_platform.is_musa()
 +            and cudagraph_mode.has_full_cudagraphs()
 +            and not self.vllm_config.parallel_config.use_ubatching
 +            and not self.speculative_config.disable_padded_drafter_batch
