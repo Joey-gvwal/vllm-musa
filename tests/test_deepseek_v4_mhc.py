@@ -156,10 +156,15 @@ def test_hc_head_musa_eager_path_preserves_token_dimensions():
     assert "return y.reshape(*token_shape, hidden_size).to(dtype)" in source
 
 
-def test_mhc_pre_decode_prenorm_tilelang_selector_is_default_off():
+def test_mhc_pre_decode_prenorm_selector_preserves_prefill_deepgemm():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 
     assert "def _select_mhc_pre_big_fuse_prenorm_impl(" in source
+    assert (
+        "if hc_hidden_size == 16384 and (num_tokens <= 64 or num_tokens > 2048):"
+        in source
+    )
+    assert 'return "tilelang"' in source
     assert 'return "deepgemm"' in source
 
 
@@ -187,8 +192,8 @@ def test_mhc_pre_decode_prenorm_tilelang_partials_path_exists():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
     kernels = _read("vllm_musa/deepseek_v4_jit/tilelang_kernels.py")
 
-    assert "def _mhc_prenorm_gemm_sqrsum_tilelang_decode_partials(" in source
-    assert "num_tokens > 64 or hc_hidden_size != 16384" in source
+    assert "def _mhc_prenorm_gemm_sqrsum_tilelang_partials(" in source
+    assert "hc_hidden_size != 16384" in source
     assert "split_size % 128 != 0" in source
     assert "mhc_prenorm_splitk_x_tme_cast_kernel" in source
     assert "fn.float().contiguous()" in source
