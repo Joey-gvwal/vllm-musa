@@ -483,6 +483,15 @@ def _select_mhc_pre_big_fuse_prenorm_impl(
     num_tokens: int,
     hc_hidden_size: int,
 ) -> str:
+    # Long-prefill MHC pre consumes split-K partials directly in the big-fuse
+    # kernel.  The Mate DeepGEMM prenorm kernel has shown intermittent
+    # cluster-read failures on the TP8 4096/1024 prefill shape, and bounded-M
+    # chunking still fails in the same Mp31Tf32HcPrenormGemm kernel.  Keep the
+    # stable TileLang partial path for that K=16384 edge shape regardless of
+    # the older decode-prenorm experiment gate.
+    if hc_hidden_size == 16384 and num_tokens > 2048:
+        return "tilelang"
+
     impl = os.getenv(_MHC_PRE_DECODE_PRENORM_IMPL_ENV, "deepgemm").strip().lower()
     if impl in {"", "0", "false", "off", "deepgemm"}:
         return "deepgemm"
@@ -496,7 +505,7 @@ def _select_mhc_pre_big_fuse_prenorm_impl(
     )
 
 
-def _mhc_prenorm_gemm_sqrsum_tilelang_decode_partials(
+def _mhc_prenorm_gemm_sqrsum_tilelang_partials(
     residual_flat: torch.Tensor,
     fn: torch.Tensor,
     *,
@@ -507,11 +516,10 @@ def _mhc_prenorm_gemm_sqrsum_tilelang_decode_partials(
     mhc_mult3 = fn.shape[0]
     if split_k <= 0:
         raise ValueError(f"TileLang MHC prenorm split_k must be > 0, got {split_k}")
-    if num_tokens > 64 or hc_hidden_size != 16384:
+    if hc_hidden_size != 16384:
         raise NotImplementedError(
-            "TileLang decode MHC prenorm partials only support "
-            f"num_tokens <= 64 and K=16384, got num_tokens={num_tokens}, "
-            f"K={hc_hidden_size}"
+            "TileLang MHC prenorm partials only support K=16384, "
+            f"got K={hc_hidden_size}"
         )
     if hc_hidden_size % split_k != 0:
         raise ValueError(
@@ -521,7 +529,7 @@ def _mhc_prenorm_gemm_sqrsum_tilelang_decode_partials(
     split_size = hc_hidden_size // split_k
     if split_size % 128 != 0:
         raise ValueError(
-            "TileLang decode MHC prenorm partials require split_size "
+            "TileLang MHC prenorm partials require split_size "
             f"divisible by 128, got split_size={split_size}"
         )
 
@@ -739,7 +747,7 @@ def _mhc_pre_deepgemm_big_fuse_provider(
     )
     if prenorm_impl == "tilelang":
         gemm_out_mul, gemm_out_sqrsum = (
-            _mhc_prenorm_gemm_sqrsum_tilelang_decode_partials(
+            _mhc_prenorm_gemm_sqrsum_tilelang_partials(
                 residual_flat,
                 fn,
                 split_k=split_k,
