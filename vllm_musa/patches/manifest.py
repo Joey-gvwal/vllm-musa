@@ -222,6 +222,7 @@ _CAT6: list[DivSpec] = [
 _SHADOW_MODULES = [
     ("4a", "vllm_musa/v1/attention/backends/flash_attn.py", "vllm/v1/attention/backends/flash_attn.py", "modified copy (sim 0.70) — drift tripwire"),
     ("4a", "vllm_musa/v1/attention/backends/mla/flashmla.py", "vllm/v1/attention/backends/mla/flashmla.py", "modified copy (sim 0.83) — drift tripwire"),
+    ("5", "vllm_musa/distributed/device_communicators/musa_jit_custom_all_reduce.py", None, "new MUSA JIT custom allreduce communicator"),
     ("5", "vllm_musa/distributed/kv_transfer/kv_connector/v1/mooncake_connector.py", "vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py", "rebinds upstream (sim 0.12) — 4b-conversion candidate"),
     ("5", "vllm_musa/model_executor/kernels/linear/scaled_mm/deep_gemm.py", "vllm/model_executor/kernels/linear/scaled_mm/deep_gemm.py", "OOT subclass/register seam"),
     ("5", "vllm_musa/model_executor/kernels/linear/scaled_mm/torch_scaled_mm.py", None, "new MUSA module (no upstream)"),

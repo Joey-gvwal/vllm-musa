@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 3 Jun 2026 11:47:35 +0000
+Subject: [PATCH] MUSA: vllm.distributed.device_communicators.cuda_communicator
+
+---
+ .../device_communicators/cuda_communicator.py | 63 +++++++++++++++-----
+ 1 file changed, 47 insertions(+), 16 deletions(-)
+
+diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
+index ee81bc20f..3c79a5076 100644
+--- a/vllm/distributed/device_communicators/cuda_communicator.py
++++ b/vllm/distributed/device_communicators/cuda_communicator.py
+@@ -100,20 +100,51 @@ class CudaCommunicator(DeviceCommunicatorBase):
+         if use_custom_allreduce and self.world_size > 1:
+             # Initialize a custom fast all-reduce implementation.
+-            self.ca_comm = CustomAllreduce(
+-                group=self.cpu_group,
+-                device=self.device,
+-                symm_mem_enabled=(
+-                    self.symm_mem_comm is not None and not self.symm_mem_comm.disabled
+-                ),
+-            )
+-
+-            if current_platform.is_rocm():
+-                # Initialize a custom quick all-reduce implementation for AMD.
+-                # Quick reduce is designed as a complement to custom allreduce.
+-                # Based on quickreduce (https://github.com/mk1-project/quickreduce).
+-                # If it's a rocm, 'use_custom_allreduce==True' means it must
+-                # currently be an MI300 series.
+-                self.qr_comm = QuickAllReduce(group=self.cpu_group, device=self.device)
+-
++            if current_platform.is_musa():
++                try:
++                    from vllm_musa.distributed.device_communicators.musa_jit_custom_all_reduce import (
++                        MusaJitCustomAllreduce,
++                    )
++
++                    self.ca_comm = MusaJitCustomAllreduce(
++                        group=self.cpu_group,
++                        device=self.device,
++                        symm_mem_enabled=(
++                            self.symm_mem_comm is not None
++                            and not self.symm_mem_comm.disabled
++                        ),
++                    )
++                except Exception:
++                    logger.exception(
++                        "MUSA JIT custom all-reduce init failed; falling back "
++                        "to vLLM CustomAllreduce."
++                    )
++                # JIT init may return a disabled communicator without raising.
++                if self.ca_comm is None or self.ca_comm.disabled:
++                    self.ca_comm = CustomAllreduce(
++                        group=self.cpu_group,
++                        device=self.device,
++                        symm_mem_enabled=(
++                            self.symm_mem_comm is not None
++                            and not self.symm_mem_comm.disabled
++                        ),
++                    )
++            else:
++                self.ca_comm = CustomAllreduce(
++                    group=self.cpu_group,
++                    device=self.device,
++                    symm_mem_enabled=(
++                        self.symm_mem_comm is not None
++                        and not self.symm_mem_comm.disabled
++                    ),
++                )
++
++                if current_platform.is_rocm():
++                    # Initialize a custom quick all-reduce implementation for AMD.
++                    # Quick reduce is designed as a complement to custom allreduce.
++                    # Based on quickreduce (https://github.com/mk1-project/quickreduce).
++                    # If it's a rocm, 'use_custom_allreduce==True' means it must
++                    # currently be an MI300 series.
++                    self.qr_comm = QuickAllReduce(group=self.cpu_group, device=self.device)
++
+         if self.world_size > 1:
+             self._log_all_reduce_backend_selection()
