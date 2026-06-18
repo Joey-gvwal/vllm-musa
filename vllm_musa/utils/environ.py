@@ -91,6 +91,7 @@ class Envs:
     VLLM_MUSA_FUSED_ADD_RMSNORM = EnvBool(True)
     VLLM_MUSA_ENABLE_JIT_TOPK = EnvBool(True)
     VLLM_MUSA_SAMPLER_FAST_PATH = EnvBool(True)
+    VLLM_MUSA_SEEDED_MULTINOMIAL = EnvBool(True)
     VLLM_MUSA_RESHAPE_CACHE_FLASH = EnvBool(True)
 
 
