@@ -11,12 +11,6 @@ from pathlib import Path
 
 import torch
 
-
-def _ensure_numpy_compatible():
-    """Ensure numpy<2 (MUSA/torch requirement); the vLLM install can pull numpy>=2."""
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy<2", "-q"])
-
-
 def _ensure_torchada_installed():
     """Ensure torchada is installed (needed for torch.cuda patching)."""
     try:
@@ -30,7 +24,6 @@ def _ensure_torchada_installed():
 
 
 # Run dependency checks at setup start
-_ensure_numpy_compatible()
 _ensure_torchada_installed()
 
 from setuptools import setup
@@ -60,6 +53,32 @@ def _read_pins():
 
 
 _PINS = _read_pins()
+
+
+def _read_requirements(filename, seen=None):
+    """Read pip requirements files with local -r includes."""
+    requirements_dir = root / "requirements"
+    path = requirements_dir / filename
+    seen = set() if seen is None else seen
+    if path in seen:
+        return []
+    seen.add(path)
+
+    requirements = []
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if " #" in line:
+            line = line.split(" #", 1)[0].strip()
+        if line.startswith("--"):
+            continue
+        if line.startswith("-r "):
+            requirements.extend(_read_requirements(line.split(maxsplit=1)[1], seen))
+        else:
+            requirements.append(line)
+    return requirements
+
 
 configure_compiler_cache(root)
 
@@ -454,9 +473,6 @@ class _CustomBuildExt(BuildExtension):
 
         self._install_vllm(_VLLM_REPO.source_dir)
 
-        # Re-ensure numpy<2 after vllm installation (vllm may pull in numpy>=2)
-        _ensure_numpy_compatible()
-
         super().run()
 
 
@@ -464,13 +480,10 @@ setup(
     ext_modules=EXT_MODULES,
     cmdclass={"build_ext": _CustomBuildExt.with_options(use_ninja=True)},
     include_package_data=False,
-    # pinned here because --no-build-isolation skips pyproject.toml deps
-    install_requires=[
-        "torchada>=0.1.62",
-        "mthreads-ml-py>=2.2.11",
-        "numpy<2",
-        "openai>=2.24.0",
-    ],
+    # Runtime dependencies live in requirements/musa.txt so Docker and package
+    # metadata share one source. MUSA-private pins, including torch/torch_musa,
+    # are kept in requirements/musa_private.txt.
+    install_requires=_read_requirements("musa.txt"),
 )
 
 # place the built vllm.* extensions into the editable vLLM clone (see the function).

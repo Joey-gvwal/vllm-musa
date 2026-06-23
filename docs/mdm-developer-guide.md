@@ -43,10 +43,14 @@ is fine for running but not for `regen`.
 
 ## 1. Build & install
 
-Prereqs: a MUSA environment (`torch_musa`, `torchada`, `mate`, … per
-`pyproject.toml`).
+Prereqs: a MUSA runtime/toolkit environment. Install the build, common, and
+MUSA-private Python dependencies, including torch/torch_musa, from the
+requirements entrypoints before installing `vllm-musa`.
 
 ```bash
+# required before pip install . / pip install -e .
+pip install -r requirements/build.txt -r requirements/musa.txt
+
 # developer install (recommended) — vllm-musa editable:
 pip install -e . --no-build-isolation -v
 

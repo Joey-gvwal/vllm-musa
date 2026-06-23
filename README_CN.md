@@ -44,7 +44,7 @@
 
 | vLLM 版本 | PyTorch 版本 | 引擎    | 状态         |
 |-----------|--------------|---------|--------------|
-| v0.22.0    | 2.7.1        | 仅 V1   | ✅ 已支持    |
+| v0.22.0    | 2.9.x        | 仅 V1   | ✅ 已支持    |
 
 > **注意**：本插件使用 vLLM 的 V1 引擎架构，不支持 V0 引擎。
 
@@ -57,7 +57,14 @@
     cd vllm-musa
     ```
 
-2. 安装摩尔线程 MUSA 的 vLLM 硬件插件：
+2. 安装 `vllm-musa` 前先安装 Python 依赖。MUSA requirements 入口包含通用依赖
+   和 `torch`、`torch_musa` 等 MUSA private 版本约束：
+
+    ```bash
+    pip install -r requirements/build.txt -r requirements/musa.txt
+    ```
+
+3. 安装摩尔线程 MUSA 的 vLLM 硬件插件：
 
     ```bash
     # 标准安装（安装 vLLM MUSA 插件和 vLLM）
@@ -67,7 +74,7 @@
     pip install -e . --no-build-isolation -v
     ```
 
-3. 验证安装：
+4. 验证安装：
 
     ```bash
     # 检查插件注册

@@ -1,0 +1,24 @@
+# MUSA/MT self-built wheels, published on the internal Moore Threads index:
+#   https://dl.mthreads.com/repo/api/pypi/pypi/simple
+#
+# Install these with the internal index as the sole --index-url (see
+# docker/musa.Dockerfile). Do NOT add --index-url/--extra-index-url directives to
+# this file: it is pulled in by requirements/musa.txt (and thus setup.py
+# install_requires), and a pip index directive in a requirements file applies to
+# the whole invocation. It would then route the ordinary public-PyPI deps
+# (torchada, numpy, transformers, ...) at the internal index, which hosts only
+# MUSA/MT wheels. Names such as torch, mate and apache-tvm-ffi also exist as
+# unrelated projects on public PyPI, so they must resolve from the internal
+# index only. Versions below track the MUSA release_5.2.0 Python Wheel guide.
+
+torch==2.9.1
+torch_musa==2.9.1
+mate==0.2.3
+flash_attn_3==0.2.3
+flash_mla==0.2.3
+deep-gemm==0.2.3
+deep_ep==1.1.0+musa5.2.0torch2.9.1
+tilelang_musa==0.1.8
+triton==3.2.0
+apache-tvm-ffi==0.1.9.post3+musa.1
+torch-c-dlpack-ext==0.1.5+musa5.2.0torch2.9.1

@@ -1,0 +1,22 @@
+.git
+.gitignore
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+build
+dist
+*.egg-info
+vllm_musa.egg-info
+.coverage
+htmlcov
+
+# setup.py clones and pins third_party sources inside the image. Copying a local
+# checkout makes the build context large and can hide drift from the pinned refs.
+third_party/vllm
+third_party/flashinfer
+
+# Local/editor artifacts.
+.claude
+.humanize
+assets
