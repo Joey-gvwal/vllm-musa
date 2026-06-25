@@ -18,6 +18,10 @@ _MUSA_FP8_MOE_MIXED_BACKEND_ENV = "VLLM_MUSA_FP8_MOE_MIXED_BACKEND"
 _MUSA_FP8_MOE_AUTOTUNE_ENV = "VLLM_MUSA_FP8_MOE_AUTOTUNE"
 _MUSA_FP8_MOE_DEEPGEMM_MIN_TOKENS_ENV = "VLLM_MUSA_FP8_MOE_DEEPGEMM_MIN_TOKENS"
 _MUSA_FP8_MOE_DEEPGEMM_DEFAULT_MIN_TOKENS = 128
+_MUSA_FP8_MOE_MODULAR_MIN_PER_EXPERT_M_ENV = (
+    "VLLM_MUSA_FP8_MOE_MODULAR_MIN_PER_EXPERT_M"
+)
+_MUSA_FP8_MOE_MODULAR_DEFAULT_MIN_PER_EXPERT_M = 64
 _MUSA_FP8_MOE_AUTOTUNE_MAX_TOKENS_ENV = "VLLM_MUSA_FP8_MOE_AUTOTUNE_MAX_TOKENS"
 _MUSA_FP8_MOE_AUTOTUNE_WARMUP_ENV = "VLLM_MUSA_FP8_MOE_AUTOTUNE_WARMUP"
 _MUSA_FP8_MOE_AUTOTUNE_ITERS_ENV = "VLLM_MUSA_FP8_MOE_AUTOTUNE_ITERS"
@@ -157,15 +161,29 @@ def _select_musa_fp8_moe_backend(num_tokens: int) -> str:
     return _MUSA_FP8_MOE_BACKEND_DEEPGEMM
 
 
+def _musa_fp8_moe_per_expert_m(layer: FusedMoE, num_tokens: int) -> float:
+    # Average tokens routed to one expert. The modular grouped-GEMM path only
+    # amortizes its prepare/finalize/permute overhead at large per-expert M
+    # (prefill-sized work); small-M decode is cheaper on the lean legacy path.
+    num_experts = max(int(getattr(layer, "global_num_experts", 0) or 0), 1)
+    top_k = max(int(getattr(layer, "top_k", 1) or 1), 1)
+    return num_tokens * top_k / num_experts
+
+
 def _should_use_musa_mixed_deepgemm(
     method: object,
     layer: FusedMoE,
     x: torch.Tensor,
 ) -> bool:
-    return (
-        _musa_mixed_deepgemm_static_supported(method, layer)
-        and _select_musa_fp8_moe_backend(x.shape[0]) == _MUSA_FP8_MOE_BACKEND_DEEPGEMM
+    if not _musa_mixed_deepgemm_static_supported(method, layer):
+        return False
+    if _select_musa_fp8_moe_backend(x.shape[0]) != _MUSA_FP8_MOE_BACKEND_DEEPGEMM:
+        return False
+    min_per_expert_m = _env_int(
+        _MUSA_FP8_MOE_MODULAR_MIN_PER_EXPERT_M_ENV,
+        _MUSA_FP8_MOE_MODULAR_DEFAULT_MIN_PER_EXPERT_M,
     )
+    return _musa_fp8_moe_per_expert_m(layer, x.shape[0]) >= min_per_expert_m
 
 
 @contextmanager

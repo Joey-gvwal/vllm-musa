@@ -224,6 +224,7 @@ def test_musa_fp8_moe_autotune_policy_overrides_fixed_threshold(monkeypatch):
     monkeypatch.setenv("VLLM_MUSA_FP8_MOE_MIXED_BACKEND", "1")
     monkeypatch.setenv("VLLM_MUSA_FP8_MOE_AUTOTUNE", "1")
     monkeypatch.setenv("VLLM_MUSA_FP8_MOE_DEEPGEMM_MIN_TOKENS", "1")
+    monkeypatch.setenv("VLLM_MUSA_FP8_MOE_MODULAR_MIN_PER_EXPERT_M", "0")
     fp8.set_musa_fp8_moe_bucket_policy(None)
 
     assert not fp8._should_use_musa_mixed_deepgemm(
@@ -325,6 +326,7 @@ def test_musa_fp8_moe_mixed_backend_apply_uses_modular_kernel(monkeypatch):
     monkeypatch.setattr(fp8, "current_platform", SimpleNamespace(is_musa=lambda: True))
     monkeypatch.setenv("VLLM_MUSA_FP8_MOE_MIXED_BACKEND", "1")
     monkeypatch.delenv("VLLM_MUSA_FP8_MOE_DEEPGEMM_MIN_TOKENS", raising=False)
+    monkeypatch.setenv("VLLM_MUSA_FP8_MOE_MODULAR_MIN_PER_EXPERT_M", "0")
 
     result = fp8.apply(
         method,
@@ -409,3 +411,43 @@ def test_musa_fp8_moe_mixed_backend_apply_keeps_small_token_fallback(monkeypatch
     assert calls["topk_weights"] == "topk_weights"
     assert calls["topk_ids"] == "topk_ids"
     assert calls["quant_config"] == "quant"
+
+
+def test_musa_fp8_moe_per_expert_m_gate(monkeypatch):
+    fp8 = _load_fp8_with_stubs(monkeypatch)
+
+    class Backend:
+        value = "DEEPGEMM"
+
+    method = SimpleNamespace(
+        fp8_backend=Backend(),
+        is_monolithic=False,
+        moe_kernel=object(),
+    )
+    layer = SimpleNamespace(ep_size=1, global_num_experts=256, top_k=8)
+
+    monkeypatch.setattr(fp8, "current_platform", SimpleNamespace(is_musa=lambda: True))
+    monkeypatch.setenv("VLLM_MUSA_FP8_MOE_MIXED_BACKEND", "1")
+    monkeypatch.delenv("VLLM_MUSA_FP8_MOE_DEEPGEMM_MIN_TOKENS", raising=False)
+    monkeypatch.delenv("VLLM_MUSA_FP8_MOE_MODULAR_MIN_PER_EXPERT_M", raising=False)
+
+    # E=256, top_k=8 -> per-expert M = tokens/32. Default gate is 64 -> tokens>=2048.
+    assert not fp8._should_use_musa_mixed_deepgemm(
+        method, layer, SimpleNamespace(shape=(64, 4096))
+    )
+    assert not fp8._should_use_musa_mixed_deepgemm(
+        method, layer, SimpleNamespace(shape=(1024, 4096))
+    )
+    assert fp8._should_use_musa_mixed_deepgemm(
+        method, layer, SimpleNamespace(shape=(2048, 4096))
+    )
+    assert fp8._should_use_musa_mixed_deepgemm(
+        method, layer, SimpleNamespace(shape=(8192, 4096))
+    )
+
+    # Lowering the per-expert gate and the token floor lets small batches take it.
+    monkeypatch.setenv("VLLM_MUSA_FP8_MOE_MODULAR_MIN_PER_EXPERT_M", "2")
+    monkeypatch.setenv("VLLM_MUSA_FP8_MOE_DEEPGEMM_MIN_TOKENS", "1")
+    assert fp8._should_use_musa_mixed_deepgemm(
+        method, layer, SimpleNamespace(shape=(64, 4096))
+    )
