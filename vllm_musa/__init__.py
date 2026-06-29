@@ -20,7 +20,7 @@ __all__ = [
     "register_custom_ops",
     "collect_env",
 ]
-__version__ = "0.1.22"
+__version__ = "0.1.24"
 
 logger = logging.getLogger(__name__)
 
