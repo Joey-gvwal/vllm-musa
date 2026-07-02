@@ -219,6 +219,47 @@ def _deepgemm_gate_kwargs(torch_module):
     }
 
 
+def _qwen_deepgemm_gate_kwargs(torch_module, tokens=66000):
+    return {
+        "hidden_states": torch_module.empty(
+            (tokens, 2048), device="meta", dtype=torch_module.bfloat16
+        ),
+        "w1": torch_module.empty(
+            (256, 1024, 2048),
+            device="meta",
+            dtype=torch_module.float8_e4m3fn,
+        ),
+        "w2": torch_module.empty(
+            (256, 2048, 512),
+            device="meta",
+            dtype=torch_module.float8_e4m3fn,
+        ),
+        "topk_ids": torch_module.empty(
+            (tokens, 8), device="meta", dtype=torch_module.int32
+        ),
+        "activation": "silu",
+        "apply_router_weight_on_input": False,
+        "use_fp8_w8a8": True,
+        "use_int8_w8a8": False,
+        "use_int8_w8a16": False,
+        "use_int4_w4a16": False,
+        "ocp_mx_scheme": None,
+        "per_channel_quant": False,
+        "expert_map": None,
+        "w1_scale": torch_module.empty(
+            (256, 8, 16), device="meta", dtype=torch_module.float32
+        ),
+        "w2_scale": torch_module.empty(
+            (256, 16, 4), device="meta", dtype=torch_module.float32
+        ),
+        "a1_scale": None,
+        "a2_scale": None,
+        "block_shape": [128, 128],
+        "w1_bias": None,
+        "w2_bias": None,
+    }
+
+
 def test_deepseek_v4_deepgemm_prefill_gate_is_env_gated(monkeypatch):
     from vllm_musa.model_executor.layers.fused_moe import fused_moe
 
@@ -230,6 +271,105 @@ def test_deepseek_v4_deepgemm_prefill_gate_is_env_gated(monkeypatch):
     monkeypatch.setenv("VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL", "1")
 
     assert fused_moe._can_use_deepseek_v4_moe_deepgemm_prefill(**kwargs)
+
+
+def test_qwen_fp8_moe_deepgemm_prefill_gate_is_default_path(monkeypatch):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    kwargs = _qwen_deepgemm_gate_kwargs(torch)
+    monkeypatch.setenv("VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL", "0")
+
+    assert fused_moe._can_use_qwen_fp8_moe_deepgemm_prefill(**kwargs)
+    assert not fused_moe._can_use_deepseek_v4_moe_deepgemm_prefill(**kwargs)
+
+
+def test_qwen_fp8_moe_deepgemm_prefill_gate_defaults_to_large_prefill(
+    monkeypatch,
+):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    monkeypatch.setenv("VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL", "0")
+    monkeypatch.setenv("VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL_MIN_TOKENS", "4096")
+
+    assert not fused_moe._can_use_qwen_fp8_moe_deepgemm_prefill(
+        **_qwen_deepgemm_gate_kwargs(torch, tokens=20000)
+    )
+    assert fused_moe._can_use_qwen_fp8_moe_deepgemm_prefill(
+        **_qwen_deepgemm_gate_kwargs(torch, tokens=66000)
+    )
+
+
+def test_qwen_fp8_moe_dispatch_uses_musa_path_without_env(monkeypatch):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    kwargs = _qwen_deepgemm_gate_kwargs(torch, tokens=20000)
+    topk_weights = torch.empty_like(kwargs["topk_ids"], dtype=torch.bfloat16)
+    marker = object()
+
+    monkeypatch.setenv("VLLM_MUSA_QWEN_FP8_FUSED_MOE_GEMV", "0")
+    monkeypatch.setattr(fused_moe, "fused_experts_impl", lambda *a, **kw: marker)
+    monkeypatch.setattr(
+        fused_moe._upstream_fused_moe,
+        "_musa_original_fused_experts_impl",
+        lambda *a, **kw: object(),
+    )
+
+    result = fused_moe._musa_fused_experts_impl_dispatch(
+        hidden_states=kwargs["hidden_states"],
+        w1=kwargs["w1"],
+        w2=kwargs["w2"],
+        topk_weights=topk_weights,
+        topk_ids=kwargs["topk_ids"],
+        activation=kwargs["activation"],
+        apply_router_weight_on_input=kwargs["apply_router_weight_on_input"],
+        use_fp8_w8a8=kwargs["use_fp8_w8a8"],
+        use_int8_w8a8=kwargs["use_int8_w8a8"],
+        use_int8_w8a16=kwargs["use_int8_w8a16"],
+        use_int4_w4a16=kwargs["use_int4_w4a16"],
+        ocp_mx_scheme=kwargs["ocp_mx_scheme"],
+        per_channel_quant=kwargs["per_channel_quant"],
+        expert_map=kwargs["expert_map"],
+        w1_scale=kwargs["w1_scale"],
+        w2_scale=kwargs["w2_scale"],
+        a1_scale=kwargs["a1_scale"],
+        a2_scale=kwargs["a2_scale"],
+        block_shape=kwargs["block_shape"],
+        w1_bias=kwargs["w1_bias"],
+        w2_bias=kwargs["w2_bias"],
+    )
+
+    assert result is marker
+
+
+def test_qwen_fp8_moe_deepgemm_prefill_gate_accepts_signed_topk_ids(monkeypatch):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    monkeypatch.delenv("VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL", raising=False)
+
+    kwargs = _qwen_deepgemm_gate_kwargs(torch)
+    kwargs["topk_ids"] = torch.empty((66000, 8), device="meta", dtype=torch.int64)
+
+    assert fused_moe._can_use_qwen_fp8_moe_deepgemm_prefill(**kwargs)
+
+
+def test_qwen_fp8_moe_deepgemm_prefill_gate_rejects_non_block128_shape(
+    monkeypatch,
+):
+    from vllm_musa.model_executor.layers.fused_moe import fused_moe
+
+    monkeypatch.delenv("VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL", raising=False)
+
+    kwargs = _qwen_deepgemm_gate_kwargs(torch)
+    kwargs["w1"] = torch.empty(
+        (256, 640, 2048), device="meta", dtype=torch.float8_e4m3fn
+    )
+    kwargs["w2"] = torch.empty(
+        (256, 2048, 320), device="meta", dtype=torch.float8_e4m3fn
+    )
+    kwargs["w1_scale"] = torch.empty((256, 5, 16), device="meta", dtype=torch.float32)
+    kwargs["w2_scale"] = torch.empty((256, 16, 3), device="meta", dtype=torch.float32)
+
+    assert not fused_moe._can_use_qwen_fp8_moe_deepgemm_prefill(**kwargs)
 
 
 def test_deepseek_v4_deepgemm_prefill_gate_rejects_nonmatching_shape(

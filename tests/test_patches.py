@@ -534,6 +534,29 @@ class TestMUSAPlatformDefaults:
 
             assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
 
+    def test_qwen_moe_does_not_default_path_selection_envs(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["Qwen3MoeForCausalLM"],
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_QWEN_FP8_FUSED_MOE_GEMV", None)
+            os.environ.pop("VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL", None)
+            os.environ.pop("VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL_MIN_TOKENS", None)
+            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV", None)
+            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL", None)
+
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+
+            assert "VLLM_MUSA_QWEN_FP8_FUSED_MOE_GEMV" not in os.environ
+            assert "VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL" not in os.environ
+            assert "VLLM_MUSA_QWEN_FP8_MOE_DEEPGEMM_PREFILL_MIN_TOKENS" not in os.environ
+            assert "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV" not in os.environ
+            assert "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL" not in os.environ
+            assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
+
     def test_deepseek_v4_tp8_profile_unset_keeps_default_envs(self):
         from vllm_musa.platform import MUSAPlatformBase
 

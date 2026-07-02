@@ -53,7 +53,9 @@ _DEEPGEMM_PREFILL_ENV = "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL"
 _DEEPGEMM_PREFILL_MIN_TOKENS_ENV = (
     "VLLM_MUSA_DEEPSEEK_V4_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
 )
-_DEEPGEMM_PREFILL_WARNED = False
+_DEEPGEMM_PREFILL_DEFAULT_MIN_TOKENS = 4096
+_QWEN_FP8_MOE_DEEPGEMM_PREFILL_MIN_TOKENS = 65536
+_DEEPGEMM_PREFILL_WARNED: set[str] = set()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -213,7 +215,7 @@ def _maybe_record_deepseek_v4_moe_shape_inventory(
             _MOE_SHAPE_INVENTORY_WARNED = True
 
 
-def _can_use_deepseek_v4_moe_deepgemm_prefill(
+def _can_use_musa_grouped_deepgemm_moe_prefill(
     *,
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -235,11 +237,10 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     block_shape: list[int] | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    min_tokens: int,
+    required_top_k: int | None = None,
+    require_topk_int32: bool = False,
 ) -> bool:
-    if not _env_flag_enabled(_DEEPGEMM_PREFILL_ENV):
-        return False
-
-    min_tokens = _env_int(_DEEPGEMM_PREFILL_MIN_TOKENS_ENV, 4096)
     if hidden_states.size(0) < min_tokens:
         return False
 
@@ -266,7 +267,9 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     if block_shape != [128, 128]:
         return False
 
-    if topk_ids.size(1) != 6:
+    if required_top_k is not None and topk_ids.size(1) != required_top_k:
+        return False
+    if required_top_k is None and topk_ids.size(1) <= 0:
         return False
 
     if hidden_states.dtype != torch.bfloat16:
@@ -278,7 +281,9 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
     if w1_scale.dtype != torch.float32 or w2_scale.dtype != torch.float32:
         return False
 
-    if topk_ids.dtype != torch.int32:
+    if require_topk_int32 and topk_ids.dtype != torch.int32:
+        return False
+    if not require_topk_int32 and topk_ids.dtype not in (torch.int32, torch.int64):
         return False
 
     if not (
@@ -287,13 +292,179 @@ def _can_use_deepseek_v4_moe_deepgemm_prefill(
         return False
 
     E, N, K = w1.shape
+    if E <= 0 or N <= 0 or K <= 0:
+        return False
+    if N % 2 != 0 or N % 128 != 0 or (N // 2) % 128 != 0 or K % 128 != 0:
+        return False
+
     return (
-        E == 256
-        and N == 512
-        and K == hidden_states.size(1)
+        K == hidden_states.size(1)
         and w2.shape == (E, K, N // 2)
         and w1_scale.shape == (E, N // 128, K // 128)
         and w2_scale.shape == (E, K // 128, (N // 2) // 128)
+    )
+
+
+def _can_use_deepseek_v4_moe_deepgemm_prefill(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    if not _env_flag_enabled(_DEEPGEMM_PREFILL_ENV):
+        return False
+
+    if not _can_use_musa_grouped_deepgemm_moe_prefill(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_ids=topk_ids,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        expert_map=expert_map,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        w1_bias=w1_bias,
+        w2_bias=w2_bias,
+        min_tokens=_env_int(
+            _DEEPGEMM_PREFILL_MIN_TOKENS_ENV,
+            _DEEPGEMM_PREFILL_DEFAULT_MIN_TOKENS,
+        ),
+        required_top_k=6,
+        require_topk_int32=True,
+    ):
+        return False
+
+    E, N, _ = w1.shape
+    return E == 256 and N == 512
+
+
+def _is_qwen_fp8_moe_shape(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+    min_tokens: int,
+) -> bool:
+    if not _can_use_musa_grouped_deepgemm_moe_prefill(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_ids=topk_ids,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        expert_map=expert_map,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        w1_bias=w1_bias,
+        w2_bias=w2_bias,
+        min_tokens=min_tokens,
+        required_top_k=8,
+        require_topk_int32=False,
+    ):
+        return False
+
+    E, N, K = w1.shape
+    return E == 256 and N == 1024 and K == 2048
+
+
+def _can_use_qwen_fp8_moe_deepgemm_prefill(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    return _is_qwen_fp8_moe_shape(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_ids=topk_ids,
+        activation=activation,
+        apply_router_weight_on_input=apply_router_weight_on_input,
+        use_fp8_w8a8=use_fp8_w8a8,
+        use_int8_w8a8=use_int8_w8a8,
+        use_int8_w8a16=use_int8_w8a16,
+        use_int4_w4a16=use_int4_w4a16,
+        ocp_mx_scheme=ocp_mx_scheme,
+        per_channel_quant=per_channel_quant,
+        expert_map=expert_map,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        w1_bias=w1_bias,
+        w2_bias=w2_bias,
+        min_tokens=_QWEN_FP8_MOE_DEEPGEMM_PREFILL_MIN_TOKENS,
     )
 
 
@@ -325,7 +496,7 @@ def _silu_mul_per_token_group_fp8_quant_musa_large(
     return output, output_s
 
 
-def _deepseek_v4_moe_deepgemm_prefill_impl(
+def _musa_grouped_deepgemm_moe_prefill_impl(
     *,
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -335,6 +506,7 @@ def _deepseek_v4_moe_deepgemm_prefill_impl(
     w1_scale: torch.Tensor,
     w2_scale: torch.Tensor,
     inplace: bool,
+    label: str,
 ) -> torch.Tensor:
     from vllm.model_executor.layers.fused_moe.deep_gemm_utils import (
         deepgemm_moe_permute,
@@ -345,10 +517,16 @@ def _deepseek_v4_moe_deepgemm_prefill_impl(
         mk_alignment_scope,
     )
 
+    E, N, K = w1.shape
     logger.info_once(
-        "Using DeepSeek-V4 MUSA grouped DeepGEMM MoE prefill path "
-        "(set %s=0 to disable).",
-        _DEEPGEMM_PREFILL_ENV,
+        "Using %s MUSA grouped DeepGEMM MoE prefill path for "
+        "tokens=%d top_k=%d E=%d N=%d K=%d.",
+        label,
+        hidden_states.size(0),
+        topk_ids.size(1),
+        E,
+        N,
+        K,
     )
 
     qhidden, a1_scale = moe_kernel_quantize_input(
@@ -374,7 +552,6 @@ def _deepseek_v4_moe_deepgemm_prefill_impl(
         expert_tokens_meta=None,
     )
 
-    _, N, K = w1.shape
     with mk_alignment_scope(align_used):
         mm1_out = torch.empty(
             (qhidden_perm.shape[0], N),
@@ -427,7 +604,7 @@ def _deepseek_v4_moe_deepgemm_prefill_impl(
     return output
 
 
-def _maybe_deepseek_v4_moe_deepgemm_prefill(
+def _maybe_musa_grouped_deepgemm_moe_prefill(
     *,
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -454,34 +631,40 @@ def _maybe_deepseek_v4_moe_deepgemm_prefill(
 ) -> torch.Tensor | None:
     global _DEEPGEMM_PREFILL_WARNED
 
-    if not _can_use_deepseek_v4_moe_deepgemm_prefill(
-        hidden_states=hidden_states,
-        w1=w1,
-        w2=w2,
-        topk_ids=topk_ids,
-        activation=activation,
-        apply_router_weight_on_input=apply_router_weight_on_input,
-        use_fp8_w8a8=use_fp8_w8a8,
-        use_int8_w8a8=use_int8_w8a8,
-        use_int8_w8a16=use_int8_w8a16,
-        use_int4_w4a16=use_int4_w4a16,
-        ocp_mx_scheme=ocp_mx_scheme,
-        per_channel_quant=per_channel_quant,
-        expert_map=expert_map,
-        w1_scale=w1_scale,
-        w2_scale=w2_scale,
-        a1_scale=a1_scale,
-        a2_scale=a2_scale,
-        block_shape=block_shape,
-        w1_bias=w1_bias,
-        w2_bias=w2_bias,
-    ):
+    common_kwargs = {
+        "hidden_states": hidden_states,
+        "w1": w1,
+        "w2": w2,
+        "topk_ids": topk_ids,
+        "activation": activation,
+        "apply_router_weight_on_input": apply_router_weight_on_input,
+        "use_fp8_w8a8": use_fp8_w8a8,
+        "use_int8_w8a8": use_int8_w8a8,
+        "use_int8_w8a16": use_int8_w8a16,
+        "use_int4_w4a16": use_int4_w4a16,
+        "ocp_mx_scheme": ocp_mx_scheme,
+        "per_channel_quant": per_channel_quant,
+        "expert_map": expert_map,
+        "w1_scale": w1_scale,
+        "w2_scale": w2_scale,
+        "a1_scale": a1_scale,
+        "a2_scale": a2_scale,
+        "block_shape": block_shape,
+        "w1_bias": w1_bias,
+        "w2_bias": w2_bias,
+    }
+
+    if _can_use_deepseek_v4_moe_deepgemm_prefill(**common_kwargs):
+        label = "DeepSeek-V4"
+    elif _can_use_qwen_fp8_moe_deepgemm_prefill(**common_kwargs):
+        label = "Qwen FP8 MoE"
+    else:
         return None
 
     try:
         assert w1_scale is not None
         assert w2_scale is not None
-        return _deepseek_v4_moe_deepgemm_prefill_impl(
+        return _musa_grouped_deepgemm_moe_prefill_impl(
             hidden_states=hidden_states,
             w1=w1,
             w2=w2,
@@ -490,15 +673,17 @@ def _maybe_deepseek_v4_moe_deepgemm_prefill(
             w1_scale=w1_scale,
             w2_scale=w2_scale,
             inplace=inplace,
+            label=label,
         )
     except Exception as exc:
-        if not _DEEPGEMM_PREFILL_WARNED:
+        if label not in _DEEPGEMM_PREFILL_WARNED:
             logger.warning(
-                "DeepSeek-V4 grouped DeepGEMM MoE prefill path failed; "
+                "%s grouped DeepGEMM MoE prefill path failed; "
                 "falling back to native GEMV path: %s",
+                label,
                 exc,
             )
-            _DEEPGEMM_PREFILL_WARNED = True
+            _DEEPGEMM_PREFILL_WARNED.add(label)
         return None
 
 
@@ -695,7 +880,7 @@ def fused_experts_impl(
         global_num_experts=global_num_experts,
     )
 
-    deepgemm_prefill_output = _maybe_deepseek_v4_moe_deepgemm_prefill(
+    deepgemm_prefill_output = _maybe_musa_grouped_deepgemm_moe_prefill(
         hidden_states=hidden_states,
         w1=w1,
         w2=w2,
@@ -837,12 +1022,72 @@ if not hasattr(_upstream_fused_moe, "_musa_original_fused_experts_impl"):
     )
 
 
+def _get_dispatch_arg(
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    index: int,
+    name: str,
+    default: object = None,
+) -> object:
+    if name in kwargs:
+        return kwargs[name]
+    if len(args) > index:
+        return args[index]
+    return default
+
+
+def _is_qwen_fp8_moe_dispatch(
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> bool:
+    hidden_states = _get_dispatch_arg(args, kwargs, 0, "hidden_states")
+    w1 = _get_dispatch_arg(args, kwargs, 1, "w1")
+    w2 = _get_dispatch_arg(args, kwargs, 2, "w2")
+    topk_ids = _get_dispatch_arg(args, kwargs, 4, "topk_ids")
+    w1_scale = _get_dispatch_arg(args, kwargs, 15, "w1_scale")
+    w2_scale = _get_dispatch_arg(args, kwargs, 16, "w2_scale")
+
+    if not all(
+        isinstance(tensor, torch.Tensor)
+        for tensor in (hidden_states, w1, w2, topk_ids, w1_scale, w2_scale)
+    ):
+        return False
+
+    return _is_qwen_fp8_moe_shape(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_ids=topk_ids,
+        activation=_get_dispatch_arg(args, kwargs, 5, "activation", "silu"),
+        apply_router_weight_on_input=_get_dispatch_arg(
+            args, kwargs, 6, "apply_router_weight_on_input", False
+        ),
+        use_fp8_w8a8=_get_dispatch_arg(args, kwargs, 7, "use_fp8_w8a8", False),
+        use_int8_w8a8=_get_dispatch_arg(args, kwargs, 8, "use_int8_w8a8", False),
+        use_int8_w8a16=_get_dispatch_arg(args, kwargs, 9, "use_int8_w8a16", False),
+        use_int4_w4a16=_get_dispatch_arg(args, kwargs, 10, "use_int4_w4a16", False),
+        ocp_mx_scheme=_get_dispatch_arg(args, kwargs, 11, "ocp_mx_scheme"),
+        per_channel_quant=_get_dispatch_arg(
+            args, kwargs, 12, "per_channel_quant", False
+        ),
+        expert_map=_get_dispatch_arg(args, kwargs, 14, "expert_map"),
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        a1_scale=_get_dispatch_arg(args, kwargs, 19, "a1_scale"),
+        a2_scale=_get_dispatch_arg(args, kwargs, 20, "a2_scale"),
+        block_shape=_get_dispatch_arg(args, kwargs, 21, "block_shape"),
+        w1_bias=_get_dispatch_arg(args, kwargs, 22, "w1_bias"),
+        w2_bias=_get_dispatch_arg(args, kwargs, 23, "w2_bias"),
+        min_tokens=0,
+    )
+
+
 def _musa_fused_experts_impl_dispatch(*args, **kwargs) -> torch.Tensor:
-    # The native GEMV MoE path (fused_experts_impl) is opt-in: it can hurt some
-    # prefill workloads, but DeepSeek-V4-Flash-Base TP8 graph+MTP decode depends
-    # on it for its accepted baseline. Default to the upstream implementation for
-    # other models; platform.py opts DeepSeek-V4 in per serving process.
+    # DeepSeek-V4 keeps its existing profile gate. Qwen3.5 FP8 MoE uses the MUSA
+    # implementation by tensor signature so serving does not need path envs.
     if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV", "0") == "1":
+        return fused_experts_impl(*args, **kwargs)
+    if _is_qwen_fp8_moe_dispatch(args, kwargs):
         return fused_experts_impl(*args, **kwargs)
     return _upstream_fused_moe._musa_original_fused_experts_impl(*args, **kwargs)
 
