@@ -29,7 +29,6 @@ DEFAULT_M_LIST = (
     "60001,65536,68936,80012,88936,131072"
 )
 DEFAULT_OUT_DIR = Path("/tmp/vllm_musa_qwen_fp8_moe_threshold")
-QWEN_PREFILL_MIN_ATTR = "_QWEN_FP8_MOE_DEEPGEMM_PREFILL_MIN_TOKENS"
 DISABLE_QWEN_PREFILL_TOKENS = 1 << 60
 
 
@@ -46,12 +45,27 @@ def sync() -> None:
 
 @contextmanager
 def patched_qwen_prefill_threshold(fused_moe_module, min_tokens: int):
-    old_value = getattr(fused_moe_module, QWEN_PREFILL_MIN_ATTR)
+    # Force the unified dispatch to grouped DeepGEMM at a chosen crossover via
+    # the global env override, or disable it entirely for the native baseline.
+    from vllm_musa.model_executor.layers.fused_moe import moe_dispatch
+
+    names = ("VLLM_MUSA_MOE_DEEPGEMM", "VLLM_MUSA_MOE_DEEPGEMM_MIN_TOKENS")
+    saved = {name: os.environ.get(name) for name in names}
     try:
-        setattr(fused_moe_module, QWEN_PREFILL_MIN_ATTR, min_tokens)
+        if min_tokens >= DISABLE_QWEN_PREFILL_TOKENS:
+            os.environ["VLLM_MUSA_MOE_DEEPGEMM"] = "0"
+        else:
+            os.environ["VLLM_MUSA_MOE_DEEPGEMM"] = "1"
+            os.environ["VLLM_MUSA_MOE_DEEPGEMM_MIN_TOKENS"] = str(min_tokens)
+        moe_dispatch.reset_tuned_cache()
         yield
     finally:
-        setattr(fused_moe_module, QWEN_PREFILL_MIN_ATTR, old_value)
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        moe_dispatch.reset_tuned_cache()
 
 
 def _git_value(args: list[str]) -> str:
