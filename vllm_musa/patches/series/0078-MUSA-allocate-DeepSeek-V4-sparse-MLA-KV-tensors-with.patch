@@ -5,14 +5,14 @@ Subject: [PATCH] MUSA: allocate DeepSeek-V4 sparse MLA KV tensors without
  offsets
 
 ---
- vllm/v1/core/kv_cache_utils.py | 43 ++++++++++++++++++++++++++++++++++
- 1 file changed, 43 insertions(+)
+ vllm/v1/core/kv_cache_utils.py | 49 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 48 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index a3822e7fc..f95ad36e5 100644
+index b13c23d804..bfde074162 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1281,6 +1281,17 @@ def _get_kv_cache_config_packed(
+@@ -1293,6 +1293,17 @@ def _get_kv_cache_config_packed(
      num_blocks = available_memory // total_num_bytes_per_block
      num_blocks = may_override_num_blocks(vllm_config, num_blocks)
  
@@ -30,7 +30,7 @@ index a3822e7fc..f95ad36e5 100644
      total_size = total_num_bytes_per_block * num_blocks
  
      kv_cache_tensors: list[KVCacheTensor] = []
-@@ -1300,6 +1311,38 @@ def _get_kv_cache_config_packed(
+@@ -1312,6 +1323,37 @@ def _get_kv_cache_config_packed(
      return num_blocks, kv_cache_tensors
  
  
@@ -68,3 +68,29 @@ index a3822e7fc..f95ad36e5 100644
  _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
  
  
+@@ -1620,12 +1662,22 @@ def _get_kv_cache_groups_uniform_groups(
+     # Split each SWA UniformKV group into smaller groups to align their #(layer tuples)
+     # Possibly padding layer tuples for this.
+     # Additionally, we also pad KV blocks in each SWA layer, to align the page size
+     # with the corresponding layer in the full-MLA group.
+-    all_page_sizes = full_mla_spec.get_page_sizes()
++    # MUSA: some DeepSeek-V4 sparse MLA layouts have SWA page sizes that are
++    # larger than the full-MLA page sizes. Use all candidate page sizes so SWA
++    # groups can still be padded to a valid same-or-larger page size.
++    all_page_sizes = sorted(
++        ps for spec in grouped_specs for ps in spec.get_page_sizes() if ps > 0
++    )
++    min_page_size = all_page_sizes[0]
++    for spec in grouped_specs:
++        for layer_spec in spec.kv_cache_specs.values():
++            if layer_spec.page_size_bytes == 0:
++                object.__setattr__(layer_spec, "page_size_padded", min_page_size)
++
+     swa_mla_groups = []
+     for sm_spec in swa_mla_specs:
+         sm_page_sizes = sm_spec.get_page_sizes()
+         layers_per_size: dict[int, list[str]] = defaultdict(list)
+-        assert max(sm_page_sizes) <= max(all_page_sizes)
+
+         # Unify page size by padding layers' page_size to the nearest larger page_size.
+         # Compute candidate (nearest larger page_size) for each unique page size.
