@@ -120,6 +120,15 @@ def flash_mla_sparse_fwd(
     topk_length: torch.Tensor | None = None,
     out: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    import os
+    if os.getenv("VLLM_MUSA_SPARSE_MLA_TILELANG", "1") == "1":
+        from vllm_musa.v1.attention.ops.sparse_mla_tilelang import sparse_mla_fwd_bf16
+        _res = sparse_mla_fwd_bf16(q, kv, indices, sm_scale, d_v=d_v)
+        if out is not None:
+            out.copy_(_res)
+            _res = out
+        _empty = q.new_empty(0)
+        return _res, _empty, _empty
     flash_mla = _require_flashmla()
 
     result, max_logits, lse = flash_mla.flash_mla_sparse_fwd(
