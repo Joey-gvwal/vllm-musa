@@ -193,6 +193,7 @@ def _get_backend_priorities(
     if use_mla:
         return [
             AttentionBackendEnum.FLASHMLA,
+            AttentionBackendEnum.FLASHMLA_SPARSE,
             AttentionBackendEnum.TRITON_MLA,
         ]
     else:
@@ -223,6 +224,13 @@ def register_attention_backends() -> None:
     register_backend(
         AttentionBackendEnum.FLASHMLA,
         class_path="vllm_musa.v1.attention.backends.mla.flashmla.MUSAFlashMLABackend",
+    )
+    register_backend(
+        AttentionBackendEnum.FLASHMLA_SPARSE,
+        class_path=(
+            "vllm_musa.v1.attention.backends.mla.flashmla_sparse."
+            "MUSAFlashMLASparseBackend"
+        ),
     )
     register_backend(
         AttentionBackendEnum.FLASH_ATTN,
