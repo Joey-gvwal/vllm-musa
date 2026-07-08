@@ -1,44 +1,42 @@
-# Ready-to-apply port: MUSA sparse-MLA attention via SGLang's TileLang kernel.
-#
-# Deploy as: vllm-musa/vllm_musa/v1/attention/ops/sparse_mla_tilelang.py
-# Then swap the call in vllm_musa/v1/attention/ops/flashmla.py::flash_mla_sparse_fwd
-# (snippet at the bottom of this file).
-#
-# The kernel `sparse_attention_fwd_kernel_v1` is copied VERBATIM from
-# sglang/srt/layers/attention/nsa/tilelang_kernel.py:233-399 — the exact kernel
-# SGLang-MUSA runs for GLM-5.2 DSA. num_stages defaults to 2 there; the MUSA
-# call site passes num_stages=0 (tilelang_kernel.py:1591). Keep num_stages=0.
+# MUSA sparse-MLA attention via SGLang's MUSA-tuned TileLang kernel.
+# Kernel = musa_sparse_attention_fwd_kernel_v1, verbatim from
+# sglang/srt/layers/attention/nsa/tilelang_kernel.py:402-614 (annotate_layout
+# per-GEMM fixes the KV_shared layout conflict on MUSA tilelang).
 
 import tilelang
 import tilelang.language as T
 import torch
 
 tilelang.set_log_level("WARNING")
-
-pass_configs = {
-    tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
-    tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
-}
-if hasattr(tilelang.PassConfigKey, "TL_DISABLE_FAST_MATH"):
-    pass_configs[tilelang.PassConfigKey.TL_DISABLE_FAST_MATH] = True
-elif hasattr(tilelang.PassConfigKey, "TL_ENABLE_FAST_MATH"):
-    pass_configs[tilelang.PassConfigKey.TL_ENABLE_FAST_MATH] = False
-
-# MUSA: TileLang disk cache is unreliable; recompile each process.
 tilelang.disable_cache()
 
 
-# --- BEGIN verbatim copy from sglang nsa/tilelang_kernel.py:233-399 ---
 @tilelang.jit(
     out_idx=[-1],
     pass_configs={
         tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
         tilelang.PassConfigKey.TL_DISABLE_WARP_SPECIALIZED: True,
+        tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
+        tilelang.PassConfigKey.TL_ENABLE_REDUCE_BURST: False,
     },
+    compile_flags=[
+        "-fmusa-flush-denormals-to-zero",
+        "-mllvm", "-misched=mtgpu-max-ilp",
+        "-mllvm", "-mtgpu-if-convert=1",
+        "-mllvm", "-mtgpu-tiny-offset-hint=1",
+        "-mllvm", "-mtgpu-enable-postra-sched=0",
+        "-mllvm", "-misched-recompute-slotindex=1",
+        "-mllvm", "-mtgpu-combine-instr-with-burst=1",
+        "-mllvm", "-mtgpu-combine-fop-instr=1",
+        "-fno-signed-zeros",
+        "-fno-strict-aliasing",
+        "-mllvm", "-mtgpu-load-cluster-mutation=1",
+        "-mllvm", "--num-dwords-of-load-in-mutation=64",
+    ],
 )
-def sparse_attention_fwd_kernel_v1(
+def musa_sparse_attention_fwd_kernel_v1(
     num_heads, dim, tail_dim, topk, *, kv_group=1, sm_scale=None,
-    is_causal=True, block_I=64, num_stages=2, threads=256,
+    is_causal=True, block_I=64, num_stages=0, threads=512,
 ):
     assert dim == tilelang.math.next_power_of_2(dim), f"dim={dim}"
     assert tail_dim == tilelang.math.next_power_of_2(tail_dim), f"tail_dim={tail_dim}"
@@ -61,7 +59,7 @@ def sparse_attention_fwd_kernel_v1(
     accum_dtype = "float"
 
     H = head_kv
-    padded_H = max(tilelang.math.next_power_of_2(head_kv), 16)
+    padded_H = max(tilelang.math.next_power_of_2(head_kv), 64)
     if padded_H != H:
         assert kv_group == 1
     BI = block_I
@@ -87,7 +85,6 @@ def sparse_attention_fwd_kernel_v1(
             Q_tail_shared = T.alloc_shared([H_per_block, D_tail], dtype)
             KV_shared = T.alloc_shared([BI, D], dtype)
             K_tail_shared = T.alloc_shared([BI, D_tail], dtype)
-            O_shared = T.alloc_shared([H_per_block, D], dtype)
             mask = T.alloc_fragment([BI], "bool")
             acc_o = T.alloc_fragment([H_per_block, D], accum_dtype)
             acc_s = T.alloc_fragment([H_per_block, BI], accum_dtype)
@@ -107,20 +104,26 @@ def sparse_attention_fwd_kernel_v1(
             H0 = g_i * padded_H + (0 if REPLICATE_H == 1 else (bx % REPLICATE_H) * 64)
             H1 = H0 + H_per_block
 
-            T.copy(Q[b_i, s_i, H0:H1, :D], Q_shared)
-            T.copy(Q[b_i, s_i, H0:H1, D:], Q_tail_shared)
+            T.copy(Q[b_i, s_i, H0:H1, :D], Q_shared, force_async_copy=True)
+            T.copy(Q[b_i, s_i, H0:H1, D:], Q_tail_shared, force_async_copy=True)
 
             for i_i in T.Pipelined(NI, num_stages=num_stages):
                 for bi_i in T.Parallel(BI):
                     mask[bi_i] = Indices[b_i, s_i, g_i, i_i * BI + bi_i] >= 0
+
+                T.annotate_layout(
+                    {KV_shared: tilelang.layout.make_sqmma_swizzled_layout(KV_shared, k_major=True)},
+                    allow_reannotation=True,
+                )
                 for bi_i, d_i in T.Parallel(BI, D):
                     KV_shared[bi_i, d_i] = KV[b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i]
                 for bi_i, d_i in T.Parallel(BI, D_tail):
                     K_tail_shared[bi_i, d_i] = KV[b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, D + d_i]
+
                 for h_i, bi_i in T.Parallel(H_per_block, BI):
                     acc_s[h_i, bi_i] = T.if_then_else(mask[bi_i], 0, -T.infinity(acc_s.dtype))
-                T.gemm(Q_shared, KV_shared, acc_s, transpose_B=True, policy=T.GemmWarpPolicy.FullCol)
-                T.gemm(Q_tail_shared, K_tail_shared, acc_s, transpose_B=True, policy=T.GemmWarpPolicy.FullCol)
+                T.gemm(Q_shared, KV_shared, acc_s, transpose_B=True, policy=T.GemmWarpPolicy.FullRow)
+                T.gemm(Q_tail_shared, K_tail_shared, acc_s, transpose_B=True, policy=T.GemmWarpPolicy.FullRow)
                 T.copy(m_i, m_i_prev)
                 T.reduce_max(acc_s, m_i, dim=1, clear=False)
                 for h_i in T.Parallel(H_per_block):
@@ -132,37 +135,35 @@ def sparse_attention_fwd_kernel_v1(
                     sumexp[h_i] = sumexp[h_i] * alpha[h_i] + sumexp_i[h_i]
                 for h_i, d_i in T.Parallel(H_per_block, D):
                     acc_o[h_i, d_i] = acc_o[h_i, d_i] * alpha[h_i]
+
                 T.copy(acc_s, S_shared)
-                T.gemm(S_shared, KV_shared, acc_o, policy=T.GemmWarpPolicy.FullCol)
+                T.annotate_layout(
+                    {KV_shared: tilelang.layout.make_sqmma_swizzled_layout(KV_shared, continuity=64, k_major=False)},
+                    allow_reannotation=True,
+                )
+                for bi_i, d_i in T.Parallel(BI, D):
+                    KV_shared[bi_i, d_i] = KV[b_i, Indices[b_i, s_i, g_i, i_i * BI + bi_i], g_i, d_i]
+                T.gemm(S_shared, KV_shared, acc_o, policy=T.GemmWarpPolicy.FullRow)
 
             for h_i, d_i in T.Parallel(H_per_block, D):
                 acc_o[h_i, d_i] /= sumexp[h_i]
             for h_i in T.Parallel(H_per_block):
                 sumexp[h_i] = T.log2(sumexp[h_i]) + m_i[h_i] * sm_scale
-            T.copy(acc_o, O_shared)
             T.copy(acc_o, Output[b_i, s_i, H0:H1, :])
 
     return main
-# --- END verbatim copy ---
 
 
 def sparse_mla_fwd_bf16(q, kv, indices, sm_scale, d_v=512):
-    """MUSA bf16 sparse-MLA forward — mate-`flash_mla_sparse_fwd`-compatible.
-
-    q       [T, H, 576] bf16   (nope 512 + rope 64)
-    kv      [slots, 1, 576] bf16
-    indices [T, 1, 2048] int32 (-1 = invalid, absolute rows into kv)
-    returns [T, H, 512] bf16
-    """
     num_heads = q.shape[1]
     dim = q.shape[2]
     tail_dim = dim - d_v
     topk = indices.shape[-1]
-    assert topk == 2048, f"kernel requires topk==2048, got {topk}; right-pad indices with -1"
-    kernel = sparse_attention_fwd_kernel_v1(
+    assert topk == 2048, f"kernel requires topk==2048, got {topk}"
+    kernel = musa_sparse_attention_fwd_kernel_v1(
         num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, num_stages=0
     )
-    out = kernel(q.unsqueeze(0), kv.unsqueeze(0), indices.unsqueeze(0))  # [1, T, H, 512]
+    out = kernel(q.unsqueeze(0), kv.unsqueeze(0), indices.unsqueeze(0))
     return out.squeeze(0)
 
 
@@ -170,7 +171,6 @@ _PREWARMED = set()
 
 
 def prewarm(num_heads=64, d_v=512, tail_dim=64, topk=2048, device="musa", sm_scale=1.0):
-    """Compile the kernel OUTSIDE CUDAGraph capture (first-compile-in-capture deadlocks)."""
     key = (num_heads, d_v, tail_dim, topk)
     if key in _PREWARMED:
         return
@@ -179,5 +179,3 @@ def prewarm(num_heads=64, d_v=512, tail_dim=64, topk=2048, device="musa", sm_sca
     idx = torch.full((1, 1, topk), -1, dtype=torch.int32, device=device)
     sparse_mla_fwd_bf16(q, kv, idx, sm_scale, d_v=d_v)
     _PREWARMED.add(key)
-
-
