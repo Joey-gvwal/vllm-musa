@@ -642,8 +642,6 @@ class MUSAPlatformBase(Platform):
             or model_config.is_hybrid
         ):
             return
-        if _is_deepseek_v4_model(model_config):
-            return
         backend_cls = cls._find_non_ssm_backend(vllm_config)
         if backend_cls is None:
             return
