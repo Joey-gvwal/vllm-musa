@@ -15,8 +15,6 @@ FROM base AS apt_base
 ARG PYTHON_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_CACHE_DIR=/root/.cache/pip \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
 RUN sed -i 's@http://archive.ubuntu.com/ubuntu/@http://mirrors.aliyun.com/ubuntu/@g' /etc/apt/sources.list
@@ -198,8 +196,8 @@ RUN printf 'deb [trusted=true] %s jammy main\n' "${MUSA_APT_SOURCE}" \
 
 # Point /usr/local/musa at whichever /usr/local/musa-* dir actually holds the
 # runtime library (libmusart.so.5.*) and register the MUSA lib dirs, in case a
-# base image aimed the symlink at a toolkit-less dir. Runs before the shims so
-# they act on the right lib dir; a no-op on a correctly set-up base.
+# base image aimed the symlink at a toolkit-less dir. This is a no-op on a
+# correctly set-up base.
 RUN real_lib="$(ls /usr/local/musa-*/lib/libmusart.so.5.* 2>/dev/null | sort -V | tail -1)"; \
     if [ -n "${real_lib}" ]; then \
         musa_dir="$(readlink -f "$(dirname "${real_lib}")/..")"; \
@@ -216,29 +214,6 @@ RUN real_lib="$(ls /usr/local/musa-*/lib/libmusart.so.5.* 2>/dev/null | sort -V 
       echo /usr/local/mtshmem/lib; \
       echo /usr/lib/x86_64-linux-gnu; } \
       > /etc/ld.so.conf.d/musa-runtime.conf; \
-    ldconfig
-
-# --- Runtime compatibility shims for older MUSA 5.1 overrides ---
-# The default runtime is 5.2, matching the torch/torch_musa wheel line. When
-# intentionally overriding MUSA_RUNTIME_VERSION to 5.1, two 5.1 libs otherwise
-# break `import torch`:
-#   1. libmupti: 5.1 ships libmupti.so.1.2; the wheels link soname libmupti.so.1.
-#   2. libmusolver: the 5.1 build leaves LAPACK zgeqr2_ undefined -- add OpenBLAS
-#      as a direct NEEDED of libmusolver only (surgical; torch keeps using MKL).
-# Guarded, no-op on the matching 5.2 runtime.
-RUN musa_lib="${MUSA_HOME}/lib"; \
-    mupti_target="$(ls "${musa_lib}"/libmupti.so.1.* 2>/dev/null | sort -V | tail -1)"; \
-    if [[ -n "${mupti_target}" && ! -e "${musa_lib}/libmupti.so.1" ]]; then \
-        ln -sf "$(basename "${mupti_target}")" "${musa_lib}/libmupti.so.1"; \
-        echo "musa5.1-shim: libmupti.so.1 -> $(basename "${mupti_target}")"; \
-    fi; \
-    solver="$(readlink -f "${musa_lib}/libmusolver.so.1" 2>/dev/null)"; \
-    if [[ -n "${solver}" && -e "${solver}" ]] \
-        && nm -D "${solver}" 2>/dev/null | grep -qE ' U zgeqr2_?$' \
-        && ! objdump -p "${solver}" 2>/dev/null | grep -q 'NEEDED.*libopenblas'; then \
-        patchelf --add-needed libopenblas.so.0 "${solver}"; \
-        echo "musa5.1-shim: libopenblas.so.0 added to $(basename "${solver}")"; \
-    fi; \
     ldconfig
 
 FROM devel AS vllm_musa_deps
@@ -264,6 +239,9 @@ ENV MTGPU_TARGET=mp_31 \
 # MUSA_PIP_INDEX_URL.
 ARG PYPI_INDEX_URL
 ARG MUSA_PIP_INDEX_URL
+
+ENV PIP_CACHE_DIR=/root/.cache/pip \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 COPY requirements/ /workspace/vllm-musa/requirements/
 WORKDIR /workspace/vllm-musa
@@ -356,7 +334,7 @@ RUN printf '%s\n' \
         '    module = importlib.import_module(module_name)' \
         '    print("PASS import %s version=%s" % (module_name, getattr(module, "__version__", "unknown")))' \
         > /tmp/vllm_musa_import_check.py && \
-    MTHREADS_VISIBLE_DEVICES=all python /tmp/vllm_musa_import_check.py && \
+    python /tmp/vllm_musa_import_check.py && \
     rm /tmp/vllm_musa_import_check.py
 
 # Build vllm-rs from the vLLM tree cloned and patched by vllm-musa setup.py,
@@ -438,7 +416,8 @@ FROM mooncake AS final
 
 ARG BUILD_VLLM_RS=1
 
-ENV MTHREADS_VISIBLE_DEVICES=all
+ENV MTHREADS_VISIBLE_DEVICES=all \
+    MUSA_VISIBLE_DEVICES=all
 
 COPY --from=vllm_rs_build /tmp/vllm-rs-artifacts/ /tmp/vllm-rs-artifacts/
 
