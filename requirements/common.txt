@@ -1,0 +1,9 @@
+# Runtime Python dependencies that are portable across MUSA images.
+torchada>=0.1.70
+mthreads-ml-py>=2.2.11
+numpy==1.26
+openai>=2.24.0
+transformers==5.5.3
+einops
+ray>=2.47.1,<=2.48.0
+click==8.2.0

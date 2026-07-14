@@ -14,8 +14,75 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_torchada_floor_is_consistent():
     requirement = dependencies.TORCHADA_REQUIREMENT
     assert requirement == "torchada>=0.1.70"
-    assert f'"{requirement}"' in (ROOT / "pyproject.toml").read_text()
+    assert "dynamic = [\"dependencies\"]" in (ROOT / "pyproject.toml").read_text()
+    assert "torchada>=0.1.70" in (
+        ROOT / "requirements" / "common.txt"
+    ).read_text()
     assert "TORCHADA_REQUIREMENT," in (ROOT / "setup.py").read_text()
+
+
+def test_musa_image_runtime_dependency_contract():
+    private_requirements = (
+        ROOT / "requirements" / "musa_private.txt"
+    ).read_text().splitlines()
+    runtime_requirements = (
+        ROOT / "requirements" / "vllm_runtime_transitive.txt"
+    ).read_text().splitlines()
+    dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+
+    assert "triton==3.2.0" in private_requirements
+    assert "fastapi[standard]" in runtime_requirements
+    assert "pycountry" in runtime_requirements
+    assert '("triton", "triton", requirement_prefix("triton"))' in dockerfile
+    assert '("uvloop", "uvloop", "")' in dockerfile
+    assert '("pycountry", "pycountry", "")' in dockerfile
+
+
+def test_musa_image_stage_and_optional_component_contract():
+    dockerfile = (ROOT / "docker" / "musa.Dockerfile").read_text()
+    build_script = (ROOT / "docker" / "build_image.sh").read_text()
+
+    stage_markers = (
+        "FROM apt_base AS devel",
+        "FROM devel AS vllm_musa_deps",
+        "FROM vllm_musa_deps AS vllm_musa_installed",
+        "FROM vllm_musa_installed AS vllm_rs_build",
+        "FROM vllm_musa_installed AS mooncake",
+        "FROM mooncake AS final",
+    )
+    stage_positions = [dockerfile.index(marker) for marker in stage_markers]
+    assert stage_positions == sorted(stage_positions)
+    assert "FROM apt_base AS runtime" not in dockerfile
+
+    base_stage = dockerfile.split("FROM base AS apt_base", 1)[0]
+    for name in (
+        "MUSA_HOME",
+        "MTGPU_TARGET",
+        "TORCH_MUSA_ARCH_LIST",
+        "MATE_MUSA_ARCH_LIST",
+    ):
+        assert name not in base_stage
+
+    deps_stage = dockerfile.split("FROM devel AS vllm_musa_deps", 1)[1].split(
+        "FROM vllm_musa_deps AS vllm_musa_installed", 1
+    )[0]
+    assert "MTGPU_TARGET=mp_31" in deps_stage
+    assert "TORCH_MUSA_ARCH_LIST=31" in deps_stage
+    assert "MATE_MUSA_ARCH_LIST=3.1" in deps_stage
+
+    mooncake_stage = dockerfile.split(
+        "FROM vllm_musa_installed AS mooncake", 1
+    )[1].split("FROM mooncake AS final", 1)[0]
+    assert "MTHREADS_VISIBLE_DEVICES" not in mooncake_stage
+    assert "build.sh --use-mcc" not in mooncake_stage
+    assert "cmake .. -DUSE_MUSA=ON -DUSE_ETCD=OFF" in mooncake_stage
+    assert "OUTPUT_DIR=dist ./scripts/build_wheel.sh" not in mooncake_stage
+    assert "-DSTORE_USE_ETCD=ON" not in mooncake_stage
+
+    assert "ARG BUILD_VLLM_RS=1" in dockerfile
+    assert "/tmp/vllm-rs-artifacts/build-mode" in dockerfile
+    assert 'BUILD_VLLM_RS="${BUILD_VLLM_RS:-1}"' in build_script
+    assert '--build-arg BUILD_VLLM_RS="${BUILD_VLLM_RS}"' in build_script
 
 
 def test_setup_finds_local_build_helpers_before_importing_them():

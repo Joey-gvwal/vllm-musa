@@ -6,6 +6,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
@@ -14,19 +15,13 @@ import torch
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
 
-from build_utils.dependencies import (
+from build_utils.dependencies import (  # noqa: E402
     TORCHADA_REQUIREMENT,
     ensure_torchada_installed,
 )
 
 
-def _ensure_numpy_compatible():
-    """Ensure numpy<2 (MUSA/torch requirement); the vLLM install can pull numpy>=2."""
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy<2", "-q"])
-
-
 # Run dependency checks at setup start
-_ensure_numpy_compatible()
 ensure_torchada_installed()
 
 from setuptools import setup
@@ -53,6 +48,32 @@ def _read_pins():
 
 
 _PINS = _read_pins()
+
+
+def _read_requirements(filename, seen=None):
+    """Read pip requirements files with local -r includes."""
+    requirements_dir = root / "requirements"
+    path = requirements_dir / filename
+    seen = set() if seen is None else seen
+    if path in seen:
+        return []
+    seen.add(path)
+
+    requirements = []
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if " #" in line:
+            line = line.split(" #", 1)[0].strip()
+        if line.startswith("--"):
+            continue
+        if line.startswith("-r "):
+            requirements.extend(_read_requirements(line.split(maxsplit=1)[1], seen))
+        else:
+            requirements.append(line)
+    return requirements
+
 
 configure_compiler_cache(root)
 
@@ -352,6 +373,27 @@ class _CustomBuildExt(BuildExtension):
     """Custom build extension that clones third-party repositories before building."""
 
     @staticmethod
+    def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
+        attempts = int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS", "8"))
+        delay_s = int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S", "10"))
+        for attempt in range(1, attempts + 1):
+            try:
+                subprocess.check_call(cmd, cwd=cwd)
+                return
+            except subprocess.CalledProcessError:
+                if cleanup_path is not None:
+                    shutil.rmtree(cleanup_path, ignore_errors=True)
+                if attempt == attempts:
+                    raise
+                sleep_s = delay_s * attempt
+                print(
+                    f"Git command failed (attempt {attempt}/{attempts}); "
+                    f"retrying in {sleep_s}s: {' '.join(map(str, cmd))}",
+                    flush=True,
+                )
+                time.sleep(sleep_s)
+
+    @staticmethod
     def _clone_and_checkout(repo_path, repo_url, git_tag, git_shallow):
         """Clone a git repository and checkout a specific tag/commit."""
         repo_path.parent.mkdir(exist_ok=True)
@@ -360,10 +402,14 @@ class _CustomBuildExt(BuildExtension):
             if git_shallow:
                 clone_cmd += ["--depth", "1"]
             clone_cmd += [repo_url, str(repo_path)]
-            subprocess.check_call(clone_cmd)
+            _CustomBuildExt._git_check_call_with_retries(
+                clone_cmd, cleanup_path=repo_path
+            )
             subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
         else:
-            subprocess.check_call(["git", "fetch", "--all"], cwd=repo_path)
+            _CustomBuildExt._git_check_call_with_retries(
+                ["git", "fetch", "--all"], cwd=repo_path
+            )
             subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
         subprocess.check_call(["git", "reset", "--hard", git_tag], cwd=repo_path)
         subprocess.check_call(["git", "clean", "-fdx"], cwd=repo_path)
@@ -483,9 +529,6 @@ class _CustomBuildExt(BuildExtension):
 
         self._install_vllm(_VLLM_REPO.source_dir)
 
-        # Re-ensure numpy<2 after vllm installation (vllm may pull in numpy>=2)
-        _ensure_numpy_compatible()
-
         super().run()
 
 
@@ -493,13 +536,10 @@ setup(
     ext_modules=EXT_MODULES,
     cmdclass={"build_ext": _CustomBuildExt.with_options(use_ninja=True)},
     include_package_data=False,
-    # pinned here because --no-build-isolation skips pyproject.toml deps
-    install_requires=[
-        TORCHADA_REQUIREMENT,
-        "mthreads-ml-py>=2.2.11",
-        "numpy<2",
-        "openai>=2.24.0",
-    ],
+    # Runtime dependencies live in requirements/musa.txt so Docker and package
+    # metadata share one source. MUSA-private pins, including torch/torch_musa,
+    # are kept in requirements/musa_private.txt.
+    install_requires=_read_requirements("musa.txt"),
 )
 
 # place the built vllm.* extensions into the editable vLLM clone (see the function).

@@ -1,4 +1,7 @@
 [build-system]
+# Keep build tool pins mirrored in requirements/build.txt. vllm-musa is
+# installed with --no-build-isolation in MUSA images after MUSA-private runtime
+# requirements such as torch/torch_musa have been installed.
 requires = ["setuptools>=80.10.2", "wheel"]
 build-backend = "setuptools.build_meta"
 
@@ -25,18 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = [
-    "torch",
-    "torch_musa",
-    "torchada>=0.1.70",
-    "mate>=0.2.3",
-    "flash_attn_3>=0.1.4",
-    "mthreads-ml-py>=2.2.11",
-    "numpy<2.0",
-    "openai>=2.24.0",
-    "transformers==5.5.3",
-    "tilelang_musa>=0.1.8"
-]
+dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 dev = [

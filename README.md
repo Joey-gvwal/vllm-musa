@@ -44,7 +44,7 @@ The plugin leverages the following key components:
 
 | vLLM Version | PyTorch Version | Engine  | Status       |
 |--------------|-----------------|---------|--------------|
-| v0.24.0       | 2.9.0           | V1 only | ✅ Supported |
+| v0.24.0       | 2.9.x           | V1 only | ✅ Supported |
 
 > **Note**: This plugin uses vLLM's V1 engine architecture (the V0 engine is not supported). Within the V1 engine, vLLM v0.24.0 auto-selects its **Model Runner V2** for certain architectures (e.g. Qwen3, DeepSeek-V2, Llama) and the V1 model runner for others; both are supported on MUSA. Set `VLLM_USE_V2_MODEL_RUNNER=1` or `0` to force one.
 
@@ -57,7 +57,15 @@ The plugin leverages the following key components:
     cd vllm-musa
     ```
 
-2. Install vLLM Hardware Plugin for Moore Threads MUSA:
+2. Install Python dependencies before installing `vllm-musa`. The MUSA
+   requirements entrypoint includes common dependencies and MUSA-private pins
+   such as `torch` and `torch_musa`.
+
+    ```bash
+    pip install -r requirements/build.txt -r requirements/musa.txt
+    ```
+
+3. Install vLLM Hardware Plugin for Moore Threads MUSA:
 
     ```bash
     # Standard installation (installs vLLM MUSA plugin and vLLM)
@@ -67,7 +75,7 @@ The plugin leverages the following key components:
     pip install -e . --no-build-isolation -v
     ```
 
-3. Verify the installation:
+4. Verify the installation:
 
     ```bash
     # Check plugin registration
@@ -105,6 +113,7 @@ Useful commands:
 
 ```bash
 ccache --zero-stats
+pip install -r requirements/build.txt -r requirements/musa.txt
 pip install -e . --no-build-isolation -v
 ccache --show-stats
 ```
