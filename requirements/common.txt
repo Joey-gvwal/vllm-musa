@@ -1,5 +1,5 @@
 # Runtime Python dependencies that are portable across MUSA images.
-torchada>=0.1.70
+torchada>=0.1.72
 mthreads-ml-py>=2.2.11
 numpy==1.26
 openai>=2.24.0
