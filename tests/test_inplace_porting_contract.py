@@ -1,24 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Cross-repository contract checks for torchada's in-place source porter."""
 
-import sys
 from pathlib import Path
-
-import pytest
-
-from build_utils import dependencies
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_torchada_floor_is_consistent():
-    requirement = dependencies.TORCHADA_REQUIREMENT
-    assert requirement == "torchada>=0.1.70"
     assert "dynamic = [\"dependencies\"]" in (ROOT / "pyproject.toml").read_text()
     assert "torchada>=0.1.70" in (
         ROOT / "requirements" / "common.txt"
     ).read_text()
-    assert "TORCHADA_REQUIREMENT," in (ROOT / "setup.py").read_text()
 
 
 def test_musa_image_runtime_dependency_contract():
@@ -88,7 +80,16 @@ def test_musa_image_stage_and_optional_component_contract():
 def test_setup_finds_local_build_helpers_before_importing_them():
     setup = (ROOT / "setup.py").read_text()
     assert setup.index("sys.path.insert(0, str(root))") < setup.index(
-        "from build_utils.dependencies import"
+        "from build_utils.ccache import"
+    )
+
+
+def test_setup_activates_torchada_without_installing_dependencies():
+    setup = (ROOT / "setup.py").read_text()
+    assert "ensure_torchada_installed" not in setup
+    assert setup.index("import torchada") < setup.index("import torch\n")
+    assert setup.index("import torchada") < setup.index(
+        "from torch.utils.cpp_extension import"
     )
 
 
@@ -98,39 +99,11 @@ def test_archive_vllm_install_uses_upstream_version_override():
     assert "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM" not in setup
 
 
-def test_stale_torchada_is_upgraded_before_import(monkeypatch):
-    observed = []
-    versions = iter(["0.1.69", "0.1.70"])
-
-    monkeypatch.setattr(
-        dependencies, "_installed_version", lambda _name: next(versions)
-    )
-    monkeypatch.setattr(
-        dependencies,
-        "_install",
-        lambda requirement: observed.append(("install", requirement)),
-    )
-    monkeypatch.setattr(
-        dependencies.importlib,
-        "import_module",
-        lambda name: observed.append(("import", name)) or object(),
-    )
-    monkeypatch.delitem(sys.modules, "torchada", raising=False)
-
-    dependencies.ensure_torchada_installed()
-
-    assert observed == [
-        ("install", "torchada>=0.1.70"),
-        ("import", "torchada"),
-    ]
-
-
-def test_loaded_stale_torchada_fails_before_mixing_versions(monkeypatch):
-    monkeypatch.setattr(dependencies, "_installed_version", lambda _name: "0.1.69")
-    monkeypatch.setitem(sys.modules, "torchada", object())
-
-    with pytest.raises(RuntimeError, match="restart the build process"):
-        dependencies.ensure_torchada_installed()
+def test_source_distribution_manifest_includes_setup_inputs():
+    manifest = (ROOT / "MANIFEST.in").read_text()
+    assert "recursive-include requirements *.txt" in manifest
+    assert "recursive-include build_utils *.py" in manifest
+    assert "include third_party/PINS" in manifest
 
 
 def test_no_legacy_mirror_contract_remains():

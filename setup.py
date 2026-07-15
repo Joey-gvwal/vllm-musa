@@ -10,24 +10,17 @@ import time
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
+# Activate MUSA patches before importing the torch ecosystem.
+import torchada  # noqa: F401
 import torch
 
 root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(root))
 
-from build_utils.dependencies import (  # noqa: E402
-    TORCHADA_REQUIREMENT,
-    ensure_torchada_installed,
-)
-
-
-# Run dependency checks at setup start
-ensure_torchada_installed()
-
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-from build_utils.ccache import configure_compiler_cache
+from build_utils.ccache import configure_compiler_cache  # noqa: E402
 
 third_party = Path("third_party")
 arch = platform.machine().lower()
