@@ -24,7 +24,7 @@ index fe2b268cd..eadc6f533 100644
  from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
-@@ -31,6 +34,982 @@ from vllm.v1.worker.workspace import current_workspace_manager
+@@ -31,6 +34,1311 @@ from vllm.v1.worker.workspace import current_workspace_manager
  
  logger = init_logger(__name__)
  
@@ -197,6 +197,20 @@ index fe2b268cd..eadc6f533 100644
 +    return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_NATIVE", "1") == "1"
 +
 +
++def _musa_sparse_indexer_glm52_native_enabled() -> bool:
++    return os.getenv("VLLM_MUSA_GLM52_INDEXER_TOPK_NATIVE", "1") == "1"
++
++
++def _musa_sparse_indexer_glm52_fused_enabled() -> bool:
++    # The single-block fused scorer is useful for correctness experiments but
++    # slower than the materialized MQA scorer on S5000 for rows above top-k.
++    return os.getenv("VLLM_MUSA_GLM52_INDEXER_TOPK_FUSED", "0") == "1"
++
++
++def _musa_sparse_indexer_glm52_materialized_enabled() -> bool:
++    return os.getenv("VLLM_MUSA_GLM52_INDEXER_TOPK_MATERIALIZED", "1") == "1"
++
++
 +def _musa_sparse_indexer_materialized_prefill_enabled() -> bool:
 +    return os.getenv(
 +        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
@@ -261,6 +275,174 @@ index fe2b268cd..eadc6f533 100644
 +    return block_table.repeat_interleave(rows // block_rows, dim=0)
 +
 +
++def _musa_try_fill_all_sparse_indexer_indices(
++    hidden_states: torch.Tensor,
++    k_cache_prefix: LayerNameType,
++    topk_tokens: int,
++    topk_indices_buffer: torch.Tensor,
++) -> bool:
++    """Skip indexer scoring when every causal window fits in top-k.
++
++    This is the production form of the GLM-5.2 dashboard SOTA's full-row
++    shortcut: if all valid keys are selected, their scores cannot affect the
++    selected set.  Fill the contiguous local indices directly and avoid KV
++    gather, dequantization, einsum, and top-k entirely.
++    """
++    attn_metadata = get_forward_context().attn_metadata
++    if not isinstance(attn_metadata, dict):
++        return False
++
++    metadata = attn_metadata.get(_resolve_layer_name(k_cache_prefix))
++    if not isinstance(metadata, DeepseekV32IndexerMetadata):
++        return False
++    if int(metadata.max_seq_len) > int(topk_tokens):
++        return False
++
++    topk = min(int(topk_tokens), topk_indices_buffer.shape[1])
++    topk_indices_buffer[: hidden_states.shape[0], :topk] = -1
++    if topk <= 0:
++        return True
++
++    if metadata.num_decodes > 0 and metadata.decode is not None:
++        lengths = metadata.decode.seq_lens.reshape(-1)
++        rows = min(
++            int(metadata.num_decode_tokens),
++            lengths.numel(),
++            topk_indices_buffer.shape[0],
++        )
++        if rows > 0:
++            _musa_custom_ops.sparse_indexer_fill_all(
++                lengths[:rows],
++                topk_indices_buffer[:rows, :topk],
++                topk,
++            )
++
++    if metadata.num_prefills > 0 and metadata.prefill is not None:
++        for chunk in metadata.prefill.chunks:
++            token_start = int(chunk.token_start)
++            token_end = min(
++                int(chunk.token_end),
++                topk_indices_buffer.shape[0],
++            )
++            rows = max(0, token_end - token_start)
++            if rows <= 0:
++                continue
++            lengths = (
++                chunk.cu_seqlen_ke[:rows] - chunk.cu_seqlen_ks[:rows]
++            ).contiguous()
++            _musa_custom_ops.sparse_indexer_fill_all(
++                lengths,
++                topk_indices_buffer[token_start:token_end, :topk],
++                topk,
++            )
++
++    return True
++
++
++def _musa_try_fill_decode_topk_from_materialized_logits(
++    q_quant: torch.Tensor,
++    kv_cache: torch.Tensor,
++    weights: torch.Tensor,
++    decode_metadata,
++    topk_indices: torch.Tensor,
++    topk_tokens: int,
++    head_dim: int,
++    max_model_len: int,
++) -> bool:
++    if (
++        not _musa_sparse_indexer_glm52_materialized_enabled()
++        or head_dim != 128
++        or q_quant.ndim != 3
++        or q_quant.shape[1] != 32
++        or topk_tokens > 2048
++        or q_quant.dtype != torch.float8_e4m3fn
++        or kv_cache.dtype != torch.uint8
++        or weights.dtype != torch.float32
++        or kv_cache.ndim != 3
++        or decode_metadata.schedule_metadata is None
++    ):
++        return False
++
++    context_lens = decode_metadata.seq_lens
++    if context_lens.ndim == 1:
++        context_lens = context_lens.reshape(-1, 1)
++    if context_lens.ndim != 2:
++        return False
++    batch_size, next_n = context_lens.shape
++    rows = min(q_quant.shape[0], context_lens.numel(), topk_indices.shape[0])
++    topk = min(int(topk_tokens), topk_indices.shape[1])
++    materialized_width = max(0, int(max_model_len))
++    if rows <= 0 or topk <= 0:
++        return True
++    if materialized_width <= topk:
++        return False
++    if rows != batch_size * next_n:
++        return False
++
++    context_lens = context_lens.contiguous()
++    if context_lens.dtype != torch.int32:
++        context_lens = context_lens.to(torch.int32)
++    seq_lens = context_lens.reshape(-1)
++    block_table = decode_metadata.block_table[:batch_size].contiguous()
++    q_native = q_quant[:rows].reshape(
++        batch_size,
++        next_n,
++        q_quant.shape[1],
++        q_quant.shape[2],
++    )
++    kv_paged = kv_cache.unsqueeze(-2)
++
++    def _select(logits: torch.Tensor) -> bool:
++        if logits.shape[0] < rows or logits.shape[1] < materialized_width:
++            return False
++        _musa_custom_ops.sparse_indexer_topk_decode(
++            logits[:rows, :materialized_width],
++            seq_lens,
++            topk_indices[:rows, :topk],
++            topk,
++        )
++        return True
++
++    for provider_name in ("mate.deep_gemm", "deep_gemm"):
++        try:
++            if provider_name == "mate.deep_gemm":
++                from mate import deep_gemm as _musa_deep_gemm
++            else:
++                import deep_gemm as _musa_deep_gemm
++
++            logits = _musa_deep_gemm.fp8_paged_mqa_logits(
++                q_native,
++                kv_paged,
++                weights[:rows].contiguous(),
++                context_lens,
++                block_table,
++                decode_metadata.schedule_metadata,
++                materialized_width,
++                False,
++            )
++            if _select(logits):
++                return True
++        except Exception:
++            pass
++
++    try:
++        from vllm.utils import deep_gemm as _vllm_deep_gemm
++
++        logits = _vllm_deep_gemm.fp8_fp4_paged_mqa_logits(
++            (q_native, None),
++            kv_paged,
++            weights[:rows].contiguous(),
++            context_lens,
++            block_table,
++            schedule_metadata=decode_metadata.schedule_metadata,
++            max_model_len=materialized_width,
++            clean_logits=False,
++        )
++        return _select(logits)
++    except Exception:
++        return False
++
++
 +def _musa_try_fill_decode_topk_from_indexer_cache_native(
 +    q_quant: torch.Tensor,
 +    kv_cache: torch.Tensor,
@@ -269,12 +451,66 @@ index fe2b268cd..eadc6f533 100644
 +    topk_indices_buffer: torch.Tensor,
 +    topk_tokens: int,
 +    head_dim: int,
++    max_model_len: int,
++    allow_materialized: bool = True,
 +) -> bool:
++    if allow_materialized and _musa_try_fill_decode_topk_from_materialized_logits(
++        q_quant,
++        kv_cache,
++        weights,
++        decode_metadata,
++        topk_indices_buffer,
++        topk_tokens,
++        head_dim,
++        max_model_len,
++    ):
++        return True
++
++    if (
++        _musa_sparse_indexer_glm52_fused_enabled()
++        and head_dim == 128
++        and q_quant.ndim == 3
++        and q_quant.shape[1] == 32
++        and topk_tokens <= 2048
++        and q_quant.dtype == torch.float8_e4m3fn
++        and kv_cache.dtype == torch.uint8
++        and weights.dtype == torch.float32
++        and decode_metadata.block_table.shape[1] * kv_cache.shape[1] <= 8192
++    ):
++        seq_lens = decode_metadata.seq_lens.reshape(-1)
++        rows = min(
++            q_quant.shape[0],
++            seq_lens.numel(),
++            topk_indices_buffer.shape[0],
++        )
++        topk = min(int(topk_tokens), topk_indices_buffer.shape[1])
++        if rows <= 0 or topk <= 0:
++            return True
++        block_table = _musa_decode_block_table_for_token_rows(
++            decode_metadata.block_table,
++            rows,
++        )
++        if block_table is None:
++            return False
++        _musa_custom_ops.glm52_indexer_topk_decode(
++            q_quant[:rows],
++            kv_cache,
++            weights[:rows],
++            seq_lens[:rows],
++            block_table,
++            topk_indices_buffer[:rows, :topk],
++            topk,
++        )
++        return True
++
 +    if (
 +        not _musa_sparse_indexer_native_decode_enabled()
 +        or head_dim != 128
++        or q_quant.ndim != 3
++        or q_quant.shape[1] != 64
 +        or topk_tokens > 512
 +        or q_quant.dtype != torch.float8_e4m3fn
++        or kv_cache.dtype != torch.uint8
 +        or weights.dtype != torch.float32
 +        or decode_metadata.block_table.shape[1] * kv_cache.shape[1] > 4096
 +    ):
@@ -314,15 +550,29 @@ index fe2b268cd..eadc6f533 100644
 +    topk_tokens: int,
 +    head_dim: int,
 +) -> bool:
++    is_glm52 = (
++        q_quant.ndim == 3
++        and q_quant.shape[1] == 32
++        and topk_tokens <= 2048
++    )
++    is_deepseek_v4 = (
++        q_quant.ndim == 3
++        and q_quant.shape[1] == 64
++        and topk_tokens <= 512
++    )
++    implementation_enabled = (
++        is_glm52 and _musa_sparse_indexer_glm52_materialized_enabled()
++    ) or (
++        is_deepseek_v4 and _musa_sparse_indexer_materialized_prefill_enabled()
++    )
 +    if (
-+        not _musa_sparse_indexer_materialized_prefill_enabled()
++        not implementation_enabled
 +        or head_dim != 128
-+        or topk_tokens > 512
 +        or q_quant.dtype != torch.float8_e4m3fn
 +        or kv_cache.dtype != torch.uint8
 +        or weights.dtype != torch.float32
 +        or kv_cache.ndim != 3
-+        or int(chunk.total_seq_lens) > 4096
++        or (is_deepseek_v4 and int(chunk.total_seq_lens) > 4096)
 +        or int(chunk.num_reqs) != 1
 +    ):
 +        return False
@@ -375,6 +625,16 @@ index fe2b268cd..eadc6f533 100644
 +        logits = logits[:chunk_rows, :total_seq_lens]
 +        starts = row_starts[row_start:row_end]
 +        ends = row_ends[row_start:row_end]
++        if is_glm52:
++            _musa_custom_ops.sparse_indexer_topk(
++                logits,
++                starts,
++                ends,
++                topk_indices[row_start:row_end, :topk],
++                topk,
++            )
++            return True
++
 +        valid_positions = (
 +            (positions.unsqueeze(0) >= starts.unsqueeze(1))
 +            & (positions.unsqueeze(0) < ends.unsqueeze(1))
@@ -532,8 +792,58 @@ index fe2b268cd..eadc6f533 100644
 +    head_dim: int,
 +) -> bool:
 +    if (
++        q_quant.ndim == 3
++        and q_quant.shape[1] == 32
++        and _musa_try_fill_prefill_topk_from_materialized_logits(
++            q_quant,
++            kv_cache,
++            weights,
++            chunk,
++            topk_indices,
++            topk_tokens,
++            head_dim,
++        )
++    ):
++        return True
++
++    if (
++        _musa_sparse_indexer_glm52_fused_enabled()
++        and head_dim == 128
++        and q_quant.ndim == 3
++        and q_quant.shape[1] == 32
++        and topk_tokens <= 2048
++        and q_quant.dtype == torch.float8_e4m3fn
++        and kv_cache.dtype == torch.uint8
++        and weights.dtype == torch.float32
++        and int(chunk.total_seq_lens) <= 8192
++    ):
++        rows = min(
++            q_quant.shape[0],
++            chunk.cu_seqlen_ks.numel(),
++            topk_indices.shape[0],
++        )
++        topk = min(int(topk_tokens), topk_indices.shape[1])
++        if rows <= 0 or topk <= 0:
++            return True
++        _musa_custom_ops.glm52_indexer_topk_prefill(
++            q_quant[:rows],
++            kv_cache,
++            weights[:rows],
++            chunk.block_table,
++            chunk.cu_seq_lens,
++            chunk.token_to_seq,
++            chunk.cu_seqlen_ks[:rows],
++            chunk.cu_seqlen_ke[:rows],
++            topk_indices[:rows, :topk],
++            topk,
++        )
++        return True
++
++    if (
 +        not _musa_sparse_indexer_native_decode_enabled()
 +        or head_dim != 128
++        or q_quant.ndim != 3
++        or q_quant.shape[1] != 64
 +        or topk_tokens > 512
 +        or q_quant.dtype != torch.float8_e4m3fn
 +        or kv_cache.dtype != torch.uint8
@@ -839,6 +1149,7 @@ index fe2b268cd..eadc6f533 100644
 +    weights: torch.Tensor,
 +    topk_tokens: int,
 +    head_dim: int,
++    max_model_len: int,
 +    topk_indices_buffer: torch.Tensor,
 +    use_fp4_cache: bool,
 +) -> torch.Tensor:
@@ -871,6 +1182,7 @@ index fe2b268cd..eadc6f533 100644
 +            topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
 +            topk_tokens,
 +            head_dim,
++            max_model_len,
 +        ):
 +            q_deq = q_quant.to(torch.float32)
 +            weights_fp32 = weights.to(torch.float32)
@@ -903,11 +1215,26 @@ index fe2b268cd..eadc6f533 100644
 +    weights: torch.Tensor,
 +    topk_tokens: int,
 +    head_dim: int,
++    max_model_len: int,
 +    topk_indices_buffer: torch.Tensor,
 +    use_fp4_cache: bool,
 +) -> torch.Tensor:
++    if _musa_try_fill_all_sparse_indexer_indices(
++        hidden_states,
++        k_cache_prefix,
++        topk_tokens,
++        topk_indices_buffer,
++    ):
++        return topk_indices_buffer
++
 +    if _musa_sparse_indexer_is_current_stream_capturing():
-+        if _musa_sparse_indexer_graph_exact_decode_enabled():
++        is_glm52_graph_path = (
++            not isinstance(q_quant, tuple)
++            and q_quant.ndim == 3
++            and q_quant.shape[1] == 32
++            and _musa_sparse_indexer_glm52_materialized_enabled()
++        )
++        if is_glm52_graph_path or _musa_sparse_indexer_graph_exact_decode_enabled():
 +            return _musa_fill_exact_sparse_indexer_indices_capture(
 +                hidden_states,
 +                k_cache_prefix,
@@ -916,6 +1243,7 @@ index fe2b268cd..eadc6f533 100644
 +                weights,
 +                topk_tokens,
 +                head_dim,
++                max_model_len,
 +                topk_indices_buffer,
 +                use_fp4_cache,
 +            )
@@ -987,6 +1315,7 @@ index fe2b268cd..eadc6f533 100644
 +            topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
 +            topk_tokens,
 +            head_dim,
++            max_model_len,
 +        ):
 +            if q_deq is None:
 +                q_deq = q_quant.to(torch.float32)
@@ -1007,7 +1336,7 @@ index fe2b268cd..eadc6f533 100644
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
  
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
-@@ -482,6 +1461,40 @@ class SparseAttnIndexer(CustomOp):
+@@ -482,6 +1790,46 @@ class SparseAttnIndexer(CustomOp):
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
              return self.forward_hip(hidden_states, q_quant, k, weights)
@@ -1016,6 +1345,11 @@ index fe2b268cd..eadc6f533 100644
 +            and (
 +                os.getenv(
 +                    "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL",
++                    "1",
++                )
++                == "1"
++                or os.getenv(
++                    "VLLM_MUSA_ENABLE_GLM52_SPARSE_INDEXER_MUSA_IMPL",
 +                    "1",
 +                )
 +                == "1"
@@ -1035,6 +1369,7 @@ index fe2b268cd..eadc6f533 100644
 +                    weights,
 +                    self.topk_tokens,
 +                    self.head_dim,
++                    self.max_model_len,
 +                    self.topk_indices_buffer,
 +                    self.use_fp4_cache,
 +                )

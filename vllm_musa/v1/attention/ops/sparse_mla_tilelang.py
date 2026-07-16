@@ -1,6 +1,7 @@
-# MUSA sparse-MLA attention using a MUSA-tuned TileLang kernel.
-# Kernel = musa_sparse_attention_fwd_kernel_v1; annotate_layout per GEMM fixes
-# the KV_shared layout conflict on MUSA TileLang.
+# MUSA sparse-MLA attention via SGLang's MUSA-tuned TileLang kernel.
+# Kernel = musa_sparse_attention_fwd_kernel_v1, verbatim from
+# sglang/srt/layers/attention/nsa/tilelang_kernel.py:402-614 (annotate_layout
+# per-GEMM fixes the KV_shared layout conflict on MUSA tilelang).
 
 import tilelang
 import tilelang.language as T
@@ -36,7 +37,6 @@ tilelang.disable_cache()
 def musa_sparse_attention_fwd_kernel_v1(
     num_heads, dim, tail_dim, topk, *, kv_group=1, sm_scale=None,
     is_causal=True, block_I=64, num_stages=0, threads=512,
-    use_topk_length=False,
 ):
     assert dim == tilelang.math.next_power_of_2(dim), f"dim={dim}"
     assert tail_dim == tilelang.math.next_power_of_2(tail_dim), f"tail_dim={tail_dim}"
@@ -55,7 +55,6 @@ def musa_sparse_attention_fwd_kernel_v1(
     kv_shape = [batch, seq_len_kv, kv_group, dim + tail_dim]
     o_shape = [batch, seq_len, num_heads, dim]
     indices_shape = [batch, seq_len, kv_group, topk]
-    topk_length_shape = [batch, seq_len, kv_group]
     dtype = "bfloat16"
     accum_dtype = "float"
 
@@ -79,7 +78,6 @@ def musa_sparse_attention_fwd_kernel_v1(
         Q: T.Tensor(q_shape, dtype),
         KV: T.Tensor(kv_shape, dtype),
         Indices: T.Tensor(indices_shape, "int32"),
-        TopkLength: T.Tensor(topk_length_shape, "int32"),
         Output: T.Tensor(o_shape, dtype),
     ):
         with T.Kernel(seq_len * REPLICATE_H, batch, kv_group, threads=threads) as (bx, by, bz):
@@ -114,10 +112,6 @@ def musa_sparse_attention_fwd_kernel_v1(
                 for bi_i in T.Parallel(BI):
                     index = Indices[b_i, s_i, g_i, i_i * BI + bi_i]
                     valid = (index >= 0) & (index < seq_len_kv)
-                    if use_topk_length:
-                        valid = valid & (
-                            i_i * BI + bi_i < TopkLength[b_i, s_i, g_i]
-                        )
                     mask[bi_i] = valid
                     kv_indices[bi_i] = T.if_then_else(valid, index, 0)
 
@@ -166,32 +160,23 @@ def musa_sparse_attention_fwd_kernel_v1(
     return main
 
 
-def sparse_mla_fwd_bf16(q, kv, indices, sm_scale, d_v=512, topk_length=None):
+def sparse_mla_fwd_bf16(
+    q, kv, indices, sm_scale, d_v=512, topk_length=None
+):
+    # The v0.24 sparse-MLA wrapper always forwards ``topk_length``.  This
+    # kernel masks padded entries directly from negative indices, so the
+    # explicit lengths are not needed, but the argument remains part of the
+    # backend contract.
+    del topk_length
     num_heads = q.shape[1]
     dim = q.shape[2]
     tail_dim = dim - d_v
     topk = indices.shape[-1]
     assert topk == 2048, f"kernel requires topk==2048, got {topk}"
-    use_topk_length = topk_length is not None
-    if topk_length is not None:
-        topk_length = topk_length.reshape(indices.shape[:-1]).contiguous()
-    else:
-        topk_length = indices.new_empty(indices.shape[:-1])
     kernel = musa_sparse_attention_fwd_kernel_v1(
-        num_heads,
-        d_v,
-        tail_dim,
-        topk,
-        sm_scale=sm_scale,
-        num_stages=0,
-        use_topk_length=use_topk_length,
+        num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, num_stages=0
     )
-    out = kernel(
-        q.unsqueeze(0),
-        kv.unsqueeze(0),
-        indices.unsqueeze(0),
-        topk_length.unsqueeze(0),
-    )
+    out = kernel(q.unsqueeze(0), kv.unsqueeze(0), indices.unsqueeze(0))
     return out.squeeze(0)
 
 

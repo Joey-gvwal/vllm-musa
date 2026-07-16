@@ -139,6 +139,26 @@ void deepseek_v4_indexer_rerank_prefill(
     const torch::Tensor &cu_seqlen_ks, const torch::Tensor &cu_seqlen_ke,
     const torch::Tensor &candidate_abs_indices, torch::Tensor &topk_indices,
     int64_t topk);
+void sparse_indexer_fill_all(const torch::Tensor &lengths,
+                             torch::Tensor &topk_indices, int64_t topk);
+void sparse_indexer_topk(const torch::Tensor &logits,
+                         const torch::Tensor &row_starts,
+                         const torch::Tensor &row_ends,
+                         torch::Tensor &topk_indices, int64_t topk);
+void sparse_indexer_topk_decode(const torch::Tensor &logits,
+                                const torch::Tensor &seq_lens,
+                                torch::Tensor &topk_indices, int64_t topk);
+void glm52_indexer_topk_decode(
+    const torch::Tensor &q_quant, const torch::Tensor &kv_cache,
+    const torch::Tensor &weights, const torch::Tensor &seq_lens,
+    const torch::Tensor &block_table, torch::Tensor &topk_indices,
+    int64_t topk);
+void glm52_indexer_topk_prefill(
+    const torch::Tensor &q_quant, const torch::Tensor &kv_cache,
+    const torch::Tensor &weights, const torch::Tensor &block_table,
+    const torch::Tensor &cu_seq_lens, const torch::Tensor &token_to_seq,
+    const torch::Tensor &cu_seqlen_ks, const torch::Tensor &cu_seqlen_ke,
+    torch::Tensor &topk_indices, int64_t topk);
 std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_sparse_flashmla_decode(
     const torch::Tensor &q, const torch::Tensor &k_cache,
     const torch::Tensor &indices,

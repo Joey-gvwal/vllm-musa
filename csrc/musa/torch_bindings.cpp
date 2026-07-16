@@ -138,6 +138,39 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
                 &deepseek_v4_indexer_rerank_prefill);
 
   musa_ops.def(
+      "sparse_indexer_fill_all(Tensor lengths, Tensor! topk_indices, int topk) "
+      "-> ()");
+  musa_ops.impl("sparse_indexer_fill_all", torch::kMUSA,
+                &sparse_indexer_fill_all);
+
+  musa_ops.def(
+      "sparse_indexer_topk(Tensor logits, Tensor row_starts, Tensor row_ends, "
+      "Tensor! topk_indices, int topk) -> ()");
+  musa_ops.impl("sparse_indexer_topk", torch::kMUSA,
+                &sparse_indexer_topk);
+
+  musa_ops.def(
+      "sparse_indexer_topk_decode(Tensor logits, Tensor seq_lens, Tensor! "
+      "topk_indices, int topk) -> ()");
+  musa_ops.impl("sparse_indexer_topk_decode", torch::kMUSA,
+                &sparse_indexer_topk_decode);
+
+  musa_ops.def(
+      "glm52_indexer_topk_decode(Tensor q_quant, Tensor kv_cache, Tensor "
+      "weights, Tensor seq_lens, Tensor block_table, Tensor! topk_indices, "
+      "int topk) -> ()");
+  musa_ops.impl("glm52_indexer_topk_decode", torch::kMUSA,
+                &glm52_indexer_topk_decode);
+
+  musa_ops.def(
+      "glm52_indexer_topk_prefill(Tensor q_quant, Tensor kv_cache, Tensor "
+      "weights, Tensor block_table, Tensor cu_seq_lens, Tensor token_to_seq, "
+      "Tensor cu_seqlen_ks, Tensor cu_seqlen_ke, Tensor! topk_indices, int "
+      "topk) -> ()");
+  musa_ops.impl("glm52_indexer_topk_prefill", torch::kMUSA,
+                &glm52_indexer_topk_prefill);
+
+  musa_ops.def(
       "deepseek_v4_sparse_flashmla_decode(Tensor q, Tensor k_cache, "
       "Tensor indices, Tensor? topk_length, Tensor? attn_sink, "
       "Tensor? extra_k_cache, Tensor? extra_indices, Tensor? "

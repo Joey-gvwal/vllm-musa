@@ -543,6 +543,94 @@ def deepseek_v4_indexer_rerank_prefill(
     )
 
 
+def sparse_indexer_fill_all(
+    lengths: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.sparse_indexer_fill_all(
+        lengths,
+        topk_indices,
+        topk,
+    )
+
+
+def sparse_indexer_topk(
+    logits: torch.Tensor,
+    row_starts: torch.Tensor,
+    row_ends: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.sparse_indexer_topk(
+        logits,
+        row_starts,
+        row_ends,
+        topk_indices,
+        topk,
+    )
+
+
+def sparse_indexer_topk_decode(
+    logits: torch.Tensor,
+    seq_lens: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.sparse_indexer_topk_decode(
+        logits,
+        seq_lens,
+        topk_indices,
+        topk,
+    )
+
+
+def glm52_indexer_topk_decode(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    seq_lens: torch.Tensor,
+    block_table: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.glm52_indexer_topk_decode(
+        q_quant,
+        kv_cache,
+        weights,
+        seq_lens,
+        block_table,
+        topk_indices,
+        topk,
+    )
+
+
+def glm52_indexer_topk_prefill(
+    q_quant: torch.Tensor,
+    kv_cache: torch.Tensor,
+    weights: torch.Tensor,
+    block_table: torch.Tensor,
+    cu_seq_lens: torch.Tensor,
+    token_to_seq: torch.Tensor,
+    cu_seqlen_ks: torch.Tensor,
+    cu_seqlen_ke: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.glm52_indexer_topk_prefill(
+        q_quant,
+        kv_cache,
+        weights,
+        block_table,
+        cu_seq_lens,
+        token_to_seq,
+        cu_seqlen_ks,
+        cu_seqlen_ke,
+        topk_indices,
+        topk,
+    )
+
+
 def deepseek_v4_sparse_flashmla_decode(
     q: torch.Tensor,
     k_cache: torch.Tensor,
