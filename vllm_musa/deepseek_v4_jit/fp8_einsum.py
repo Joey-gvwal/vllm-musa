@@ -4,15 +4,55 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 import torch
 
 _GROUP_SIZE = 128
 _IMPL_ENV = "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_IMPL"
+_DEEPGEMM_MIN_TOKENS_ENV = (
+    "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_DEEPGEMM_MIN_TOKENS"
+)
+_DEFAULT_DEEPGEMM_MIN_TOKENS = 128
 
 
 def _impl_mode() -> str:
     return os.getenv(_IMPL_ENV, "auto").strip().lower()
+
+
+def _deepgemm_min_tokens() -> int:
+    raw_value = os.getenv(
+        _DEEPGEMM_MIN_TOKENS_ENV,
+        str(_DEFAULT_DEEPGEMM_MIN_TOKENS),
+    )
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{_DEEPGEMM_MIN_TOKENS_ENV} must be an integer, got {raw_value!r}"
+        ) from exc
+    if value < 1:
+        raise ValueError(
+            f"{_DEEPGEMM_MIN_TOKENS_ENV} must be positive, got {value}"
+        )
+    return value
+
+
+@lru_cache(maxsize=32)
+def _deepgemm_enabled_for_tokens(tokens: int, mode: str) -> bool:
+    """Resolve the process-start dispatch policy once per observed M/mode.
+
+    vLLM worker environment variables are fixed before model execution. Caching
+    avoids reparsing them in every layer for every decode token.
+    """
+    if mode in {"deepgemm", "gemm"}:
+        return True
+    if mode in {"gemv", "native", "force"}:
+        return False
+    use_deep_gemm = os.getenv("VLLM_USE_DEEP_GEMM", "0").strip().lower()
+    return use_deep_gemm in {"1", "true", "yes", "on"} and tokens >= (
+        _deepgemm_min_tokens()
+    )
 
 
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
@@ -86,7 +126,7 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
     out: torch.Tensor,
     equation: str,
 ) -> tuple[bool, str]:
-    """Try the native MUSA GEMV path for ``bhr,hdr->bhd`` FP8 einsum."""
+    """Dispatch ``bhr,hdr->bhd`` to DeepGEMM or GEMV based on token count."""
     mode = _impl_mode()
     if mode in {"torch", "fallback", "off", "0"}:
         return False, f"disabled by {_IMPL_ENV}"
@@ -133,6 +173,43 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
             f"out={tuple(out.shape)}"
         )
 
+    deepgemm_error: str | None = None
+    if _deepgemm_enabled_for_tokens(tokens, mode) and out.dtype == torch.bfloat16:
+        try:
+            from vllm.utils.deep_gemm import fp8_gemm_nt
+
+            for group_idx in range(groups):
+                group_out_view = out[:, group_idx, :]
+                copy_group_out = not group_out_view.is_contiguous()
+                group_out = (
+                    torch.empty_like(
+                        group_out_view,
+                        memory_format=torch.contiguous_format,
+                    )
+                    if copy_group_out
+                    else group_out_view
+                )
+                fp8_gemm_nt(
+                    (
+                        activation[:, group_idx, :].contiguous(),
+                        activation_scale[:, group_idx, :].contiguous(),
+                    ),
+                    (
+                        weight[group_idx].contiguous(),
+                        scales[group_idx].contiguous(),
+                    ),
+                    group_out,
+                    is_deep_gemm_e8m0_used=False,
+                )
+                if copy_group_out:
+                    group_out_view.copy_(group_out)
+        except Exception as exc:
+            if mode in {"deepgemm", "gemm"}:
+                raise
+            deepgemm_error = f"{type(exc).__name__}: {exc}"
+        else:
+            return True, "musa_deepgemm_fp8_o_proj"
+
     try:
         from vllm_musa import _custom_ops as musa_ops
 
@@ -149,6 +226,8 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
             raise
         return False, f"{type(exc).__name__}: {exc}"
 
+    if deepgemm_error is not None:
+        return True, f"musa_fused_gemv (DeepGEMM fallback: {deepgemm_error})"
     return True, "musa_fused_gemv"
 
 
