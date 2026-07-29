@@ -519,6 +519,38 @@ def deepseek_v4_qnorm_rope_kv_insert(
     )
 
 
+def deepseek_v4_c4_indexer_compress_cache(
+    state_cache: torch.Tensor,
+    token_to_req_indices: torch.Tensor,
+    positions: torch.Tensor,
+    state_slot_mapping: torch.Tensor,
+    block_table: torch.Tensor,
+    rms_norm_weight: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    kv_cache: torch.Tensor,
+    kv_slot_mapping: torch.Tensor,
+    rms_eps: float,
+    state_block_size: int,
+    state_width: int,
+    kv_block_size: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_c4_indexer_compress_cache(
+        state_cache,
+        token_to_req_indices,
+        positions,
+        state_slot_mapping,
+        block_table,
+        rms_norm_weight,
+        cos_sin_cache,
+        kv_cache,
+        kv_slot_mapping,
+        rms_eps,
+        state_block_size,
+        state_width,
+        kv_block_size,
+    )
+
+
 def deepseek_v4_fused_q_kv_rmsnorm(
     q: torch.Tensor,
     kv: torch.Tensor,
