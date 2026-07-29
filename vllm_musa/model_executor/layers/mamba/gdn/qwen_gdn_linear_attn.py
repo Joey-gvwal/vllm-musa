@@ -68,15 +68,14 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
     def forward_cuda(
         self,
         hidden_states: torch.Tensor,
-        output: torch.Tensor,
-    ) -> None:
+    ) -> torch.Tensor:
         # MUSA: Qwen3.5 GDN forward with a single fused z/b/a split kernel
         # (contiguous z/b/a in one launch) replacing the strided-z output-proj
         # copy + b/a contiguous copies. mixed_qkv stays a strided view (conv/MATE
         # accept it) so the large qkv block is never materialized. Qwen3-Next's
         # interleaved layout and the replicated-ba TP path keep the upstream flow.
         if self.gqa_interleaved_layout:
-            return super().forward_cuda(hidden_states, output)
+            return super().forward_cuda(hidden_states)
 
         from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
             _encode_layer_name,
@@ -120,7 +119,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             layer_name=_encode_layer_name(self.prefix),
         )
 
-        self._output_projection(core_attn_out, z, output, num_tokens)
+        return self._output_projection(core_attn_out, z)
 
     def _get_gdn_attention_metadata(self, mixed_qkv: torch.Tensor):
         from vllm.forward_context import get_forward_context
