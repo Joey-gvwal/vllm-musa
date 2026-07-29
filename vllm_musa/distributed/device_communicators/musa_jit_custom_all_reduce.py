@@ -25,6 +25,39 @@ _MU_POINTER_ATTRIBUTE_RANGE_START_ADDR = 11
 cudaError_t = ctypes.c_int
 
 
+def _use_graph_registered_inputs_for_current_model() -> bool:
+    """Use direct graph inputs only when their capture residency is bounded."""
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        vllm_config = get_current_vllm_config_or_none()
+    except (ImportError, RuntimeError):
+        return True
+
+    model_config = getattr(vllm_config, "model_config", None)
+    if model_config is None:
+        return True
+
+    hf_config = getattr(model_config, "hf_config", None)
+    architectures = getattr(model_config, "architectures", None)
+    if architectures is None and hf_config is not None:
+        architectures = getattr(hf_config, "architectures", None)
+    is_deepseek_v4 = getattr(hf_config, "model_type", None) == "deepseek_v4" or any(
+        "DeepseekV4" in str(arch) for arch in architectures or ()
+    )
+    if not is_deepseek_v4:
+        return True
+
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)
+    if not capture_sizes:
+        return False
+    try:
+        return max(int(size) for size in capture_sizes) <= 1
+    except (TypeError, ValueError):
+        return False
+
+
 class cudaIpcMemHandle_t(ctypes.Structure):
     _fields_ = [("internal", ctypes.c_byte * 128)]
 
@@ -285,6 +318,9 @@ class _MusaJitCustomAllreduceImpl:
         self.group = group
         self.max_size = max_size
         self._IS_CAPTURING = False
+        self._use_graph_registered_inputs = (
+            _use_graph_registered_inputs_for_current_model()
+        )
         self._comm_id: int | None = None
         self.meta_ptrs: list[int] = []
         self.meta_opened_ipc_ptrs: list[int] = []
@@ -359,14 +395,20 @@ class _MusaJitCustomAllreduceImpl:
         self.signal_ptrs_cpu = torch.tensor(self.meta_ptrs, dtype=torch.int64)
         buffer_ptrs = self.buffer_ptrs + [0] * (8 - self.world_size)
         self.buffer_rank_data = torch.tensor(buffer_ptrs, dtype=torch.int64)
-        graph_slots = _MAX_GRAPH_RANK_DATA_BYTES // (
-            _MAX_RANKS * torch.tensor([], dtype=torch.int64).element_size()
-        )
-        self.graph_rank_data = torch.zeros(
-            (graph_slots, _MAX_RANKS),
-            dtype=torch.int64,
-            device=self.device,
-        )
+        if self._use_graph_registered_inputs:
+            graph_slots = _MAX_GRAPH_RANK_DATA_BYTES // (
+                _MAX_RANKS * torch.tensor([], dtype=torch.int64).element_size()
+            )
+            self.graph_rank_data = torch.zeros(
+                (graph_slots, _MAX_RANKS),
+                dtype=torch.int64,
+                device=self.device,
+            )
+        else:
+            logger.info_once(
+                "Using fixed-staging MUSA JIT custom all-reduce for "
+                "DeepSeek-V4 CUDA graph capture."
+            )
         self._comm_id = _register_comm(self)
         self.disabled = False
         logger.info_once(
@@ -570,7 +612,11 @@ class _MusaJitCustomAllreduceImpl:
     def _custom_all_reduce_impl(self, input: torch.Tensor) -> torch.Tensor:
         assert self.buffer_rank_data is not None
         assert self.signal_ptrs_cpu is not None
-        if self._IS_CAPTURING and self._is_current_stream_capturing():
+        if (
+            self._use_graph_registered_inputs
+            and self._IS_CAPTURING
+            and self._is_current_stream_capturing()
+        ):
             return self._graph_custom_all_reduce_impl(input)
         out = torch.empty_like(input)
         shot = jit_ar.preferred_shot(

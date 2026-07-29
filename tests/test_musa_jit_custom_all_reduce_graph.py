@@ -11,6 +11,38 @@ custom_ar = pytest.importorskip(
 )
 
 
+@pytest.mark.parametrize(
+    ("model_type", "architectures", "capture_sizes", "expected"),
+    [
+        ("deepseek_v4", ("DeepseekV4ForCausalLM",), (1,), True),
+        ("deepseek_v4", ("DeepseekV4ForCausalLM",), (1, 2, 4), False),
+        (None, ("DeepseekV4ForCausalLM",), (1, 2, 4), False),
+        ("qwen3", ("Qwen3ForCausalLM",), (1, 2, 4), True),
+    ],
+)
+def test_graph_registered_inputs_model_gate(
+    monkeypatch, model_type, architectures, capture_sizes, expected
+):
+    model_config = SimpleNamespace(
+        hf_config=SimpleNamespace(
+            model_type=model_type,
+            architectures=architectures,
+        ),
+        architectures=architectures,
+    )
+    monkeypatch.setattr(
+        "vllm.config.get_current_vllm_config_or_none",
+        lambda: SimpleNamespace(
+            model_config=model_config,
+            compilation_config=SimpleNamespace(
+                cudagraph_capture_sizes=capture_sizes,
+            ),
+        ),
+    )
+
+    assert custom_ar._use_graph_registered_inputs_for_current_model() is expected
+
+
 def test_register_graph_buffers_populates_persistent_rank_data(monkeypatch):
     impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
     impl.rank = 0
@@ -130,3 +162,37 @@ def test_graph_launch_uses_next_persistent_slot(monkeypatch):
     assert captured["world_size"] == 2
     assert captured["shot"] == 2
     assert impl._pending_graph_inputs == [input_tensor]
+
+
+def test_deepseek_graph_capture_uses_fixed_staging(monkeypatch):
+    impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
+    impl._use_graph_registered_inputs = False
+    impl._IS_CAPTURING = True
+    impl.buffer_rank_data = torch.zeros(8, dtype=torch.int64)
+    impl.signal_ptrs_cpu = torch.zeros(2, dtype=torch.int64)
+    impl.meta_ptrs = [10, 20]
+    impl.buffer_ptrs = [30, 40]
+    impl.max_size = 1024
+    impl.rank = 0
+    impl.world_size = 2
+
+    monkeypatch.setattr(impl, "_is_current_stream_capturing", lambda: True)
+    monkeypatch.setattr(
+        impl,
+        "_graph_custom_all_reduce_impl",
+        lambda _input: pytest.fail("DeepSeek must not register graph input pointers"),
+    )
+    monkeypatch.setattr(custom_ar.jit_ar, "preferred_shot", lambda _world, _size: 1)
+    captured = {}
+
+    def launch_unregistered(*args):
+        captured["args"] = args
+
+    monkeypatch.setattr(custom_ar.jit_ar, "launch_unregistered", launch_unregistered)
+    input_tensor = torch.randn(4, dtype=torch.bfloat16)
+
+    output = impl._custom_all_reduce_impl(input_tensor)
+
+    assert output.shape == input_tensor.shape
+    assert captured["args"][2] is input_tensor
+    assert captured["args"][3] is output
