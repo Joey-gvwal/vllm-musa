@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 29 Jul 2026 17:05:52 +0800
+Subject: [PATCH] MUSA csrc fix cp_gather_and_upconvert stable signature (4
+ Tensor + int + optional seq_starts)
+
+---
+ csrc/libtorch_stable/musa_cache_ops_reg.cu | 17 +++++++++--------
+ 1 file changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
+index b4b3056..539094b 100644
+--- a/csrc/libtorch_stable/musa_cache_ops_reg.cu
++++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
+@@ -73,8 +73,8 @@ void cp_gather_cache(stable::Tensor const& src_cache, stable::Tensor const& dst,
+                      std::optional<stable::Tensor> seq_starts);
+ void cp_gather_and_upconvert_fp8_kv_cache(
+     stable::Tensor const& src_cache, stable::Tensor const& dst,
+-    stable::Tensor const& block_table, stable::Tensor const& seq_lens,
+-    stable::Tensor const& workspace_starts, int64_t batch_size);
++    stable::Tensor const& block_table, stable::Tensor const& workspace_starts,
++    int64_t batch_size, std::optional<stable::Tensor> seq_starts);
+ void indexer_k_quant_and_cache(stable::Tensor& k, stable::Tensor& kv_cache,
+                                stable::Tensor& slot_mapping,
+                                int64_t quant_block_size,
+@@ -151,10 +151,11 @@ void cp_gather_cache(at::Tensor& src, at::Tensor& dst, at::Tensor& bt,
+   ::cp_gather_cache(S(src), S(dst), S(bt), S(csl), bs, S(seq_starts));
+ }
+ void cp_gather_and_upconvert_fp8_kv_cache(at::Tensor& src, at::Tensor& dst,
+-                                          at::Tensor& bt, at::Tensor& sl,
+-                                          at::Tensor& ws, int64_t bs) {
+-  ::cp_gather_and_upconvert_fp8_kv_cache(S(src), S(dst), S(bt), S(sl), S(ws),
+-                                         bs);
++                                          at::Tensor& bt, at::Tensor& ws,
++                                          int64_t bs,
++                                          std::optional<at::Tensor> seq_starts) {
++  ::cp_gather_and_upconvert_fp8_kv_cache(S(src), S(dst), S(bt), S(ws), bs,
++                                         S(seq_starts));
+ }
+ void indexer_k_quant_and_cache(at::Tensor& k, at::Tensor& cache,
+                                at::Tensor& slot, int64_t qbs,
+@@ -257,8 +258,8 @@ TORCH_LIBRARY(_C_cache_ops, m) {
+ 
+   m.def(
+       "cp_gather_and_upconvert_fp8_kv_cache(Tensor src_cache, Tensor! dst, "
+-      "Tensor block_table, Tensor seq_lens, Tensor workspace_starts, int "
+-      "batch_size) -> ()");
++      "Tensor block_table, Tensor workspace_starts, int batch_size, "
++      "Tensor? seq_starts) -> ()");
+   m.impl("cp_gather_and_upconvert_fp8_kv_cache", torch::kPrivateUse1,
+          &mcb::cp_gather_and_upconvert_fp8_kv_cache);
+ 

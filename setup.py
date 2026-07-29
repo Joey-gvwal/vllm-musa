@@ -154,14 +154,14 @@ VLLM_CSRC_SOURCES = [
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v1.cu"),
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v2.cu"),
     str(_VLLM_REPO.source_dir / "csrc/cuda_view.cu"),
-    # cuda_utils_kernels lives under libtorch_stable/ but upstream compiles it
-    # into the regular _C extension (VLLM_EXT_SRC), not the stable one.
-    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cuda_utils_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"),
 ]
 
 VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/torch_bindings.cpp"),
+    # get_device_attribute is registered in the stable _C_cuda_utils bindings, so
+    # its impl must link into the stable extension, not the regular _C one.
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cuda_utils_kernels.cu"),
     # gptq q_gemm: GPTQ is unused by the FP8/bf16 model matrix and its CUDA half2
     # path does not port cleanly to mcc; its gptq_gemm/gptq_shuffle impls are
     # dropped from the stable bindings to match.

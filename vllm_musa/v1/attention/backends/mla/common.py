@@ -113,6 +113,17 @@ class MUSAMLAPrefillBackend:
         self.v_head_dim = v_head_dim
         self.vllm_config = vllm_config
 
+    def clone(self) -> "MUSAMLAPrefillBackend":
+        return self.__class__(
+            num_heads=self.num_heads,
+            scale=self.scale,
+            kv_lora_rank=self.kv_lora_rank,
+            qk_nope_head_dim=self.qk_nope_head_dim,
+            qk_rope_head_dim=self.qk_rope_head_dim,
+            v_head_dim=self.v_head_dim,
+            vllm_config=self.vllm_config,
+        )
+
     @staticmethod
     def get_name() -> str:
         return "FLASH_ATTN"
