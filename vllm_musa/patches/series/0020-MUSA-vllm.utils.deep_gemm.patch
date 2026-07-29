@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.utils.deep_gemm
  1 file changed, 20 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index 0a1644bcc..2f287bb08 100644
+index 0a1644b..2f287bb 100644
 --- a/vllm/utils/deep_gemm.py
 +++ b/vllm/utils/deep_gemm.py
 @@ -69,6 +69,13 @@ class DeepGemmQuantScaleFMT(Enum):

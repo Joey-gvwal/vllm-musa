@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.v1.sample.rejection_sampler
  1 file changed, 91 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
-index 8b4d8c9dc..b11a3aacf 100644
+index 0f56b8a..2b6aedb 100644
 --- a/vllm/v1/sample/rejection_sampler.py
 +++ b/vllm/v1/sample/rejection_sampler.py
-@@ -157,6 +157,23 @@ class RejectionSampler(nn.Module):
+@@ -163,6 +163,23 @@ class RejectionSampler(nn.Module):
          target_logits = self.apply_logits_processors(
              target_logits, sampling_metadata, metadata
          )
@@ -35,7 +35,7 @@ index 8b4d8c9dc..b11a3aacf 100644
          # [num_tokens, vocab_size]
          # NOTE(woosuk): `target_logits` can be updated in place inside the
          # `apply_sampling_constraints` function.
-@@ -391,6 +408,58 @@ class RejectionSampler(nn.Module):
+@@ -393,6 +410,58 @@ class RejectionSampler(nn.Module):
          return result
  
  
@@ -94,7 +94,7 @@ index 8b4d8c9dc..b11a3aacf 100644
  def rejection_sample(
      # [num_tokens]
      draft_token_ids: torch.Tensor,
-@@ -435,7 +504,21 @@ def rejection_sample(
+@@ -437,7 +506,21 @@ def rejection_sample(
      if sampling_metadata.all_greedy:
          is_greedy = None
      else:
@@ -117,7 +117,7 @@ index 8b4d8c9dc..b11a3aacf 100644
  
      # Generate uniform probabilities before either kernel because synthetic
      # mode needs them in the greedy kernel too.  Skip only when all requests
-@@ -727,8 +810,10 @@ def rejection_greedy_sample_kernel(
+@@ -729,8 +812,10 @@ def rejection_greedy_sample_kernel(
      req_idx = tl.program_id(0)
      # FIXME(woosuk): Because is_greedy_ptr is not None at profiling run,
      # re-compilation may happen during runtime when is_greedy_ptr is None.
@@ -130,7 +130,7 @@ index 8b4d8c9dc..b11a3aacf 100644
          # Early exit for non-greedy sampling requests.
          return
  
-@@ -787,8 +872,10 @@ def rejection_random_sample_kernel(
+@@ -790,8 +875,10 @@ def rejection_random_sample_kernel(
      SYNTHETIC_MODE: tl.constexpr,
  ):
      req_idx = tl.program_id(0)

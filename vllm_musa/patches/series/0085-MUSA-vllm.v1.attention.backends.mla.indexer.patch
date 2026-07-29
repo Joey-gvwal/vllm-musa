@@ -1,24 +1,29 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
+Date: Wed, 29 Jul 2026 11:32:02 +0800
 Subject: [PATCH] MUSA vllm.v1.attention.backends.mla.indexer
 
+---
+ vllm/v1/attention/backends/mla/indexer.py | 26 ++++++++++++++++++++---
+ 1 file changed, 23 insertions(+), 3 deletions(-)
+
 diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index bf76cbe..eebc81a 100644
 --- a/vllm/v1/attention/backends/mla/indexer.py
 +++ b/vllm/v1/attention/backends/mla/indexer.py
-@@ -194,7 +194,7 @@ class DeepSeekV32IndexerDecodeMetadata:
+@@ -205,7 +205,7 @@ class DeepSeekV32IndexerDecodeMetadata:
      seq_lens: torch.Tensor
      decode_lens: torch.Tensor
      requires_padding: bool
 -    schedule_metadata: torch.Tensor
 +    schedule_metadata: torch.Tensor | None
-
-
- @dataclass
-@@ -612,18 +612,37 @@ class DeepSeekV32IndexerMetadataBuilder(
-             if seq_lens.dim() == 1:
+     global_seq_lens: torch.Tensor | None = None
+ 
+ 
+@@ -742,19 +742,39 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
                  seq_lens = seq_lens.unsqueeze(-1)
-
--            # DeepGEMM is required for the paged MQA logits on CUDA devices
+ 
+             # DeepGEMM is required for the paged MQA logits on CUDA devices
 -            if current_platform.is_cuda() and has_deep_gemm():
 +            schedule_metadata = None
 +            if current_platform.is_musa():
@@ -46,7 +51,7 @@ diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backe
                      self.num_sms,
                  )
 +                schedule_metadata = self.scheduler_metadata_buffer
-
+ 
              decode_metadata = DeepSeekV32IndexerDecodeMetadata(
                  block_table=block_table,
                  seq_lens=seq_lens,
@@ -54,4 +59,6 @@ diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backe
                  requires_padding=requires_padding,
 -                schedule_metadata=self.scheduler_metadata_buffer,
 +                schedule_metadata=schedule_metadata,
+                 global_seq_lens=global_seq_lens_for_decode,
              )
+ 

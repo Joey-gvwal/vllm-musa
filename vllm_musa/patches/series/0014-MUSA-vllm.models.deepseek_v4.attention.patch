@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.attention
  1 file changed, 78 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 29a19d902..1f39ffa8c 100644
+index 5628a6d..461d551 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -61,6 +61,65 @@ from vllm.v1.kv_cache_interface import KVCacheSpec, MLAAttentionSpec
+@@ -65,6 +65,65 @@ from vllm.v1.kv_cache_interface import (
  logger = init_logger(__name__)
  
  
@@ -77,7 +77,7 @@ index 29a19d902..1f39ffa8c 100644
  def _resolve_dsv4_kv_cache_dtype(
      use_fp8_ds_mla_layout: bool,
      kv_cache_dtype: str,
-@@ -382,10 +441,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -386,10 +445,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              compressor = self.compressor
  
              def compressor_kv_score() -> torch.Tensor:
@@ -91,7 +91,7 @@ index 29a19d902..1f39ffa8c 100644
                  )
  
              aux_fns[0] = compressor_kv_score
-@@ -399,10 +458,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -403,10 +462,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                  return weights
  
              def indexer_compressor_kv_score() -> torch.Tensor:
@@ -105,7 +105,7 @@ index 29a19d902..1f39ffa8c 100644
                  )
  
              aux_fns[1] = indexer_weights_proj
-@@ -539,6 +598,19 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -543,6 +602,19 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          cos_sin_cache = self.rotary_emb.cos_sin_cache
          cache_dtype = swa_kv_cache.dtype
  

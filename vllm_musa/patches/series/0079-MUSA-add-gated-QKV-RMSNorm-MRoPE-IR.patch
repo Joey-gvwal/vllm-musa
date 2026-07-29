@@ -19,7 +19,7 @@ Subject: [PATCH] MUSA: add gated QKV RMSNorm MRoPE IR
 
 diff --git a/tests/kernels/ir/test_gated_qkv.py b/tests/kernels/ir/test_gated_qkv.py
 new file mode 100644
-index 000000000..96919a35b
+index 0000000..96919a3
 --- /dev/null
 +++ b/tests/kernels/ir/test_gated_qkv.py
 @@ -0,0 +1,159 @@
@@ -183,10 +183,10 @@ index 000000000..96919a35b
 +    with pytest.raises(ValueError, match="packed_qkv last dimension"):
 +        native(*args)
 diff --git a/tests/test_config.py b/tests/test_config.py
-index eb9b11535..1b6e22ed1 100644
+index a785297..54a6028 100644
 --- a/tests/test_config.py
 +++ b/tests/test_config.py
-@@ -1501,6 +1501,7 @@ def test_ir_op_priority_default():
+@@ -1600,6 +1600,7 @@ def test_ir_op_priority_default():
      priority_config = IrOpPriorityConfig.with_default(["vllm_c", "native"])
      assert priority_config.rms_norm == ["vllm_c", "native"]
      assert priority_config.fused_add_rms_norm == ["vllm_c", "native"]
@@ -194,7 +194,7 @@ index eb9b11535..1b6e22ed1 100644
  
      # Assert single ops override the default
      priority_config = IrOpPriorityConfig.with_default(
-@@ -1508,6 +1509,7 @@ def test_ir_op_priority_default():
+@@ -1607,6 +1608,7 @@ def test_ir_op_priority_default():
      )
      assert priority_config.rms_norm == ["oink", "native"]
      assert priority_config.fused_add_rms_norm == ["native"]
@@ -203,7 +203,7 @@ index eb9b11535..1b6e22ed1 100644
  
  def test_ir_op_priority_str():
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
-index e9f41c538..087a1602d 100644
+index f13562f..6c67766 100644
 --- a/vllm/config/kernel.py
 +++ b/vllm/config/kernel.py
 @@ -34,6 +34,9 @@ class IrOpPriorityConfig:
@@ -217,7 +217,7 @@ index e9f41c538..087a1602d 100644
          """
          Produces a hash unique to the pass configuration.
 diff --git a/vllm/ir/ops/__init__.py b/vllm/ir/ops/__init__.py
-index d4d71afef..ce6a2d315 100644
+index d4d71af..ce6a2d3 100644
 --- a/vllm/ir/ops/__init__.py
 +++ b/vllm/ir/ops/__init__.py
 @@ -1,5 +1,6 @@
@@ -230,7 +230,7 @@ index d4d71afef..ce6a2d315 100644
 +__all__ = ["rms_norm", "fused_add_rms_norm", "gated_qkv_rms_norm_rope"]
 diff --git a/vllm/ir/ops/gated_qkv.py b/vllm/ir/ops/gated_qkv.py
 new file mode 100644
-index 000000000..a293942fb
+index 0000000..a293942
 --- /dev/null
 +++ b/vllm/ir/ops/gated_qkv.py
 @@ -0,0 +1,218 @@
@@ -453,18 +453,18 @@ index 000000000..a293942fb
 +        weight_offset,
 +    )
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index b41bdccce..84f9ad79c 100644
+index d435f05..1591007 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
-@@ -8,6 +8,7 @@ from itertools import islice
+@@ -9,6 +9,7 @@ from itertools import islice
  import torch
  from torch import nn
  
 +from vllm import ir
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.decorators import support_torch_compile
- from vllm.config import (
-@@ -322,6 +323,19 @@ class Qwen3NextAttention(nn.Module):
+ from vllm.config import CacheConfig, ModelConfig, VllmConfig
+@@ -387,6 +388,19 @@ class Qwen3NextAttention(nn.Module):
              and current_platform.is_cuda()
              and text_only
          )
@@ -484,7 +484,7 @@ index b41bdccce..84f9ad79c 100644
  
      def _project_qkv_gate(
          self,
-@@ -330,9 +344,9 @@ class Qwen3NextAttention(nn.Module):
+@@ -395,9 +409,9 @@ class Qwen3NextAttention(nn.Module):
      ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
          """Return post-norm, post-RoPE (q, k, v) and the pre-sigmoid gate.
  
@@ -497,7 +497,7 @@ index b41bdccce..84f9ad79c 100644
          """
          if self.use_fused_qk_norm_rope_gate:
              q_gate, k, v = qkv.split(
-@@ -357,6 +371,35 @@ class Qwen3NextAttention(nn.Module):
+@@ -422,6 +436,35 @@ class Qwen3NextAttention(nn.Module):
              )
              return q, k, v, gate
  
@@ -533,7 +533,7 @@ index b41bdccce..84f9ad79c 100644
          if self.attn_output_gate:
              q_gate, k, v = qkv.split(
                  [self.q_size * 2, self.kv_size, self.kv_size], dim=-1
-@@ -389,7 +432,11 @@ class Qwen3NextAttention(nn.Module):
+@@ -453,7 +496,11 @@ class Qwen3NextAttention(nn.Module):
          q, k, v, gate = self._project_qkv_gate(qkv, positions)
          attn_output = self.attn(q, k, v)
          if gate is not None:
@@ -543,14 +543,14 @@ index b41bdccce..84f9ad79c 100644
 +            # this multiply, then flatten the fresh contiguous result for o_proj.
 +            attn_output = attn_output.view_as(gate) * torch.sigmoid(gate)
 +            attn_output = attn_output.view(-1, self.q_size)
-         output[:], _ = self.o_proj(attn_output)
- 
+         output, _ = self.o_proj(attn_output)
+         return output
  
 diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
-index dabe6058e..ec2cf75db 100644
+index f9304df..ca7218d 100644
 --- a/vllm/platforms/cuda.py
 +++ b/vllm/platforms/cuda.py
-@@ -699,7 +699,10 @@ class CudaPlatformBase(Platform):
+@@ -701,7 +701,10 @@ class CudaPlatformBase(Platform):
              rms_norm = ["oink"] + default
  
          return IrOpPriorityConfig.with_default(
@@ -563,10 +563,10 @@ index dabe6058e..ec2cf75db 100644
  
      @classmethod
 diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
-index 04c1acbb2..662b5fc20 100644
+index 4b182ae..16a83f9 100644
 --- a/vllm/platforms/rocm.py
 +++ b/vllm/platforms/rocm.py
-@@ -1022,7 +1022,10 @@ class RocmPlatform(Platform):
+@@ -1035,7 +1035,10 @@ class RocmPlatform(Platform):
              rms_norm = default
  
          return IrOpPriorityConfig.with_default(
@@ -579,10 +579,10 @@ index 04c1acbb2..662b5fc20 100644
  
      @classmethod
 diff --git a/vllm/platforms/xpu.py b/vllm/platforms/xpu.py
-index 030b4933b..40dc80a17 100644
+index 80f99ac..bd4f30b 100644
 --- a/vllm/platforms/xpu.py
 +++ b/vllm/platforms/xpu.py
-@@ -350,7 +350,9 @@ class XPUPlatform(Platform):
+@@ -441,7 +441,9 @@ class XPUPlatform(Platform):
          using_inductor = cc.backend == "inductor" and cc.mode != CompilationMode.NONE
          default = ["native"] if using_inductor else ["xpu_kernels", "native"]
  

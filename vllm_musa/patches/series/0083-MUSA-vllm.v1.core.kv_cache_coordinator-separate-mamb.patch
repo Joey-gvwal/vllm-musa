@@ -1,13 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
+Date: Wed, 29 Jul 2026 11:12:00 +0800
 Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
 
 ---
+ vllm/v1/core/kv_cache_coordinator.py | 33 +++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
+index df8769c..725f69a 100644
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
-@@ -12,9 +12,11 @@
-     BlockHashList,
-     BlockHashListWithBlockSize,
+@@ -11,9 +11,11 @@ from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
+ from vllm.v1.core.kv_cache_utils import (
+     BlockHash,
      KVCacheBlock,
 +    musa_mamba_separate_pool_enabled,
  )
@@ -17,10 +23,10 @@ Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
      SingleTypeKVCacheManager,
      get_manager_for_kv_cache_spec,
  )
-@@ -96,6 +98,22 @@
+@@ -95,6 +97,22 @@ class KVCacheCoordinator(ABC):
              metrics_collector=metrics_collector,
          )
-
+ 
 +        # MUSA: dedicated non-binding BlockPool for mamba state, so mamba
 +        # groups own a small contiguous block-id space and the mate GDN
 +        # decode runs in place. Sized in the config to never bind.
@@ -40,25 +46,23 @@ Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
          # KV cache group indices that get the EAGLE last-block drop.
          self.eagle_group_ids: set[int] = {
              i for i, g in enumerate(kv_cache_config.kv_cache_groups) if g.is_eagle_group
-@@ -109,7 +127,16 @@
+@@ -108,7 +126,14 @@ class KVCacheCoordinator(ABC):
                  kv_cache_spec=kv_cache_group.kv_cache_spec,
-                 max_num_batched_tokens=max_num_batched_tokens,
+                 max_in_flight_tokens=max_in_flight_tokens,
                  max_model_len=max_model_len,
 -                block_pool=self.block_pool,
 +                block_pool=(
 +                    self.musa_mamba_block_pool
 +                    if (
 +                        self.musa_mamba_block_pool is not None
-+                        and isinstance(
-+                            kv_cache_group.kv_cache_spec, MambaSpec
-+                        )
++                        and isinstance(kv_cache_group.kv_cache_spec, MambaSpec)
 +                    )
 +                    else self.block_pool
 +                ),
                  enable_caching=enable_caching,
                  kv_cache_group_id=i,
                  dcp_world_size=dcp_world_size,
-@@ -162,6 +189,12 @@
+@@ -165,6 +190,12 @@ class KVCacheCoordinator(ABC):
          """
          num_blocks_to_allocate = 0
          for i, manager in enumerate(self.single_type_managers):

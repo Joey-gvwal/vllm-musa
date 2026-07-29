@@ -5,14 +5,14 @@ Subject: [PATCH] MUSA: allocate DeepSeek-V4 sparse MLA KV tensors without
  offsets
 
 ---
- vllm/v1/core/kv_cache_utils.py | 56 ++++++++++++++++++++++++++++++++--
- 1 file changed, 54 insertions(+), 2 deletions(-)
+ vllm/v1/core/kv_cache_utils.py | 59 ++++++++++++++++++++++++++++++++--
+ 1 file changed, 57 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index b13c23d80..3ea89d5af 100644
+index d4970d9..a0f8718 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1293,6 +1293,17 @@ def _get_kv_cache_config_packed(
+@@ -1322,6 +1322,17 @@ def _get_kv_cache_config_packed(
      num_blocks = available_memory // total_num_bytes_per_block
      num_blocks = may_override_num_blocks(vllm_config, num_blocks)
  
@@ -30,7 +30,7 @@ index b13c23d80..3ea89d5af 100644
      total_size = total_num_bytes_per_block * num_blocks
  
      kv_cache_tensors: list[KVCacheTensor] = []
-@@ -1312,6 +1323,37 @@ def _get_kv_cache_config_packed(
+@@ -1341,6 +1352,40 @@ def _get_kv_cache_config_packed(
      return num_blocks, kv_cache_tensors
  
  
@@ -65,10 +65,13 @@ index b13c23d80..3ea89d5af 100644
 +    return found_deepseek_v4 and found_sparse_swa
 +
 +
- _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
- 
- 
-@@ -1620,12 +1662,22 @@ def _get_kv_cache_groups_uniform_groups(
++_get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
++
++
+ def get_kv_cache_config_from_groups(
+     vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],
+@@ -1651,12 +1696,22 @@ def _get_kv_cache_groups_uniform_groups(
      # Possibly padding layer tuples for this.
      # Additionally, we also pad KV blocks in each SWA layer, to align the page size
      # with the corresponding layer in the full-MLA group.

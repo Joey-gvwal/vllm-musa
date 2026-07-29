@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Mon, 14 Jul 2026 12:00:00 +0800
+Date: Tue, 14 Jul 2026 12:00:00 +0800
 Subject: [PATCH] MUSA(model): fuse QK-RMSNorm and MRoPE for interleaved MRoPE
 
 Fuse QK-RMSNorm and MRoPE into one MUSA kernel for interleaved-MRoPE gated
@@ -11,14 +11,14 @@ issue a long tail of elementwise kernels.
 The IR operation stays as the fallback for every shape this kernel declines.
 Set VLLM_MUSA_FUSED_QK_MROPE=0 to disable.
 ---
- vllm/model_executor/models/qwen3_next.py | 77 +++---
- 1 file changed, 77 insertions(+), 0 deletions(-)
+ vllm/model_executor/models/qwen3_next.py | 77 ++++++++++++++++++++++++
+ 1 file changed, 77 insertions(+)
 
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index f7907f3c4..d73dfa9e4 100644
+index 1591007..a854734 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
-@@ -267,6 +267,30 @@
+@@ -287,6 +287,30 @@ class Qwen3NextSparseMoeBlock(nn.Module):
          return final_hidden_states.view(orig_shape)
  
  
@@ -49,7 +49,7 @@ index f7907f3c4..d73dfa9e4 100644
  class Qwen3NextAttention(nn.Module):
      def __init__(
          self,
-@@ -379,6 +403,26 @@
+@@ -401,6 +425,26 @@ class Qwen3NextAttention(nn.Module):
          self.mrope_interleaved = bool(
              getattr(self.rotary_emb, "mrope_interleaved", False)
          )
@@ -76,7 +76,7 @@ index f7907f3c4..d73dfa9e4 100644
  
      def _project_qkv_gate(
          self,
-@@ -414,6 +458,39 @@
+@@ -436,6 +480,39 @@ class Qwen3NextAttention(nn.Module):
              )
              return q, k, v, gate
  

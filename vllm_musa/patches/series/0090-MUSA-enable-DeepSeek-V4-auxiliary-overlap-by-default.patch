@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: enable DeepSeek-V4 auxiliary overlap by default
  1 file changed, 8 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
-index ce73743da2..2f2f618212 100644
+index 2e21cec..4fab221 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
 @@ -1,6 +1,5 @@
@@ -16,10 +16,10 @@ index ce73743da2..2f2f618212 100644
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 -import os
  import typing
- from collections.abc import Callable, Iterable, MutableSequence, Sequence
+ from collections.abc import Callable, Iterable
  from itertools import islice
-@@ -71,12 +70,6 @@ from vllm.utils.math_utils import cdiv
- from vllm.v1.attention.backends.registry import AttentionBackendEnum
+@@ -80,12 +79,6 @@ from vllm.v1.attention.backends.registry import AttentionBackendEnum
+ from vllm.v1.worker.ubatching import dbo_current_ubatch_id
  
  
 -def _musa_deepseek_v4_disable_aux_overlap() -> bool:
@@ -31,7 +31,7 @@ index ce73743da2..2f2f618212 100644
  
  class DeepseekV4MLP(nn.Module):
      def __init__(
-@@ -959,7 +952,6 @@ class DeepseekV4Model(nn.Module):
+@@ -999,7 +992,6 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
              if (
                  current_platform.is_rocm()
                  or current_platform.is_xpu()

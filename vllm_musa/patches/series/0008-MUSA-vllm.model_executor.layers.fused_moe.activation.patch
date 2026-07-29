@@ -8,13 +8,13 @@ Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.activation
  1 file changed, 5 insertions(+)
 
 diff --git a/vllm/model_executor/layers/fused_moe/activation.py b/vllm/model_executor/layers/fused_moe/activation.py
-index 2d8d46cac..b833d336d 100644
+index d114992..a13710b 100644
 --- a/vllm/model_executor/layers/fused_moe/activation.py
 +++ b/vllm/model_executor/layers/fused_moe/activation.py
-@@ -140,6 +140,11 @@ def apply_moe_activation(
+@@ -157,6 +157,11 @@ def apply_moe_activation(
+     if activation == MoEActivation.SILU:
          if clamp_limit is not None:
-             # Fused silu(clamp(gate)) * clamp(up); equivalent to swiglu_limit_func.
-             torch.ops._C.silu_and_mul_with_clamp(output, input, clamp_limit, 1.0, 0.0)
+             silu_and_mul_with_clamp(output, input, clamp_limit, topk_ids, expert_map)
 +        elif input.device.type == "musa":
 +            from vllm_musa.jit_kernel.csrc.moe import maybe_fast_silu_and_mul
 +            if not maybe_fast_silu_and_mul(output, input):

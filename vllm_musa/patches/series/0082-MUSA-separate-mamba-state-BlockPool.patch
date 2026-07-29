@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Mon, 14 Jul 2026 12:00:00 +0800
+Date: Tue, 14 Jul 2026 12:00:00 +0800
 Subject: [PATCH] MUSA: separate mamba state BlockPool
 
 Give mamba state its own contiguous BlockPool, sized from max_num_seqs so it
@@ -10,14 +10,14 @@ updates the recurrent state in place instead of gathering and scattering it.
 
 On by default; set VLLM_MUSA_MAMBA_SEPARATE_POOL=0 to fall back to the shared pool.
 ---
- vllm/v1/core/kv_cache_utils.py | 76 +++---
- 1 file changed, 76 insertions(+), 0 deletions(-)
+ vllm/v1/core/kv_cache_utils.py | 76 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 76 insertions(+)
 
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index 3ea89d5af..c8425baa5 100644
+index a0f8718..c9a7867 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1357,6 +1357,63 @@
+@@ -1386,6 +1386,63 @@ def _use_musa_deepseek_v4_zero_offset_kv_tensors(
  _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
  
  
@@ -81,7 +81,7 @@ index 3ea89d5af..c8425baa5 100644
  def get_kv_cache_config_from_groups(
      vllm_config: VllmConfig,
      kv_cache_groups: list[KVCacheGroupSpec],
-@@ -1407,6 +1464,21 @@
+@@ -1436,6 +1493,21 @@ def get_kv_cache_config_from_groups(
          num_blocks, kv_cache_tensors = _get_kv_cache_config_packed(
              vllm_config, kv_cache_groups, available_memory
          )
@@ -103,7 +103,7 @@ index 3ea89d5af..c8425baa5 100644
      else:
          # General case:
          # We will have group_size memory pools, each is shared by one layer from
-@@ -2182,6 +2254,10 @@
+@@ -2216,6 +2288,10 @@ def get_kv_cache_configs(
  
          # Shrink tensor size proportionally
          for tensor in kv_cache_config.kv_cache_tensors:

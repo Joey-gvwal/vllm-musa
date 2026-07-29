@@ -7,11 +7,11 @@ Subject: [PATCH] MUSA(csrc): drop unboxable stable ops, guard non-core
 ---
  csrc/libtorch_stable/activation_kernels.cu    |  6 +-
  .../quantization/activation_kernels.cu        |  6 +-
- csrc/libtorch_stable/torch_bindings.cpp       | 73 +++++++++++++++++++
- 3 files changed, 80 insertions(+), 5 deletions(-)
+ csrc/libtorch_stable/torch_bindings.cpp       | 69 +++++++++++++++++++
+ 3 files changed, 76 insertions(+), 5 deletions(-)
 
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index e1dc01346..53641380d 100644
+index 60b8ca5..86e411f 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
 @@ -259,7 +259,7 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
@@ -49,7 +49,7 @@ index e1dc01346..53641380d 100644
                                           input.const_data_ptr<scalar_t>(), d); \
        });                                                                      \
 diff --git a/csrc/libtorch_stable/quantization/activation_kernels.cu b/csrc/libtorch_stable/quantization/activation_kernels.cu
-index a140a043c..7facea171 100644
+index a140a04..7facea1 100644
 --- a/csrc/libtorch_stable/quantization/activation_kernels.cu
 +++ b/csrc/libtorch_stable/quantization/activation_kernels.cu
 @@ -304,10 +304,10 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
@@ -67,10 +67,10 @@ index a140a043c..7facea171 100644
    int warp_id = tid >> 5;
    int lane_id = tid & 0x1f;
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
-index 3133243c4..1ca216c0d 100644
+index ab20cac..6ad600b 100644
 --- a/csrc/libtorch_stable/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
-@@ -185,10 +185,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -184,10 +184,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "bool");
  
    // CUTLASS nvfp4 block scaled GEMM
@@ -83,7 +83,7 @@ index 3133243c4..1ca216c0d 100644
  
    // cutlass nvfp4 block scaled group GEMM
    ops.def(
-@@ -203,10 +205,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -202,10 +204,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        " Tensor problem_sizes, Tensor expert_offsets, Tensor sf_offsets) -> ()");
  
    // Compute NVFP4 block quantized tensor.
@@ -96,7 +96,7 @@ index 3133243c4..1ca216c0d 100644
  
    // Out variant
    // TODO: Add out_variant tag once PyTorch supports it (added in 2.11)
-@@ -216,24 +220,30 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -215,24 +219,30 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
    // via torch.library.Library.define(..., tags=(torch.Tag.out_variant,))
    // with the .impl remaining in C++.
    // See pytorch/pytorch#176117.
@@ -127,7 +127,7 @@ index 3133243c4..1ca216c0d 100644
  
    // Compute MXFP4 experts quantization (32-element blocks, E8M0 SFs).
    ops.def(
-@@ -249,9 +259,11 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -248,9 +258,11 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "Tensor output_scale_offset_by_experts, int n_experts) -> ()");
  
    // Fused SiLU+Mul+NVFP4 quantization.
@@ -139,7 +139,7 @@ index 3133243c4..1ca216c0d 100644
  
    // Check if cutlass_scaled_mm_fp4 is supported for CUDA devices
    // of the given capability
-@@ -461,6 +473,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -456,6 +468,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
  #endif
  
    // Horizontally-fused MiniMax-M3 QK-norm + partial NeoX RoPE + KV-insert.
@@ -147,15 +147,15 @@ index 3133243c4..1ca216c0d 100644
    ops.def(
        "fused_minimax_m3_qknorm_rope_kv_insert("
        "Tensor! qkv, Tensor q_norm_weight, Tensor k_norm_weight, "
-@@ -472,6 +485,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -467,6 +480,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "Tensor!? kv_cache, Tensor!? index_cache, "
        "int block_size, Tensor!? q_out, Tensor!? index_q_out, "
-       "str kv_cache_dtype) -> ()");
+       "str kv_cache_dtype, bool skip_index_branch=False) -> ()");
 +#endif
  
    // Apply repetition penalties to logits in-place.
    ops.def(
-@@ -528,12 +542,16 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
+@@ -523,12 +537,16 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
    ops.def("gelu_tanh_and_mul(Tensor! out, Tensor input) -> ()");
  
    // FATReLU implementation.
@@ -172,7 +172,7 @@ index 3133243c4..1ca216c0d 100644
  
    // GELU implementation used in GPT-2.
    ops.def("gelu_new(Tensor! out, Tensor input) -> ()");
-@@ -683,6 +701,10 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
+@@ -667,6 +685,10 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
    ops.impl("fused_add_rms_norm", TORCH_BOX(&fused_add_rms_norm));
  
    // Layernorm-quant kernels (shared CUDA/ROCm)
@@ -183,7 +183,7 @@ index 3133243c4..1ca216c0d 100644
    ops.impl("rms_norm_static_fp8_quant", TORCH_BOX(&rms_norm_static_fp8_quant));
    ops.impl("fused_add_rms_norm_static_fp8_quant",
             TORCH_BOX(&fused_add_rms_norm_static_fp8_quant));
-@@ -691,6 +713,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
+@@ -675,6 +697,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
    ops.impl("rms_norm_dynamic_per_token_quant",
             TORCH_BOX(&rms_norm_dynamic_per_token_quant));
    ops.impl("rms_norm_per_block_quant", TORCH_BOX(&rms_norm_per_block_quant));
@@ -191,8 +191,8 @@ index 3133243c4..1ca216c0d 100644
    ops.impl("silu_and_mul_per_block_quant",
             TORCH_BOX(&silu_and_mul_per_block_quant));
  
-@@ -709,8 +732,10 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
-   ops.impl("minimax_allreduce_rms", TORCH_BOX(&minimax_allreduce_rms));
+@@ -692,8 +715,10 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
+ #ifndef USE_ROCM
    ops.impl("minimax_allreduce_rms_qk", TORCH_BOX(&minimax_allreduce_rms_qk));
  #endif
 +#ifndef USE_MUSA
@@ -202,7 +202,7 @@ index 3133243c4..1ca216c0d 100644
  
    // Sampler kernels (shared CUDA/ROCm)
    ops.impl("apply_repetition_penalties_",
-@@ -731,8 +756,12 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
+@@ -714,8 +739,12 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
    ops.impl("mul_and_silu", TORCH_BOX(&mul_and_silu));
    ops.impl("gelu_and_mul", TORCH_BOX(&gelu_and_mul));
    ops.impl("gelu_tanh_and_mul", TORCH_BOX(&gelu_tanh_and_mul));
@@ -215,20 +215,7 @@ index 3133243c4..1ca216c0d 100644
    ops.impl("gelu_new", TORCH_BOX(&gelu_new));
    ops.impl("gelu_fast", TORCH_BOX(&gelu_fast));
    ops.impl("gelu_quick", TORCH_BOX(&gelu_quick));
-@@ -755,8 +784,12 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
-   // Mamba kernels
-   ops.impl("selective_scan_fwd", TORCH_BOX(&selective_scan_fwd));
- 
-+#ifndef USE_MUSA
-   ops.impl("paged_attention_v1", TORCH_BOX(&paged_attention_v1));
-+#endif
-+#ifndef USE_MUSA
-   ops.impl("paged_attention_v2", TORCH_BOX(&paged_attention_v2));
-+#endif
- }
- 
- // TODO: Remove this once ROCm upgrade to torch 2.11.
-@@ -889,25 +922,35 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C_cache_ops, ops) {
+@@ -866,25 +895,35 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C_cache_ops, ops) {
  }
  
  STABLE_TORCH_LIBRARY_FRAGMENT(_C_custom_ar, custom_ar) {
@@ -264,7 +251,7 @@ index 3133243c4..1ca216c0d 100644
    custom_ar.impl("all_reduce", TORCH_BOX(&all_reduce));
  }
  
-@@ -918,10 +961,16 @@ STABLE_TORCH_LIBRARY_IMPL(_C_custom_ar, CPU, custom_ar) {
+@@ -895,10 +934,16 @@ STABLE_TORCH_LIBRARY_IMPL(_C_custom_ar, CPU, custom_ar) {
  STABLE_TORCH_LIBRARY_IMPL(_C_custom_ar, CompositeExplicitAutograd, custom_ar) {
    custom_ar.impl("dispose", TORCH_BOX(&dispose));
    custom_ar.impl("meta_size", TORCH_BOX(&meta_size));
@@ -281,7 +268,7 @@ index 3133243c4..1ca216c0d 100644
    custom_ar.impl("allocate_shared_buffer_and_handle",
                   TORCH_BOX(&allocate_shared_buffer_and_handle));
    custom_ar.impl("free_shared_buffer", TORCH_BOX(&free_shared_buffer));
-@@ -960,18 +1009,41 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
+@@ -937,18 +982,41 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
  // translate the CUDA dispatch-key token like torch.library's Python path does).
  STABLE_TORCH_LIBRARY_IMPL(_C, PrivateUse1, ops) {
    ops.impl("weak_ref_tensor", TORCH_BOX(&weak_ref_tensor));
@@ -323,7 +310,7 @@ index 3133243c4..1ca216c0d 100644
    ops.impl("rotary_embedding", TORCH_BOX(&rotary_embedding));
    // w8a8 per-token-group quant (MUSA-0/Option-3 consolidation): the upstream
    // stable kernels replace the native csrc/musa non-fused re-impl. The MUSA-only
-@@ -984,4 +1056,5 @@ STABLE_TORCH_LIBRARY_IMPL(_C, PrivateUse1, ops) {
+@@ -961,4 +1029,5 @@ STABLE_TORCH_LIBRARY_IMPL(_C, PrivateUse1, ops) {
    ops.impl("apply_repetition_penalties_", TORCH_BOX(&apply_repetition_penalties_));
  }
  #endif

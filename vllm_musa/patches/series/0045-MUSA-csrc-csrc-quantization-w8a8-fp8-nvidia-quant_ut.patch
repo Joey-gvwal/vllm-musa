@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc): csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
  1 file changed, 13 insertions(+), 17 deletions(-)
 
 diff --git a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
-index 6e95d72ed..3b7e25dc5 100644
+index 6e95d72..3b7e25d 100644
 --- a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 +++ b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 @@ -1,7 +1,6 @@

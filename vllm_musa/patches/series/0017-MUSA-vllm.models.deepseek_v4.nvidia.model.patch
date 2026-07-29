@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.model
  1 file changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
-index aa60ad34c..ce73743da 100644
+index ddc2fe0..2e21cec 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
 @@ -1,5 +1,6 @@
@@ -16,10 +16,10 @@ index aa60ad34c..ce73743da 100644
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +import os
  import typing
- from collections.abc import Callable, Iterable, MutableSequence, Sequence
+ from collections.abc import Callable, Iterable
  from itertools import islice
-@@ -70,6 +71,13 @@ from vllm.utils.math_utils import cdiv
- from vllm.v1.attention.backends.registry import AttentionBackendEnum
+@@ -79,6 +80,13 @@ from vllm.v1.attention.backends.registry import AttentionBackendEnum
+ from vllm.v1.worker.ubatching import dbo_current_ubatch_id
  
  
 +def _musa_deepseek_v4_disable_aux_overlap() -> bool:
@@ -32,7 +32,7 @@ index aa60ad34c..ce73743da 100644
  class DeepseekV4MLP(nn.Module):
      def __init__(
          self,
-@@ -945,7 +953,16 @@ class DeepseekV4Model(nn.Module):
+@@ -985,7 +993,16 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
          # DeepseekV4Attention.attn_gemm_parallel_execute
          # (compressor kv_score, indexer.weights_proj, indexer.compressor
          # kv_score). fused_wqa_wkv stays on the default stream.

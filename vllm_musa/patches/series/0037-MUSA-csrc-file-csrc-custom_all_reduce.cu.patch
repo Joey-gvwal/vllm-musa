@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA(csrc-file): csrc/custom_all_reduce.cu
  1 file changed, 129 insertions(+), 70 deletions(-)
 
 diff --git a/csrc/libtorch_stable/custom_all_reduce.cu b/csrc/libtorch_stable/custom_all_reduce.cu
-index 0f7f75994..4ae105171 100644
+index 0f7f759..4ae1051 100644
 --- a/csrc/libtorch_stable/custom_all_reduce.cu
 +++ b/csrc/libtorch_stable/custom_all_reduce.cu
 @@ -1,11 +1,7 @@

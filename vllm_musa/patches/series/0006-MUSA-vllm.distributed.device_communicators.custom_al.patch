@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: vllm.distributed.device_communicators.custom_all_reduce
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/distributed/device_communicators/custom_all_reduce.py b/vllm/distributed/device_communicators/custom_all_reduce.py
-index 95db6cc92..a5f0de620 100644
+index 95db6cc..a5f0de6 100644
 --- a/vllm/distributed/device_communicators/custom_all_reduce.py
 +++ b/vllm/distributed/device_communicators/custom_all_reduce.py
 @@ -56,7 +56,7 @@ class CustomAllreduce:

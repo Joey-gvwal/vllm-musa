@@ -4,11 +4,11 @@ Date: Wed, 3 Jun 2026 11:47:36 +0000
 Subject: [PATCH] MUSA: vllm.model_executor.layers.sparse_attn_indexer
 
 ---
- .../layers/sparse_attn_indexer.py             | 1013 +++++++++++++++++
- 1 file changed, 1013 insertions(+)
+ .../layers/sparse_attn_indexer.py             | 1348 +++++++++++++++++
+ 1 file changed, 1348 insertions(+)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index fe2b268cd..eadc6f533 100644
+index 5b8e2bf..87ec30b 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,9 +2,12 @@
@@ -24,7 +24,7 @@ index fe2b268cd..eadc6f533 100644
  from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
-@@ -31,6 +34,1311 @@ from vllm.v1.worker.workspace import current_workspace_manager
+@@ -39,6 +42,1311 @@ from vllm.v1.worker.workspace import current_workspace_manager
  
  logger = init_logger(__name__)
  
@@ -1336,7 +1336,7 @@ index fe2b268cd..eadc6f533 100644
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
  
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
-@@ -482,6 +1790,46 @@ class SparseAttnIndexer(CustomOp):
+@@ -764,6 +2072,46 @@ class SparseAttnIndexer(CustomOp):
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
              return self.forward_hip(hidden_states, q_quant, k, weights)

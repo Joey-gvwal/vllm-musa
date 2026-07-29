@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: route DeepSeek-V4 small-M score FP32 GEMM to DeepGEMM
  1 file changed, 36 insertions(+)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 1f39ffa8ca..6d63b89036 100644
+index 461d551..c57b927 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -65,11 +65,47 @@ logger = init_logger(__name__)
+@@ -69,11 +69,47 @@ logger = init_logger(__name__)
  from vllm.platforms import current_platform
  
  

@@ -17,10 +17,10 @@ since as_strided does not bounds-check.
  1 file changed, 15 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 8dba0cea5..c1f1b4360 100644
+index 867bd5e..9a0bc09 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
-@@ -7244,12 +7244,15 @@ class GPUModelRunner(
+@@ -7465,12 +7465,15 @@ class GPUModelRunner(
                      storage_offset_bytes = 0
                      for shape, dtype in zip(kv_cache_spec.shapes, kv_cache_spec.dtypes):
                          dtype_size = get_dtype_size(dtype)
@@ -40,7 +40,7 @@ index 8dba0cea5..c1f1b4360 100644
                          assert storage_offset_bytes % dtype_size == 0
                          tensor = torch.as_strided(
                              raw_tensor.view(dtype),
-@@ -7258,8 +7261,14 @@ class GPUModelRunner(
+@@ -7479,8 +7482,14 @@ class GPUModelRunner(
                              storage_offset=storage_offset_bytes // dtype_size,
                          )
                          state_tensors.append(tensor)
