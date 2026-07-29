@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 29 Jul 2026 15:18:50 +0800
+Subject: [PATCH] MUSA csrc name idx_t in moe_sum index dispatch
+
+---
+ .../moe/moe_align_sum_kernels.cu              | 20 ++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
+index dca74b2..8a5cba4 100644
+--- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
++++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
+@@ -13,11 +13,21 @@
+ 
+ // MUSA: index dispatch (Int/Long) — the regular dispatch_utils.h lacks it.
+ #ifndef VLLM_DISPATCH_IDX_TYPES
+-#define VLLM_DISPATCH_CASE_IDX_TYPES(...)              \
+-  AT_DISPATCH_CASE(at::ScalarType::Int, __VA_ARGS__)  \
+-  AT_DISPATCH_CASE(at::ScalarType::Long, __VA_ARGS__)
+-#define VLLM_DISPATCH_IDX_TYPES(TYPE, NAME, ...) \
+-  AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_IDX_TYPES(__VA_ARGS__))
++#define VLLM_DISPATCH_IDX_TYPES(TYPE, NAME, ...)                \
++  [&] {                                                         \
++    switch (TYPE) {                                             \
++      case at::ScalarType::Int: {                               \
++        using idx_t = int32_t;                                  \
++        return __VA_ARGS__();                                   \
++      }                                                         \
++      case at::ScalarType::Long: {                              \
++        using idx_t = int64_t;                                  \
++        return __VA_ARGS__();                                   \
++      }                                                         \
++      default:                                                  \
++        TORCH_CHECK(false, NAME, ": unsupported index dtype"); \
++    }                                                           \
++  }()
+ #endif
+ 
+ #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
