@@ -295,6 +295,82 @@ def _musa_silu_deepgemm_fp8_op(
     return output
 
 
+def _musa_silu_clamp_deepgemm_fp8_op(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    group_size: int,
+    use_deep_gemm_e8m0: bool,
+    swiglu_limit: float,
+) -> torch.Tensor:
+    """Fuse DeepSeek-V4 clamp-aware SwiGLU, group quant, and DeepGEMM.
+
+    DeepSeek-V4's dense/shared MLP path uses ``SiluAndMulWithClamp`` before
+    the block-FP8 down projection.  The native fast path keeps the activation
+    result rounded to the input dtype before computing group absmax, matching
+    the materialized activation consumed by the ordinary quantizer.
+    """
+    hidden_size = input.shape[-1] // 2 if input.dim() == 2 else 0
+    supported = (
+        group_size == 128
+        and not use_deep_gemm_e8m0
+        and _use_row_major_activation_scales(use_deep_gemm_e8m0)
+        and input.dim() == 2
+        and input.shape[-1] % (2 * group_size) == 0
+        and hidden_size == weight.shape[-1]
+        and input.dtype in (torch.bfloat16, torch.float16)
+        and input.is_contiguous()
+        and swiglu_limit > 0.0
+    )
+    if not supported:
+        d = input.shape[-1] // 2
+        gate = torch.clamp(input[..., :d], max=swiglu_limit)
+        up = torch.clamp(input[..., d:], min=-swiglu_limit, max=swiglu_limit)
+        activated = gate * torch.sigmoid(gate) * up
+        return _musa_deepgemm_fp8_op(
+            activated,
+            weight,
+            weight_scale,
+            group_size,
+            use_deep_gemm_e8m0,
+        )
+
+    q_input = torch.empty(
+        (input.shape[0], hidden_size),
+        dtype=current_platform.fp8_dtype(),
+        device=input.device,
+    )
+    input_scale = torch.empty(
+        (input.shape[0], hidden_size // group_size),
+        dtype=torch.float32,
+        device=input.device,
+    )
+    fp8_min, fp8_max = get_fp8_min_max()
+    torch.ops._C_musa_ops.silu_and_mul_clamp_per_token_group_fp8_quant(
+        input,
+        q_input,
+        input_scale,
+        group_size,
+        1e-10,
+        fp8_min,
+        fp8_max,
+        swiglu_limit,
+    )
+
+    output = torch.empty(
+        (q_input.shape[0], weight.shape[0]),
+        dtype=torch.bfloat16,
+        device=q_input.device,
+    )
+    fp8_gemm_nt(
+        (q_input, input_scale),
+        (weight, weight_scale),
+        output,
+        is_deep_gemm_e8m0_used=use_deep_gemm_e8m0,
+    )
+    return output
+
+
 def _musa_fused_add_rms_deepgemm_fp8_op(
     input: torch.Tensor,
     residual: torch.Tensor,
@@ -470,6 +546,22 @@ def _musa_silu_deepgemm_fp8_op_fake(
     )
 
 
+def _musa_silu_clamp_deepgemm_fp8_op_fake(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    group_size: int,
+    use_deep_gemm_e8m0: bool,
+    swiglu_limit: float,
+) -> torch.Tensor:
+    del weight_scale, group_size, use_deep_gemm_e8m0, swiglu_limit
+    return torch.empty(
+        (input.shape[0], weight.shape[0]),
+        dtype=torch.bfloat16,
+        device=input.device,
+    )
+
+
 def _musa_fused_add_rms_deepgemm_fp8_op_fake(
     input: torch.Tensor,
     residual: torch.Tensor,
@@ -509,6 +601,12 @@ direct_register_custom_op(
     "musa_silu_deepgemm_fp8_op",
     _musa_silu_deepgemm_fp8_op,
     fake_impl=_musa_silu_deepgemm_fp8_op_fake,
+)
+
+direct_register_custom_op(
+    "musa_silu_clamp_deepgemm_fp8_op",
+    _musa_silu_clamp_deepgemm_fp8_op,
+    fake_impl=_musa_silu_clamp_deepgemm_fp8_op_fake,
 )
 
 direct_register_custom_op(
