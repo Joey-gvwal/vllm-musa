@@ -163,7 +163,7 @@ def musa_sparse_attention_fwd_kernel_v1(
 def sparse_mla_fwd_bf16(
     q, kv, indices, sm_scale, d_v=512, topk_length=None
 ):
-    # The v0.24 sparse-MLA wrapper always forwards ``topk_length``.  This
+    # The sparse-MLA wrapper always forwards ``topk_length``.  This
     # kernel masks padded entries directly from negative indices, so the
     # explicit lengths are not needed, but the argument remains part of the
     # backend contract.

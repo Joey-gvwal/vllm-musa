@@ -181,8 +181,7 @@ VLLM_STABLE_CSRC_SOURCES = [
         / "csrc/libtorch_stable/quantization/w8a8/fp8/common.cu"),
     str(_VLLM_REPO.source_dir
         / "csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu"),
-    # Relocated from csrc/* into csrc/libtorch_stable/* by the v0.24.0 stable-ABI
-    # consolidation; compiled into the stable extension at their new paths.
+    # Upstream's csrc/libtorch_stable/* sources, compiled into the stable extension.
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/mamba/selective_scan_fwd.cu"),
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cache_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cache_kernels_fused.cu"),
@@ -229,9 +228,9 @@ VLLM_MUSA_CSRC_SOURCES = [
 ]
 
 VLLM_MOE_CSRC_SOURCES = [
-    # Relocated from csrc/moe/* into csrc/libtorch_stable/moe/* by the v0.24.0
-    # stable-ABI consolidation. On MUSA these are built as a regular (at::Tensor)
-    # extension: the kernels are converted off the stable ABI (the stable path
+    # Upstream's csrc/libtorch_stable/moe/* sources. On MUSA these are built as a
+    # regular (at::Tensor) extension: the kernels are converted off the stable ABI
+    # (the stable path
     # needs torch::stable::sum_out with an int[] dim that torch_musa 2.9 cannot
     # box), the bindings are a regular TORCH_LIBRARY, and moe_ops.h is at::Tensor.
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/moe_align_sum_kernels.cu"),
@@ -423,7 +422,7 @@ class _CustomBuildExt(BuildExtension):
         # .git, so vLLM's setuptools-scm cannot derive a version. vLLM's setup.py
         # consumes VLLM_VERSION_OVERRIDE and forwards it to setuptools-scm.
         if not (source_dir / ".git").exists():
-            env.setdefault("VLLM_VERSION_OVERRIDE", "0.24.0")
+            env.setdefault("VLLM_VERSION_OVERRIDE", "0.26.0")
 
         # always editable; compat (path-based .pth) -- the default PEP 660 finder
         # mis-resolves vLLM's submodules and loses to a system vLLM.

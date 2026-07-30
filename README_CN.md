@@ -45,9 +45,9 @@
 
 | vLLM 版本 | PyTorch 版本 | 引擎    | 状态         |
 |-----------|--------------|---------|--------------|
-| v0.24.0    | 2.9.x        | 仅 V1   | ✅ 已支持    |
+| v0.26.0    | 2.9.x        | 仅 V1   | ✅ 已支持    |
 
-> **注意**：本插件使用 vLLM 的 V1 引擎架构（不支持 V0 引擎）。在 V1 引擎内部，vLLM v0.24.0 会为部分架构（如 Qwen3、DeepSeek-V2、Llama）自动选用 **Model Runner V2**，其余架构使用 V1 model runner；两者在 MUSA 上均受支持。设置 `VLLM_USE_V2_MODEL_RUNNER=1` 或 `0` 可强制指定其一。
+> **注意**：本插件使用 vLLM 的 V1 引擎架构（不支持 V0 引擎）。在 V1 引擎内部，vLLM v0.26.0 会为稠密（dense）模型以及部分 MoE 架构（如 DeepSeek-V2、Qwen2-MoE、Granite-MoE）自动选用 **Model Runner V2**，其余 MoE 架构使用 V1 model runner；两者在 MUSA 上均受支持。设置 `VLLM_USE_V2_MODEL_RUNNER=1` 或 `0` 可强制指定其一。
 
 ### Docker 镜像
 

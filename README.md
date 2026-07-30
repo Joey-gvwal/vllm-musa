@@ -45,9 +45,9 @@ The plugin leverages the following key components:
 
 | vLLM Version | PyTorch Version | Engine  | Status       |
 |--------------|-----------------|---------|--------------|
-| v0.24.0       | 2.9.x           | V1 only | ✅ Supported |
+| v0.26.0       | 2.9.x           | V1 only | ✅ Supported |
 
-> **Note**: This plugin uses vLLM's V1 engine architecture (the V0 engine is not supported). Within the V1 engine, vLLM v0.24.0 auto-selects its **Model Runner V2** for certain architectures (e.g. Qwen3, DeepSeek-V2, Llama) and the V1 model runner for others; both are supported on MUSA. Set `VLLM_USE_V2_MODEL_RUNNER=1` or `0` to force one.
+> **Note**: This plugin uses vLLM's V1 engine architecture (the V0 engine is not supported). Within the V1 engine, vLLM v0.26.0 auto-selects its **Model Runner V2** for dense models and a subset of MoE architectures (e.g. DeepSeek-V2, Qwen2-MoE, Granite-MoE), and the V1 model runner for the other MoE architectures; both are supported on MUSA. Set `VLLM_USE_V2_MODEL_RUNNER=1` or `0` to force one.
 
 ### Docker image
 

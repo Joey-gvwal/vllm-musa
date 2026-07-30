@@ -80,19 +80,19 @@ def test_probe_upstream(ms, tmp_path):
 
 
 def test_read_pin(ms):
-    assert ms.read_pin("VLLM_TAG") == "v0.24.0"
+    assert ms.read_pin("VLLM_TAG") == "v0.26.0"
     assert ms.read_pin("DOES_NOT_EXIST", "fallback") == "fallback"
 
 
 def test_default_target_prefers_exact_commit(ms, monkeypatch):
-    pins = {"VLLM_COMMIT": "0123456789abcdef", "VLLM_TAG": "v0.24.0"}
+    pins = {"VLLM_COMMIT": "0123456789abcdef", "VLLM_TAG": "v0.26.0"}
     monkeypatch.setattr(
         ms, "read_pin", lambda key, default=None: pins.get(key, default)
     )
     assert ms._default_target() == "0123456789abcdef"
 
     pins.pop("VLLM_COMMIT")
-    assert ms._default_target() == "v0.24.0"
+    assert ms._default_target() == "v0.26.0"
 
 
 def test_series_readme_count_matches_directory():

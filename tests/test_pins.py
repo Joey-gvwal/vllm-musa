@@ -62,7 +62,7 @@ def test_makefile_sync_reads_pins_not_literal():
     assert "third_party/PINS" in mk, "Makefile.sync must read the pin from PINS"
     assert "VLLM_REF :=" in mk
     assert "checkout -f --detach FETCH_HEAD" in mk
-    assert "checkout -f v0.24.0" not in mk
+    assert "checkout -f v0.26.0" not in mk
 
 
 @pytest.mark.skipif(shutil.which("sed") is None, reason="sed unavailable")

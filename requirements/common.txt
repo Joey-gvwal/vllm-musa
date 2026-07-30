@@ -1,6 +1,7 @@
 # Runtime Python dependencies that are portable across MUSA images.
-# 0.1.76 ports nested torch/cuda.h includes to torch/musa.h during builds.
-torchada>=0.1.76
+# 0.1.77 is the v0.26-compatible torchada: nested torch/cuda.h include porting
+# plus the stable_compat cuda->musa maps the libtorch-stable build force-includes.
+torchada>=0.1.77
 mthreads-ml-py>=2.2.11
 numpy==1.26
 openai>=2.24.0
