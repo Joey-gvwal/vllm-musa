@@ -5,15 +5,15 @@ Subject: [PATCH] MUSA route tf32_hc_prenorm_gemm to mate.deep_gemm and split
  broadcast MHC per K-chunk
 
 ---
- vllm/model_executor/kernels/mhc/tilelang.py | 30 ++++++++++++++++-----
- vllm/utils/deep_gemm.py                     | 11 ++++++++
- 2 files changed, 34 insertions(+), 7 deletions(-)
+ vllm/model_executor/kernels/mhc/tilelang.py | 23 ++++++++++++++-------
+ vllm/utils/deep_gemm.py                     | 11 ++++++++++
+ 2 files changed, 27 insertions(+), 7 deletions(-)
 
 diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
-index 57f852c..a330bfa 100644
+index 57f852c..4149f73 100644
 --- a/vllm/model_executor/kernels/mhc/tilelang.py
 +++ b/vllm/model_executor/kernels/mhc/tilelang.py
-@@ -391,13 +391,29 @@ def mhc_pre_broadcast_tilelang(
+@@ -391,13 +391,22 @@ def mhc_pre_broadcast_tilelang(
  
      from vllm.utils.deep_gemm import tf32_hc_prenorm_gemm
  
@@ -24,21 +24,14 @@ index 57f852c..a330bfa 100644
 -        gemm_out_sqrsum,
 -        n_splits,
 -    )
-+    if residual.device.type == "musa":
-+        # MUSA: mate's tf32_hc_prenorm_gemm writes a single 2D (M, N) tile, not the
-+        # 3D per-split output this v0.26 path expects. Produce the split-K partials
-+        # by running it on each contiguous K (hidden) chunk; the fuse kernel sums
-+        # them, and sum_s x[:,c_s] @ fn[:,c_s].T == x @ fn.T.
-+        k_chunk = residual_flat.shape[-1] // n_splits
-+        for s in range(n_splits):
-+            k0 = s * k_chunk
-+            tf32_hc_prenorm_gemm(
-+                residual_flat[:, k0 : k0 + k_chunk].contiguous(),
-+                fn_broadcast[:, k0 : k0 + k_chunk].contiguous(),
-+                gemm_out_mul[s],
-+                gemm_out_sqrsum[s],
-+                None,
-+            )
++    if residual.device.type == "musa" and n_splits <= 1:
++        # MUSA: mate's tf32_hc_prenorm_gemm writes a 2D (M, N) tile when
++        # num_splits<=1, but this path pre-allocs a (1, M, N) split view; pass the
++        # 2D slice. For n_splits>1 mate writes the (n_splits, M, N) partials
++        # natively in one launch, identical to the upstream call below.
++        tf32_hc_prenorm_gemm(
++            residual_flat, fn_broadcast, gemm_out_mul[0], gemm_out_sqrsum[0], None
++        )
 +    else:
 +        tf32_hc_prenorm_gemm(
 +            residual_flat,
