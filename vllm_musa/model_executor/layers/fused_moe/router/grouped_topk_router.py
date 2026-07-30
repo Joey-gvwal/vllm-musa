@@ -67,7 +67,17 @@ def _musa_jit_fused_topk(
     indices_type: torch.dtype | None,
     correction_bias: torch.Tensor | None = None,
     scoring_func: str = "softmax",
+    num_fused_shared_experts: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
+    if num_fused_shared_experts and not (
+        num_fused_shared_experts == 1
+        and gating_output.shape[1] == 257
+        and topk == 8
+        and renormalize
+        and correction_bias is None
+        and scoring_func == "softmax"
+    ):
+        return None
     if not _can_use_musa_jit_topk(hidden_states, gating_output, topk, correction_bias):
         return None
 
@@ -75,15 +85,16 @@ def _musa_jit_fused_topk(
     if musa_jit_topk is None:
         return None
 
+    output_topk = topk + num_fused_shared_experts
     topk_weights = torch.empty(
         gating_output.shape[0],
-        topk,
+        output_topk,
         dtype=torch.float32,
         device=gating_output.device,
     )
     topk_ids = torch.empty(
         gating_output.shape[0],
-        topk,
+        output_topk,
         dtype=torch.int32,
         device=gating_output.device,
     )
@@ -95,6 +106,7 @@ def _musa_jit_fused_topk(
             gating_output,
             renormalize,
             correction_bias=correction_bias,
+            num_fused_shared_experts=num_fused_shared_experts,
         )
     elif scoring_func == "sigmoid":
         musa_jit_topk.topk_sigmoid(

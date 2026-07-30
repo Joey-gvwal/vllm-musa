@@ -513,6 +513,47 @@ def test_csrc_topk_kernels_match_reference(
     _assert_close(weights, ref_weights, atol=3e-3, rtol=3e-3)
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_csrc_topk_fuses_qwen_shared_gate(dtype: torch.dtype) -> None:
+    from vllm_musa.jit_kernel.csrc.topk import topk_softmax
+
+    torch.manual_seed(790)
+    device = torch.device("musa")
+    rows = 7
+    routed_experts = 256
+    routed_topk = 8
+    combined_logits = torch.randn(
+        (rows, routed_experts + 1), device=device, dtype=dtype
+    )
+
+    weights = torch.empty(
+        (rows, routed_topk + 1), device=device, dtype=torch.float32
+    )
+    ids = torch.empty(
+        (rows, routed_topk + 1), device=device, dtype=torch.int32
+    )
+    topk_softmax(
+        weights,
+        ids,
+        combined_logits,
+        renormalize=True,
+        num_fused_shared_experts=1,
+    )
+
+    routed_weights, routed_ids = _topk_softmax_ref(
+        combined_logits[:, :routed_experts], routed_topk, True
+    )
+    shared_weights = torch.sigmoid(combined_logits[:, routed_experts:]).float()
+    shared_ids = torch.full(
+        (rows, 1), routed_experts, device=device, dtype=torch.int32
+    )
+    ref_weights = torch.cat((routed_weights, shared_weights), dim=-1)
+    ref_ids = torch.cat((routed_ids, shared_ids), dim=-1)
+
+    _assert_ids_equal(ids, ref_ids)
+    _assert_close(weights, ref_weights, atol=3e-3, rtol=3e-3)
+
+
 def test_csrc_jit_integration_imports() -> None:
     import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router as topk_router
     import vllm_musa.model_executor.layers.layernorm as layernorm
