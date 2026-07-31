@@ -419,6 +419,155 @@ def _call_topk_topp_sampler(
         sampler.logprobs_mode = original_logprobs_mode
 
 
+def _legacy_logits_processors_are_inactive(sampling_metadata: Any) -> bool:
+    logitsprocs = getattr(sampling_metadata, "logitsprocs", None)
+    if logitsprocs is None:
+        return False
+    for group_name in ("non_argmax_invariant", "argmax_invariant"):
+        processors = getattr(logitsprocs, group_name, None)
+        if processors is None:
+            return False
+        for processor in processors:
+            name = processor.__class__.__name__
+            if name == "MinPLogitsProcessor":
+                if getattr(processor, "min_p_count", None) != 0:
+                    return False
+            elif name == "LogitBiasLogitsProcessor":
+                biases = getattr(processor, "biases", None)
+                if biases is None or biases:
+                    return False
+            elif name == "MinTokensLogitsProcessor":
+                min_toks = getattr(processor, "min_toks", None)
+                if min_toks is None or min_toks:
+                    return False
+            else:
+                return False
+    return True
+
+
+def can_use_qwen_legacy_unfiltered_gumbel(
+    logits: torch.Tensor,
+    sampling_metadata: Any,
+    logprobs_mode: LogprobsMode,
+    predict_bonus_token: bool,
+    use_fp64_gumbel: bool,
+    is_qwen_family: bool = False,
+) -> bool:
+    """Gate raw-logits Gumbel for Qwen models on the legacy GPU runner."""
+    if (
+        not is_qwen_family
+        or not current_platform.is_musa()
+        or not is_musa_tensor(logits)
+    ):
+        return False
+    if (
+        logits.dtype != torch.bfloat16
+        or logits.shape[0] == 0
+        or not _is_qwen_sampler_vocab(logits)
+        or logits.stride(-1) != 1
+    ):
+        return False
+    if predict_bonus_token or use_fp64_gumbel or logprobs_mode != "raw_logprobs":
+        return False
+    if (
+        not getattr(sampling_metadata, "all_random", False)
+        or getattr(sampling_metadata, "all_greedy", True)
+        or getattr(sampling_metadata, "uniform_temperature", None) != np.float32(1.0)
+    ):
+        return False
+    if (
+        getattr(sampling_metadata, "top_k", object()) is not None
+        or getattr(sampling_metadata, "top_p", object()) is not None
+        or getattr(sampling_metadata, "generators", None) != {}
+    ):
+        return False
+    if (
+        getattr(sampling_metadata, "max_num_logprobs", object()) is not None
+        or getattr(sampling_metadata, "logprob_token_ids", None)
+        or getattr(sampling_metadata, "no_penalties", False) is not True
+        or getattr(sampling_metadata, "allowed_token_ids_mask", object()) is not None
+        or getattr(sampling_metadata, "bad_words_token_ids", None) != {}
+    ):
+        return False
+
+    spec_token_ids = getattr(sampling_metadata, "spec_token_ids", None)
+    if spec_token_ids and any(spec_token_ids):
+        return False
+    holder = getattr(sampling_metadata, "thinking_budget_state_holder", None)
+    if holder is not None:
+        has_tracked_requests = getattr(holder, "has_tracked_requests", None)
+        if not callable(has_tracked_requests) or has_tracked_requests():
+            return False
+    return _legacy_logits_processors_are_inactive(sampling_metadata)
+
+
+def _get_qwen_legacy_unfiltered_generator(
+    sampler: Any, logits: torch.Tensor
+) -> torch.Generator | None:
+    generator = getattr(sampler, "_musa_qwen_unfiltered_generator", None)
+    if generator is None:
+        seed = int(torch.musa.initial_seed())
+        if seed < 0 or seed > np.iinfo(np.int64).max:
+            return None
+        generator = torch.Generator(device=logits.device)
+        generator.manual_seed(seed)
+        sampler._musa_qwen_unfiltered_generator = generator
+    if getattr(getattr(generator, "device", None), "type", None) != logits.device.type:
+        return None
+    return generator
+
+
+def sample_qwen_legacy_unfiltered_gumbel(
+    sampler: Any, logits: torch.Tensor
+) -> torch.Tensor | None:
+    """Sample raw Qwen logits while advancing one private Philox stream."""
+    generator = _get_qwen_legacy_unfiltered_generator(sampler, logits)
+    if generator is None:
+        return None
+    generator_state = get_qwen_legacy_generator_state({0: generator}, 1)
+    if generator_state is None:
+        return None
+    seeds_cpu, offsets_cpu = generator_state
+    seed = seeds_cpu[0]
+    offset = offsets_cpu[0]
+    rows = logits.shape[0]
+    next_offset = offset + 4 * rows
+    if next_offset > np.iinfo(np.int64).max:
+        return None
+
+    buffers = getattr(sampler, "_musa_qwen_unfiltered_buffers", None)
+    if buffers is None:
+        buffers = {}
+        sampler._musa_qwen_unfiltered_buffers = buffers
+    entry = buffers.get(rows)
+    if entry is None:
+        entry = (
+            torch.zeros(rows, dtype=torch.int32, device=logits.device),
+            torch.ones(1, dtype=torch.float32, device=logits.device),
+            torch.tensor([seed], dtype=torch.int64, device=logits.device),
+            torch.empty(rows, dtype=torch.int64, device=logits.device),
+        )
+        buffers[rows] = entry
+    mapping, temperature, seeds, positions = entry
+    torch.arange(offset // 4, offset // 4 + rows, out=positions)
+    sampled = vllm_worker_sampler.gumbel_sample(
+        logits,
+        mapping,
+        temperature,
+        seeds,
+        positions,
+        apply_temperature=False,
+        use_fp64=False,
+    )
+    try:
+        generator.set_offset(next_offset)
+    except (RuntimeError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            "Failed to advance the legacy-runner unfiltered Gumbel generator"
+        ) from error
+    return sampled
+
+
 def can_use_qwen_legacy_gumbel(
     logits: torch.Tensor,
     sampling_metadata: Any,
@@ -740,6 +889,25 @@ def _sampler_forward(
     logprobs_mode_override: LogprobsMode | None = None,
 ) -> Any:
     original_forward = vllm_sample_sampler.Sampler._musa_original_forward
+    if logprobs_mode_override is None and can_use_qwen_legacy_unfiltered_gumbel(
+        logits,
+        sampling_metadata,
+        self.logprobs_mode,
+        predict_bonus_token,
+        self.use_fp64_gumbel,
+        bool(getattr(self, "_musa_qwen_family", False)),
+    ):
+        sampled = sample_qwen_legacy_unfiltered_gumbel(self, logits)
+        if sampled is not None:
+            vllm_topk_topp_sampler.logger.info_once(
+                "Using the gated MUSA legacy-runner unfiltered Gumbel sampler "
+                "for Qwen requests.",
+                scope="global",
+            )
+            return vllm_sample_sampler.SamplerOutput(
+                sampled_token_ids=sampled.to(torch.int32).unsqueeze(-1),
+                logprobs_tensors=None,
+            )
     if logprobs_mode_override is None:
         return original_forward(
             self, logits, sampling_metadata, predict_bonus_token, logprobs_mode_override
@@ -812,6 +980,66 @@ def can_use_qwen_v2_gumbel(
     if not np.all(states.top_p.np[idx_mapping_np] == np.float32(1.0)):
         return False
     return bool(np.all(states.min_p.np[idx_mapping_np] == np.float32(0.05)))
+
+
+def can_use_qwen_v2_unfiltered_gumbel(
+    sampler: Any,
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    idx_mapping_np: np.ndarray,
+    pos: torch.Tensor,
+    return_logprobs: bool,
+) -> bool:
+    """Gate direct logits-domain Gumbel to an unfiltered Qwen contract."""
+    if (
+        not getattr(sampler, "_musa_qwen_family", False)
+        or not current_platform.is_musa()
+        or not is_musa_tensor(logits)
+    ):
+        return False
+    if (
+        logits.dtype != torch.bfloat16
+        or not _is_qwen_sampler_vocab(logits)
+        or logits.stride(-1) != 1
+    ):
+        return False
+    if idx_mapping_np.ndim != 1 or logits.shape[0] != idx_mapping_np.size:
+        return False
+    if (
+        expanded_idx_mapping.ndim != 1
+        or expanded_idx_mapping.numel() != logits.shape[0]
+    ):
+        return False
+    if pos.ndim != 1 or pos.numel() != logits.shape[0]:
+        return False
+    if getattr(sampler, "num_speculative_tokens", 1) != 1:
+        return False
+    if sampler.use_fp64_gumbel or sampler.logprobs_mode != "raw_logprobs":
+        return False
+    if return_logprobs:
+        return False
+
+    states = sampler.sampling_states
+    if has_worker_user_seed(states, idx_mapping_np):
+        return False
+    if not (
+        np.all(states.temperature.np[idx_mapping_np] == np.float32(1.0))
+        and np.all(states.top_k.np[idx_mapping_np] == logits.shape[1])
+        and np.all(states.top_p.np[idx_mapping_np] == np.float32(1.0))
+        and np.all(states.min_p.np[idx_mapping_np] == np.float32(0.0))
+    ):
+        return False
+
+    use_logit_bias = getattr(sampler.logit_bias_state, "use_logit_bias", None)
+    use_penalty = getattr(sampler.penalties_state, "use_penalty", None)
+    num_bad_words = getattr(sampler.bad_words_state, "num_bad_words", None)
+    if use_logit_bias is None or use_penalty is None or num_bad_words is None:
+        return False
+    return bool(
+        not np.any(use_logit_bias[idx_mapping_np])
+        and not np.any(use_penalty[idx_mapping_np])
+        and not np.any(num_bad_words.np[idx_mapping_np])
+    )
 
 
 def can_use_worker_seeded_multinomial(
@@ -932,6 +1160,25 @@ def sample_worker_logits_qwen_v2_gumbel(
     return sampled, processed_logits
 
 
+def sample_worker_logits_qwen_v2_unfiltered_gumbel(
+    sampler: Any,
+    logits: torch.Tensor,
+    expanded_idx_mapping: torch.Tensor,
+    pos: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample unfiltered categorical Qwen logits without materializing probs."""
+    sampled = vllm_worker_sampler.gumbel_sample(
+        logits,
+        expanded_idx_mapping,
+        sampler.sampling_states.temperature.gpu,
+        sampler.sampling_states.seeds.gpu,
+        pos,
+        apply_temperature=False,
+        use_fp64=False,
+    )
+    return sampled, logits
+
+
 def _sampling_states_init(self: Any, max_num_reqs: int, vocab_size: int):
     original_init = vllm_worker_states.SamplingStates._musa_original_init
     original_init(self, max_num_reqs, vocab_size)
@@ -1035,6 +1282,25 @@ def _worker_sample(
     expanded_local_pos: torch.Tensor,
     return_logprobs: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if can_use_qwen_v2_unfiltered_gumbel(
+        self,
+        logits,
+        expanded_idx_mapping,
+        idx_mapping_np,
+        pos,
+        return_logprobs,
+    ):
+        vllm_topk_topp_sampler.logger.info_once(
+            "Using the gated MUSA unfiltered Gumbel sampler for Qwen requests.",
+            scope="global",
+        )
+        return sample_worker_logits_qwen_v2_unfiltered_gumbel(
+            self,
+            logits,
+            expanded_idx_mapping,
+            pos,
+        )
+
     if can_use_qwen_v2_gumbel(
         self,
         logits,

@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 31 Jul 2026 17:24:54 +0800
+Subject: [PATCH] perf: reuse identity Qwen sampling input views
+
+---
+ vllm/v1/worker/gpu/sample/sampler.py | 20 +++++++++++++++++---
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
+index 1f4eae3..e484efc 100644
+--- a/vllm/v1/worker/gpu/sample/sampler.py
++++ b/vllm/v1/worker/gpu/sample/sampler.py
+@@ -76,8 +76,6 @@ class Sampler:
+         idx_mapping_np = input_batch.idx_mapping_np
+         cu_num_logits_np = input_batch.cu_num_logits_np
+         expanded_local_pos = input_batch.expanded_local_pos
+-        pos = input_batch.positions[input_batch.logits_indices]
+-        input_ids = input_batch.input_ids[input_batch.logits_indices]
+
+         # NOTE(woosuk): We intentionally compute num_nans before sampling to make clear
+         # that num_nans is computed before applying penalties and temperature.
+@@ -86,5 +84,23 @@ class Sampler:
+         return_logprobs = self.returns_logprobs(idx_mapping_np)
+
++        selector = getattr(self, "_musa_select_qwen_sample_input_views", None)
++        sample_inputs = (
++            None
++            if selector is None
++            else selector(
++                logits,
++                input_batch,
++                expanded_idx_mapping,
++                idx_mapping_np,
++                return_logprobs,
++            )
++        )
++        if sample_inputs is None:
++            pos = input_batch.positions[input_batch.logits_indices]
++            input_ids = input_batch.input_ids[input_batch.logits_indices]
++        else:
++            pos, input_ids = sample_inputs
++
+         sampled, processed_logits = self.sample(
+             logits,
+             expanded_idx_mapping,

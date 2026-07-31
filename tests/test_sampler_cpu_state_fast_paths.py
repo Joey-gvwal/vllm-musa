@@ -163,6 +163,31 @@ def _gumbel_gate_sampler(
     )
 
 
+def _unfiltered_gumbel_gate_sampler(
+    rows: int, vocab_size: int = 151936, *, is_qwen_family: bool = True
+):
+    states = SimpleNamespace(
+        temperature=_state_array([1.0] * rows, torch.float32),
+        top_k=_state_array([vocab_size] * rows, torch.int32),
+        top_p=_state_array([1.0] * rows, torch.float32),
+        min_p=_state_array([0.0] * rows, torch.float32),
+        seeds=SimpleNamespace(gpu=object()),
+        has_user_seed=np.zeros(rows, dtype=np.bool_),
+    )
+    return SimpleNamespace(
+        sampling_states=states,
+        num_speculative_tokens=1,
+        use_fp64_gumbel=False,
+        logprobs_mode="raw_logprobs",
+        _musa_qwen_family=is_qwen_family,
+        logit_bias_state=SimpleNamespace(use_logit_bias=np.zeros(rows, dtype=np.bool_)),
+        penalties_state=SimpleNamespace(use_penalty=np.zeros(rows, dtype=np.bool_)),
+        bad_words_state=SimpleNamespace(
+            num_bad_words=SimpleNamespace(np=np.zeros(rows, dtype=np.int32))
+        ),
+    )
+
+
 class _FakeGenerator:
     def __init__(
         self,
@@ -199,6 +224,175 @@ def _legacy_gumbel_metadata(rows: int, **kwargs) -> SimpleNamespace:
         generators=kwargs.get(
             "generators", {row: _FakeGenerator(60043 + row) for row in range(rows)}
         ),
+    )
+
+
+class MinPLogitsProcessor:
+    def __init__(self) -> None:
+        self.min_p_count = 0
+
+
+class LogitBiasLogitsProcessor:
+    def __init__(self) -> None:
+        self.biases = {}
+
+
+class MinTokensLogitsProcessor:
+    def __init__(self) -> None:
+        self.min_toks = {}
+
+
+def _legacy_unfiltered_metadata(rows: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        all_random=True,
+        all_greedy=False,
+        uniform_temperature=1.0,
+        top_k=None,
+        top_p=None,
+        generators={},
+        max_num_logprobs=None,
+        logprob_token_ids=None,
+        no_penalties=True,
+        allowed_token_ids_mask=None,
+        bad_words_token_ids={},
+        spec_token_ids=[[] for _ in range(rows)],
+        thinking_budget_state_holder=None,
+        logitsprocs=SimpleNamespace(
+            argmax_invariant=[MinPLogitsProcessor()],
+            non_argmax_invariant=[
+                LogitBiasLogitsProcessor(),
+                MinTokensLogitsProcessor(),
+            ],
+        ),
+    )
+
+
+@pytest.mark.parametrize("vocab_size", [151936, 248320])
+def test_qwen_legacy_unfiltered_gumbel_gate_accepts_exact_contract(
+    monkeypatch, vocab_size: int
+) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+
+    assert sampler.can_use_qwen_legacy_unfiltered_gumbel(
+        torch.empty((2, vocab_size), dtype=torch.bfloat16),
+        _legacy_unfiltered_metadata(2),
+        "raw_logprobs",
+        False,
+        False,
+        True,
+    )
+
+
+def test_qwen_legacy_unfiltered_gumbel_gate_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    logits = torch.empty((2, 248320), dtype=torch.bfloat16)
+
+    rejected = []
+    value = _legacy_unfiltered_metadata(2)
+    value.uniform_temperature = 0.8
+    rejected.append(value)
+    value = _legacy_unfiltered_metadata(2)
+    value.top_k = torch.full((2,), 50)
+    rejected.append(value)
+    value = _legacy_unfiltered_metadata(2)
+    value.generators = {0: _FakeGenerator(1)}
+    rejected.append(value)
+    value = _legacy_unfiltered_metadata(2)
+    value.no_penalties = False
+    rejected.append(value)
+    value = _legacy_unfiltered_metadata(2)
+    value.logitsprocs.non_argmax_invariant[0].biases[0] = {1: 1.0}
+    rejected.append(value)
+    value = _legacy_unfiltered_metadata(2)
+    value.logitsprocs.argmax_invariant[0].min_p_count = 1
+    rejected.append(value)
+    value = _legacy_unfiltered_metadata(2)
+    value.logitsprocs.argmax_invariant.append(SimpleNamespace())
+    rejected.append(value)
+    value = _legacy_unfiltered_metadata(2)
+    value.spec_token_ids[0] = [1]
+    rejected.append(value)
+
+    for metadata in rejected:
+        assert not sampler.can_use_qwen_legacy_unfiltered_gumbel(
+            logits, metadata, "raw_logprobs", False, False, True
+        )
+    assert not sampler.can_use_qwen_legacy_unfiltered_gumbel(
+        logits, _legacy_unfiltered_metadata(2), "raw_logprobs", True, False, True
+    )
+    assert not sampler.can_use_qwen_legacy_unfiltered_gumbel(
+        logits, _legacy_unfiltered_metadata(2), "raw_logprobs", False, True, True
+    )
+    assert not sampler.can_use_qwen_legacy_unfiltered_gumbel(
+        logits,
+        _legacy_unfiltered_metadata(2),
+        "processed_logits",
+        False,
+        False,
+        True,
+    )
+    assert not sampler.can_use_qwen_legacy_unfiltered_gumbel(
+        logits.float(),
+        _legacy_unfiltered_metadata(2),
+        "raw_logprobs",
+        False,
+        False,
+        True,
+    )
+
+
+def test_qwen_legacy_unfiltered_gumbel_advances_private_stream(monkeypatch) -> None:
+    rows = 4
+    logits = torch.empty((rows, 151936), dtype=torch.bfloat16)
+    generator = _FakeGenerator(60043, offset=8, device=logits.device)
+    fake_sampler = SimpleNamespace(_musa_qwen_unfiltered_generator=generator)
+    calls = []
+
+    def fake_gumbel(*args, **kwargs):
+        calls.append(
+            (
+                tuple(
+                    value.clone() if isinstance(value, torch.Tensor) else value
+                    for value in args
+                ),
+                kwargs,
+            )
+        )
+        return torch.arange(rows, dtype=torch.int64)
+
+    monkeypatch.setattr(sampler.vllm_worker_sampler, "gumbel_sample", fake_gumbel)
+    first = sampler.sample_qwen_legacy_unfiltered_gumbel(fake_sampler, logits)
+    second = sampler.sample_qwen_legacy_unfiltered_gumbel(fake_sampler, logits)
+
+    assert first.tolist() == second.tolist() == [0, 1, 2, 3]
+    assert calls[0][0][1].tolist() == [0, 0, 0, 0]
+    assert calls[0][0][2].tolist() == [1.0]
+    assert calls[0][0][3].tolist() == [60043]
+    assert calls[0][0][4].tolist() == [2, 3, 4, 5]
+    assert calls[1][0][4].tolist() == [6, 7, 8, 9]
+    assert (
+        calls[0][1]
+        == calls[1][1]
+        == {
+            "apply_temperature": False,
+            "use_fp64": False,
+        }
+    )
+    assert generator.get_offset() == 40
+
+
+def test_qwen_legacy_unfiltered_gumbel_rejects_non_qwen_trait(monkeypatch) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    assert not sampler.can_use_qwen_legacy_unfiltered_gumbel(
+        torch.empty((2, 248320), dtype=torch.bfloat16),
+        _legacy_unfiltered_metadata(2),
+        "raw_logprobs",
+        False,
+        False,
+        False,
     )
 
 
@@ -483,6 +677,145 @@ def test_qwen_v2_gumbel_gate_rejects_non_qwen_vocab(monkeypatch) -> None:
         mapping,
         False,
     )
+
+
+@pytest.mark.parametrize("vocab_size", [151936, 248320])
+def test_qwen_v2_unfiltered_gumbel_gate_accepts_exact_contract(
+    monkeypatch, vocab_size: int
+) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    rows = 2
+    mapping = torch.arange(rows, dtype=torch.int64)
+
+    assert sampler.can_use_qwen_v2_unfiltered_gumbel(
+        _unfiltered_gumbel_gate_sampler(rows, vocab_size),
+        torch.empty((rows, vocab_size), dtype=torch.bfloat16),
+        mapping,
+        np.arange(rows, dtype=np.int64),
+        mapping,
+        False,
+    )
+
+
+def test_qwen_v2_unfiltered_gumbel_gate_rejects_noncontract(monkeypatch) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    rows = 2
+    mapping = torch.arange(rows, dtype=torch.int64)
+    mapping_np = np.arange(rows, dtype=np.int64)
+    logits = torch.empty((rows, 151936), dtype=torch.bfloat16)
+
+    rejected = []
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.sampling_states.temperature.np[0] = 0.8
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.sampling_states.top_k.np[0] = 50
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.sampling_states.top_p.np[0] = 0.9
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.sampling_states.min_p.np[0] = 0.05
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.logit_bias_state.use_logit_bias[0] = True
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.penalties_state.use_penalty[0] = True
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.bad_words_state.num_bad_words.np[0] = 1
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.num_speculative_tokens = 2
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    value.sampling_states.has_user_seed[0] = True
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    del value.sampling_states.has_user_seed
+    rejected.append((value, False))
+
+    value = _unfiltered_gumbel_gate_sampler(rows)
+    rejected.append((value, True))
+
+    for candidate, return_logprobs in rejected:
+        assert not sampler.can_use_qwen_v2_unfiltered_gumbel(
+            candidate,
+            logits,
+            mapping,
+            mapping_np,
+            mapping,
+            return_logprobs,
+        )
+
+
+def test_qwen_v2_unfiltered_gumbel_gate_rejects_non_qwen_trait(monkeypatch) -> None:
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    rows = 1
+    mapping = torch.zeros(rows, dtype=torch.int64)
+
+    assert not sampler.can_use_qwen_v2_unfiltered_gumbel(
+        _unfiltered_gumbel_gate_sampler(rows, is_qwen_family=False),
+        torch.empty((rows, 151936), dtype=torch.bfloat16),
+        mapping,
+        np.zeros(rows, dtype=np.int64),
+        mapping,
+        False,
+    )
+
+
+def test_qwen_v2_unfiltered_gumbel_uses_existing_seed_state(monkeypatch) -> None:
+    sentinel = torch.tensor([7, 11])
+    temperature = object()
+    seeds = object()
+    worker = SimpleNamespace(
+        sampling_states=SimpleNamespace(
+            temperature=SimpleNamespace(gpu=temperature),
+            seeds=SimpleNamespace(gpu=seeds),
+        )
+    )
+    logits = torch.empty((2, 151936), dtype=torch.bfloat16)
+    idx_mapping = torch.arange(2)
+    positions = torch.arange(2)
+    captured = {}
+
+    def fake_gumbel(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(sampler.vllm_worker_sampler, "gumbel_sample", fake_gumbel)
+    sampled, processed_logits = sampler.sample_worker_logits_qwen_v2_unfiltered_gumbel(
+        worker, logits, idx_mapping, positions
+    )
+
+    assert sampled is sentinel
+    assert processed_logits is logits
+    assert captured["args"] == (
+        logits,
+        idx_mapping,
+        temperature,
+        seeds,
+        positions,
+    )
+    assert captured["kwargs"] == {
+        "apply_temperature": False,
+        "use_fp64": False,
+    }
 
 
 def test_uniform_active_min_p_uses_cpu_state() -> None:
