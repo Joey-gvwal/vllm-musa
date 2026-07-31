@@ -161,3 +161,227 @@ def launch_graph_registered(
         int(world_size),
         int(shot),
     )
+
+
+def launch_fused_allreduce_rmsnorm_unregistered(
+    rank_data: torch.Tensor,
+    signal_ptrs_cpu: torch.Tensor,
+    inp: torch.Tensor,
+    weight: torch.Tensor,
+    norm_out: torch.Tensor,
+    reduced: torch.Tensor,
+    self_signal_ptr: int,
+    self_buffer_ptr: int,
+    max_size_bytes: int,
+    rank: int,
+    world_size: int,
+    shot: int,
+    eps: float,
+) -> None:
+    _custom_ar_module(int(world_size)).vllm_musa_fused_ar_rmsnorm_launch_unregistered(
+        rank_data,
+        signal_ptrs_cpu,
+        inp,
+        weight,
+        norm_out,
+        reduced,
+        int(self_signal_ptr),
+        int(self_buffer_ptr),
+        int(max_size_bytes),
+        int(rank),
+        int(world_size),
+        int(shot),
+        float(eps),
+    )
+
+
+def launch_fused_allreduce_residual_rmsnorm_unregistered(
+    rank_data: torch.Tensor,
+    signal_ptrs_cpu: torch.Tensor,
+    inp: torch.Tensor,
+    residual: torch.Tensor,
+    weight: torch.Tensor,
+    norm_out: torch.Tensor,
+    residual_out: torch.Tensor,
+    reduced: torch.Tensor,
+    self_signal_ptr: int,
+    self_buffer_ptr: int,
+    max_size_bytes: int,
+    rank: int,
+    world_size: int,
+    shot: int,
+    eps: float,
+) -> None:
+    _custom_ar_module(
+        int(world_size)
+    ).vllm_musa_fused_ar_residual_rmsnorm_launch_unregistered(
+        rank_data,
+        signal_ptrs_cpu,
+        inp,
+        residual,
+        weight,
+        norm_out,
+        residual_out,
+        reduced,
+        int(self_signal_ptr),
+        int(self_buffer_ptr),
+        int(max_size_bytes),
+        int(rank),
+        int(world_size),
+        int(shot),
+        float(eps),
+    )
+
+
+def launch_fused_allreduce_residual_rmsnorm_no_raw_unregistered(
+    rank_data: torch.Tensor,
+    signal_ptrs_cpu: torch.Tensor,
+    inp: torch.Tensor,
+    residual: torch.Tensor,
+    weight: torch.Tensor,
+    norm_out: torch.Tensor,
+    residual_out: torch.Tensor,
+    self_signal_ptr: int,
+    self_buffer_ptr: int,
+    max_size_bytes: int,
+    rank: int,
+    world_size: int,
+    shot: int,
+    eps: float,
+) -> None:
+    _custom_ar_module(
+        int(world_size)
+    ).vllm_musa_fused_ar_residual_rmsnorm_no_raw_launch_unregistered(
+        rank_data,
+        signal_ptrs_cpu,
+        inp,
+        residual,
+        weight,
+        norm_out,
+        residual_out,
+        int(self_signal_ptr),
+        int(self_buffer_ptr),
+        int(max_size_bytes),
+        int(rank),
+        int(world_size),
+        int(shot),
+        float(eps),
+    )
+
+
+def _check_registered_rank_data(rank_data: torch.Tensor) -> None:
+    if rank_data.device.type == "cpu":
+        raise ValueError(
+            "registered MUSA custom-allreduce rank_data must be a device tensor"
+        )
+
+
+def launch_fused_allreduce_rmsnorm_registered(
+    rank_data: torch.Tensor,
+    signal_ptrs_cpu: torch.Tensor,
+    inp: torch.Tensor,
+    weight: torch.Tensor,
+    norm_out: torch.Tensor,
+    reduced: torch.Tensor,
+    self_signal_ptr: int,
+    self_buffer_ptr: int,
+    max_size_bytes: int,
+    rank: int,
+    world_size: int,
+    shot: int,
+    eps: float,
+) -> None:
+    """Launch fused AR-RMSNorm from device-resident peer input pointers.
+
+    The FFI entry is shared with the staging launcher. CPU rank_data selects
+    the existing staging copy; MUSA rank_data selects the registered-input
+    path and skips that copy.
+    """
+    _check_registered_rank_data(rank_data)
+    launch_fused_allreduce_rmsnorm_unregistered(
+        rank_data,
+        signal_ptrs_cpu,
+        inp,
+        weight,
+        norm_out,
+        reduced,
+        self_signal_ptr,
+        self_buffer_ptr,
+        max_size_bytes,
+        rank,
+        world_size,
+        shot,
+        eps,
+    )
+
+
+def launch_fused_allreduce_residual_rmsnorm_registered(
+    rank_data: torch.Tensor,
+    signal_ptrs_cpu: torch.Tensor,
+    inp: torch.Tensor,
+    residual: torch.Tensor,
+    weight: torch.Tensor,
+    norm_out: torch.Tensor,
+    residual_out: torch.Tensor,
+    reduced: torch.Tensor,
+    self_signal_ptr: int,
+    self_buffer_ptr: int,
+    max_size_bytes: int,
+    rank: int,
+    world_size: int,
+    shot: int,
+    eps: float,
+) -> None:
+    _check_registered_rank_data(rank_data)
+    launch_fused_allreduce_residual_rmsnorm_unregistered(
+        rank_data,
+        signal_ptrs_cpu,
+        inp,
+        residual,
+        weight,
+        norm_out,
+        residual_out,
+        reduced,
+        self_signal_ptr,
+        self_buffer_ptr,
+        max_size_bytes,
+        rank,
+        world_size,
+        shot,
+        eps,
+    )
+
+
+def launch_fused_allreduce_residual_rmsnorm_no_raw_registered(
+    rank_data: torch.Tensor,
+    signal_ptrs_cpu: torch.Tensor,
+    inp: torch.Tensor,
+    residual: torch.Tensor,
+    weight: torch.Tensor,
+    norm_out: torch.Tensor,
+    residual_out: torch.Tensor,
+    self_signal_ptr: int,
+    self_buffer_ptr: int,
+    max_size_bytes: int,
+    rank: int,
+    world_size: int,
+    shot: int,
+    eps: float,
+) -> None:
+    _check_registered_rank_data(rank_data)
+    launch_fused_allreduce_residual_rmsnorm_no_raw_unregistered(
+        rank_data,
+        signal_ptrs_cpu,
+        inp,
+        residual,
+        weight,
+        norm_out,
+        residual_out,
+        self_signal_ptr,
+        self_buffer_ptr,
+        max_size_bytes,
+        rank,
+        world_size,
+        shot,
+        eps,
+    )

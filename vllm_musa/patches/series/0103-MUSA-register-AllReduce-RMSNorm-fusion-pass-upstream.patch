@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 31 Jul 2026 17:53:23 +0800
+Subject: [PATCH] MUSA: register AllReduce+RMSNorm fusion pass (upstream
+ v0.24.0-dev PR #140)
+
+---
+ vllm/compilation/passes/pass_manager.py | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
+index 3dd0dc8..a6193e8 100644
+--- a/vllm/compilation/passes/pass_manager.py
++++ b/vllm/compilation/passes/pass_manager.py
+@@ -48,6 +48,11 @@ if current_platform.is_cuda() or current_platform.is_musa():
+     from .fusion.allreduce_rms_fusion import AllReduceFusionPass
+     from .fusion.collective_fusion import AsyncTPPass
+ 
++if current_platform.is_musa():
++    from vllm_musa._inductor.musa_allreduce_rms_fusion import (
++        MusaAllReduceRMSNormFusionPass,
++    )
++
+ if current_platform.is_xpu():
+     from .fusion.act_quant_fusion import ActivationQuantFusionPass
+     from .fusion.rms_quant_fusion import RMSNormQuantFusionPass
+@@ -154,6 +159,9 @@ class PostGradPassManager(CustomGraphPass):  # type: ignore[misc]
+                 # AR+RMS, since both consume fused_add_rms_norm.
+                 self.passes += [RocmAiterTritonAddRMSNormPadFusionPass(config)]
+ 
++            if current_platform.is_musa() and self.pass_config.fuse_allreduce_rms:
++                self.passes += [MusaAllReduceRMSNormFusionPass(config)]
++
+             if self.pass_config.fuse_allreduce_rms:
+                 if rocm_aiter_ops.is_enabled():
+                     self.passes += [RocmAiterAllReduceFusionPass(config)]
