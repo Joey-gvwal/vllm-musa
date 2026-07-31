@@ -13,7 +13,14 @@ The resulting image contains:
   `torch_c_dlpack_ext`),
 - `vllm-musa` and the vendored upstream vLLM, built from source,
 - `vllm-rs` and its Python tool-parser extension when `BUILD_VLLM_RS=1`,
-- `mooncake-transfer-engine-musa`.
+- `mooncake-transfer-engine-musa`,
+- `pytest`, so the repository's pytest-based validation can run directly in the
+  image.
+
+The source tree and default working directory are `/vllm-workspace`, matching
+the upstream vLLM runtime-image contract. A default build produces the
+`vllm-openai` target with `ENTRYPOINT ["vllm", "serve"]`; the `final` target
+retains `CMD ["/bin/bash"]` for tests and interactive use.
 
 ## Prerequisites
 
@@ -43,6 +50,12 @@ With the defaults this produces:
 vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0s5000
 ```
 
+The image accepts the model and engine arguments directly:
+
+```bash
+docker run --rm <MUSA GPU flags> <image> <model> --host 0.0.0.0
+```
+
 Every setting is an environment variable — override by exporting it or prefixing
 the command, e.g.:
 
@@ -55,6 +68,20 @@ Any extra arguments are forwarded verbatim to `docker build`, so you can also pa
 
 ```bash
 bash docker/build_image.sh --no-cache --build-arg http_proxy=http://proxy:8118
+```
+
+Build the shell/test target under a separate tag when arbitrary container
+commands should run without overriding an entrypoint:
+
+```bash
+IMAGE_TAG=vllm-musa:test bash docker/build_image.sh --target final
+```
+
+Verify the workspace and test-runner contract with:
+
+```bash
+docker run --rm --entrypoint /bin/bash vllm-musa:v0.24.0-dev \
+  -lc 'test "$PWD" = /vllm-workspace && python -m pytest --version'
 ```
 
 ## Configuration
@@ -152,8 +179,9 @@ Two build-time details make this work on such a host:
 
 ```bash
 docker run --rm <MUSA GPU flags> \
+  --entrypoint python \
   vllm-musa:ubuntu22.04_py3.10_musa_runtime_5.2_pytorch_release_2.9.1.post1_musa5.2.0s5000 \
-  python -c "import torch, torch_musa; print('musa available:', torch.musa.is_available())"
+  -c "import torch, torch_musa; print('musa available:', torch.musa.is_available())"
 ```
 
 On a MUSA GPU you should see `musa available: True`.
@@ -186,7 +214,9 @@ for the validated runtime flags.
 7. **mooncake** — installs the pinned `mooncake-transfer-engine-musa` wheel on
    top of the torch/vLLM stack.
 8. **final** — installs optional Rust artifacts, enables MUSA device visibility,
-   and removes build caches.
+   removes build caches, and retains a shell command for test/debug use.
+9. **vllm-openai** — the default serving target, with `vllm serve` as its
+   entrypoint.
 
 The Triton `3.2.0` pin is intentional for the torch `2.9.1` MUSA stack. Torch
 Inductor reads `KernelMetadata.cluster_dims`; the MUSA backend in Triton `3.6.0`

@@ -51,16 +51,22 @@ The plugin leverages the following key components:
 
 ### Docker image
 
-The Docker flow installs the MUSA SDK, the MUSA wheels, `vllm-musa`, and the
-vendored vLLM into one image, and is the least error-prone way to get a working
-environment:
+The Docker flow installs the MUSA SDK, the MUSA wheels, `vllm-musa`, the
+vendored vLLM, and `pytest` into one image, and is the least error-prone way to
+get a working environment. Its working directory is `/vllm-workspace`, matching
+the upstream vLLM runtime image. The default target also matches
+`vllm-openai` and starts `vllm serve`:
 
 ```bash
 bash docker/build_image.sh
 ```
 
-See [docker/README.md](docker/README.md) for the build options. To install onto
-a host that already has the MUSA SDK, use the source install below.
+Use `--target final` to build the shell/test image without the serving
+entrypoint.
+
+See [docker/README.md](docker/README.md) for version compatibility and build
+options. To install onto a host that already has the MUSA SDK, use the source
+install below.
 
 ### Package indexes
 

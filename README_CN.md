@@ -51,15 +51,19 @@
 
 ### Docker 镜像
 
-Docker 流程会把 MUSA SDK、MUSA wheel、`vllm-musa` 以及内置的 vLLM 一次性装入同一
-镜像，是最不容易出错的方式：
+Docker 流程会把 MUSA SDK、MUSA wheel、`vllm-musa`、内置的 vLLM 以及 `pytest`
+一次性装入同一镜像，是最不容易出错的方式。镜像工作目录为 `/vllm-workspace`，
+与上游 vLLM runtime 镜像保持一致。默认 target 也与 `vllm-openai` 一致，启动
+`vllm serve`：
 
 ```bash
 bash docker/build_image.sh
 ```
 
-构建选项参见 [docker/README.md](docker/README.md)。若要安装到已具备 MUSA SDK 的
-主机上，请使用下面的源码安装。
+如需不带 serving entrypoint 的 shell/test 镜像，请增加 `--target final`。
+
+版本兼容性和构建选项参见 [docker/README.md](docker/README.md)。若要安装到已具备
+MUSA SDK 的主机上，请使用下面的源码安装。
 
 ### 软件包索引
 
