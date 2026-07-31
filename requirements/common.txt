@@ -2,7 +2,7 @@
 # 0.1.77 is the v0.26-compatible torchada: nested torch/cuda.h include porting
 # plus the stable_compat cuda->musa maps the libtorch-stable build force-includes.
 torchada>=0.1.77
-mthreads-ml-py>=2.2.11
+mthreads-ml-py>=2.4.1
 numpy==1.26
 openai>=2.24.0
 transformers==5.5.3
