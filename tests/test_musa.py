@@ -711,8 +711,8 @@ class TestNativeGemvSource:
     def test_deepseek_fp8_w1_uses_32x4_shape_gate(self):
         source = Path("csrc/musa/gemv.mu").read_text()
 
-        assert "kDeepSeekFp8W1BlockEnv" in source
-        assert '"VLLM_MUSA_DEEPSEEK_FP8_W1_32X4"' in source
+        assert "kDeepSeekFp8W1BlockEnv" not in source
+        assert '"VLLM_MUSA_DEEPSEEK_FP8_W1_32X4"' not in source
         assert "ShouldUseDeepSeekFp8W1Moe32x4(" in source
         assert "topk == 6" in source
         assert "hidden_size == 2048" in source
@@ -720,6 +720,16 @@ class TestNativeGemvSource:
         assert "num_experts == 64" in source
         assert "BlockConfig deepseek_fp8_w1_config{32, 4" in source
         assert "best_config = &deepseek_fp8_w1_config" in source
+
+    def test_deepseek_v4_split_tile_precedes_generic_override(self):
+        source = Path("csrc/musa/gemv.mu").read_text()
+
+        # A stale generic A/B override must not suppress the validated
+        # DeepSeek-V4 split-tile production path.
+        split_pos = source.index("if (ShouldUseDeepSeekV4Fp8MoeSplitTile(")
+        forced_pos = source.index("} else if (ParseForcedBlockConfig(&forced_config))")
+        assert split_pos < forced_pos
+        assert "VLLM_MUSA_DEEPSEEK_FP8_W1_32X4" not in source
 
     def test_gemv_block_override_validates_env_config(self):
         source = Path("csrc/musa/gemv.mu").read_text()

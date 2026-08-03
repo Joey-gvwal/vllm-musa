@@ -194,7 +194,10 @@ index fe2b268cd..eadc6f533 100644
 +
 +
 +def _musa_sparse_indexer_native_decode_enabled() -> bool:
-+    return os.getenv("VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_NATIVE", "1") == "1"
++    # The native DeepSeek-V4 indexer implementation is the validated MUSA
++    # path. Keep it shape-gated at the call sites, but do not make production
++    # dispatch depend on a process-wide environment variable.
++    return True
 +
 +
 +def _musa_sparse_indexer_glm52_native_enabled() -> bool:
@@ -212,53 +215,30 @@ index fe2b268cd..eadc6f533 100644
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_enabled() -> bool:
-+    return os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
-+        "0",
-+    ) == "1"
++    return True
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_overselect(
 +    topk: int,
 +    total_seq_lens: int,
 +) -> int:
-+    raw_width = os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
-+        "640",
-+    )
-+    try:
-+        width = int(raw_width)
-+    except ValueError:
-+        width = 640
++    width = 640
 +    width = max(width, int(topk))
 +    return max(0, min(width, int(total_seq_lens)))
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_chunk_rows(rows: int) -> int:
-+    raw_rows = os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
-+        "128",
-+    )
-+    try:
-+        chunk_rows = int(raw_rows)
-+    except ValueError:
-+        chunk_rows = 128
++    chunk_rows = 512
 +    chunk_rows = max(1, min(chunk_rows, 1024))
 +    return max(1, min(chunk_rows, int(rows)))
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_topk_sorted() -> bool:
-+    return os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
-+        "1",
-+    ) != "0"
++    return False
 +
 +
 +def _musa_sparse_indexer_materialized_prefill_direct_topk_enabled() -> bool:
-+    return os.getenv(
-+        "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-+        "0",
-+    ) == "1"
++    return True
 +
 +
 +def _musa_decode_block_table_for_token_rows(
@@ -1336,6 +1316,28 @@ index fe2b268cd..eadc6f533 100644
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
  
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
+@@ -452,17 +1760,19 @@ class SparseAttnIndexer(CustomOp):
+         max_total_seq_len: int,
+         topk_indices_buffer: torch.Tensor,
+         skip_k_cache_insert: bool = False,
+         use_fp4_cache: bool = False,
++        use_musa_native_indexer: bool = False,
+     ):
+         super().__init__()
+         self.k_cache = k_cache
+         self.quant_block_size = quant_block_size
+         self.scale_fmt = scale_fmt
+         self.topk_tokens = topk_tokens
+         self.head_dim = head_dim
+         self.max_model_len = max_model_len
+         self.max_total_seq_len = max_total_seq_len
+         self.topk_indices_buffer = topk_indices_buffer
+         self.skip_k_cache_insert = skip_k_cache_insert
+         self.use_fp4_cache = use_fp4_cache
++        self.use_musa_native_indexer = use_musa_native_indexer
+         if current_platform.is_cuda() and not has_deep_gemm():
+             raise RuntimeError(
+                 "Sparse Attention Indexer CUDA op requires DeepGEMM support in "
 @@ -482,6 +1790,46 @@ class SparseAttnIndexer(CustomOp):
              return self.forward_cuda(hidden_states, q_quant, k, weights)
          elif current_platform.is_rocm():
@@ -1343,11 +1345,7 @@ index fe2b268cd..eadc6f533 100644
 +        elif (
 +            current_platform.is_musa()
 +            and (
-+                os.getenv(
-+                    "VLLM_MUSA_ENABLE_DEEPSEEK_V4_SPARSE_INDEXER_MUSA_IMPL",
-+                    "1",
-+                )
-+                == "1"
++                self.use_musa_native_indexer
 +                or os.getenv(
 +                    "VLLM_MUSA_ENABLE_GLM52_SPARSE_INDEXER_MUSA_IMPL",
 +                    "1",

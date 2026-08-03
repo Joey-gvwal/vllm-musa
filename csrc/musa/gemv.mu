@@ -516,8 +516,6 @@ struct BlockConfig {
 };
 
 constexpr const char* kGemvMoeBlockEnv = "VLLM_MUSA_GEMV_MOE_BLOCK";
-constexpr const char* kDeepSeekFp8W1BlockEnv =
-    "VLLM_MUSA_DEEPSEEK_FP8_W1_32X4";
 
 bool ParseForcedBlockConfig(BlockConfig* config) {
     const char* value = std::getenv(kGemvMoeBlockEnv);
@@ -540,11 +538,6 @@ bool ParseForcedBlockConfig(BlockConfig* config) {
 bool IsForcedBlockConfigValid(const BlockConfig& config, int nr_n, int hidden_size, int vlen) {
     return (nr_n % config.block_n == 0) &&
            (hidden_size % (config.block_k * vlen) == 0);
-}
-
-bool IsDeepSeekFp8W1BlockEnabled() {
-    const char* value = std::getenv(kDeepSeekFp8W1BlockEnv);
-    return value == nullptr || value[0] != '0';
 }
 
 bool ShouldUseQwenFp8Moe32x4(
@@ -584,8 +577,7 @@ bool ShouldUseDeepSeekFp8W1Moe32x4(
     int nr_n,
     int vlen) {
     const BlockConfig config{32, 4, 0.f, true};
-    return IsDeepSeekFp8W1BlockEnabled() &&
-           is_fp8 &&
+    return is_fp8 &&
            use_swigelu &&
            !use_int4_w4a16 &&
            topk == 6 &&

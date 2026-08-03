@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 _GROUP_SIZE = 128
@@ -178,10 +176,6 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
     return True, "musa_fused_gemv"
 
 
-def _torch_fp8_einsum_fallback_enabled() -> bool:
-    return os.getenv("VLLM_MUSA_ENABLE_TORCH_FP8_EINSUM_FALLBACK", "0") == "1"
-
-
 def _validate_group_size_divisible(name: str, size: int) -> None:
     if size % _GROUP_SIZE != 0:
         raise ValueError(
@@ -252,8 +246,6 @@ def try_musa_deepseek_v4_fp8_einsum(
     )
     if handled:
         return True, reason
-    if not _torch_fp8_einsum_fallback_enabled():
-        return False, reason
     if equation != "bhr,hdr->bhd":
         return False, f"unsupported equation {equation!r}"
 

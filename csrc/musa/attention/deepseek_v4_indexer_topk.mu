@@ -1,7 +1,5 @@
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 #include <limits>
 
 #include <musa_bf16.h>
@@ -24,16 +22,6 @@ constexpr int64_t kMaxCandidates = 1024;
 constexpr int kThreads = 256;
 constexpr int kIndexInt32 = 1;
 constexpr int kIndexInt64 = 2;
-constexpr const char *kPrefillQCacheEnv =
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE";
-constexpr const char *kPrefillBlockSelectEnv =
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT";
-constexpr const char *kPrefillPartialSortEnv =
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT";
-constexpr const char *kPrefillPartialSortMergeBarrierEnv =
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER";
-constexpr const char *kPrefillFullRowShortcutEnv =
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT";
 
 __device__ __forceinline__ float dequant_fp8_e4m3(uint8_t byte) {
   __mt_fp8_e4m3 packed;
@@ -92,11 +80,6 @@ __device__ __forceinline__ void compare_swap_score_pair(
     scores[rhs] = lhs_value;
     score_indices[rhs] = lhs_index;
   }
-}
-
-bool env_flag_enabled(const char *name) {
-  const char *value = std::getenv(name);
-  return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
 template <typename OutT>
@@ -977,14 +960,13 @@ void launch_indexer_topk_prefill(
     musaStream_t stream) {
   const dim3 grid(static_cast<unsigned int>(q_quant.size(0)));
   const dim3 block(kThreads);
-  const bool use_blockselect =
-      use_q_cache && env_flag_enabled(kPrefillBlockSelectEnv);
-  const bool use_partialsort =
-      use_blockselect && env_flag_enabled(kPrefillPartialSortEnv);
-  const bool use_partialsort_merge_barrier =
-      use_partialsort && env_flag_enabled(kPrefillPartialSortMergeBarrierEnv);
-  const bool use_full_row_shortcut =
-      use_partialsort && env_flag_enabled(kPrefillFullRowShortcutEnv);
+  // The q-cache + block-select + partial-sort pipeline is the validated
+  // DeepSeek-V4 prefill path.  Keep it as a compile-time/default decision so
+  // production dispatch cannot silently fall back when an A/B env is absent.
+  const bool use_blockselect = use_q_cache;
+  const bool use_partialsort = use_blockselect;
+  constexpr bool use_partialsort_merge_barrier = true;
+  const bool use_full_row_shortcut = use_partialsort;
   if (use_partialsort) {
     if (use_partialsort_merge_barrier) {
       deepseek_v4_indexer_topk_prefill_q_cache_partialsort_kernel<OutT, true>
@@ -1093,8 +1075,7 @@ void launch_indexer_rerank_prefill(
     int64_t topk, musaStream_t stream) {
   const dim3 grid(static_cast<unsigned int>(q_quant.size(0)));
   const dim3 block(kThreads);
-  const bool use_full_row_shortcut =
-      env_flag_enabled(kPrefillFullRowShortcutEnv);
+  constexpr bool use_full_row_shortcut = true;
   deepseek_v4_indexer_rerank_prefill_kernel<OutT><<<grid, block, 0, stream>>>(
       static_cast<const uint8_t *>(q_quant.data_ptr()), q_quant.stride(0),
       q_quant.stride(1), q_quant.stride(2),
@@ -1257,7 +1238,7 @@ void deepseek_v4_indexer_topk_prefill(
   }
 
   const at::musa::OptionalMUSAGuard device_guard(device_of(q_quant));
-  const bool use_q_cache = env_flag_enabled(kPrefillQCacheEnv);
+  constexpr bool use_q_cache = true;
   musaStream_t stream = at::musa::getCurrentMUSAStream();
   if (topk_indices.scalar_type() == torch::kInt32) {
     launch_indexer_topk_prefill<int32_t>(

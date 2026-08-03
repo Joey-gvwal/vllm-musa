@@ -101,9 +101,10 @@ def test_mhc_pre_deepgemm_big_fuse_is_shape_selected_by_default():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
 
     assert "def _mhc_pre_deepgemm_big_fuse_provider(" in source
-    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DEEPGEMM_SPLIT_K" in source
-    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_HIDDEN_BLOCK" in source
-    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_PASS_CONFIG" in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DEEPGEMM_SPLIT_K" not in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_THREADS" not in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_HIDDEN_BLOCK" not in source
+    assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_PASS_CONFIG" not in source
     assert "return _mhc_pre_deepgemm_big_fuse_provider(" in source
     assert 'return "deepgemm_big_fuse"' in source
 

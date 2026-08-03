@@ -11,24 +11,16 @@ diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/n
 index aa60ad34c..ce73743da 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
-@@ -1,5 +1,6 @@
+@@ -1,5 +1,5 @@
  # SPDX-License-Identifier: Apache-2.0
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-+import os
  import typing
  from collections.abc import Callable, Iterable, MutableSequence, Sequence
  from itertools import islice
-@@ -70,6 +71,13 @@ from vllm.utils.math_utils import cdiv
+@@ -70,6 +70,7 @@ from vllm.utils.math_utils import cdiv
  from vllm.v1.attention.backends.registry import AttentionBackendEnum
  
  
-+def _musa_deepseek_v4_disable_aux_overlap() -> bool:
-+    return (
-+        current_platform.is_musa()
-+        and os.getenv("VLLM_MUSA_DEEPSEEK_V4_DISABLE_AUX_OVERLAP", "0") == "1"
-+    )
-+
-+
  class DeepseekV4MLP(nn.Module):
      def __init__(
          self,
@@ -37,13 +29,12 @@ index aa60ad34c..ce73743da 100644
          # (compressor kv_score, indexer.weights_proj, indexer.compressor
          # kv_score). fused_wqa_wkv stays on the default stream.
 -        aux_stream_list = [torch.cuda.Stream() for _ in range(3)]
-+        # Disable them on ROCm / XPU because of hang issues / no overlap.
++        # Disable them on ROCm/XPU because of backend hang issues/no overlap.
 +        aux_stream_list = (
 +            None
 +            if (
 +                current_platform.is_rocm()
 +                or current_platform.is_xpu()
-+                or _musa_deepseek_v4_disable_aux_overlap()
 +            )
 +            else [torch.cuda.Stream() for _ in range(3)]
 +        )
