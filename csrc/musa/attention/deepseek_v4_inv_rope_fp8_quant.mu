@@ -171,8 +171,8 @@ __global__ void deepseek_v4_inv_rope_fp8_quant_chunk_kernel(
     int64_t cache_stride_pos, uint8_t* __restrict__ fp8_out,
     int64_t fp8_stride_group, int64_t fp8_stride_token,
     float* __restrict__ scale, int64_t scale_stride_group,
-    int64_t scale_stride_k, int64_t num_tokens, int64_t aligned_tokens,
-    int64_t heads_per_group) {
+    int64_t scale_stride_token, int64_t scale_stride_k, int64_t num_tokens,
+    int64_t aligned_tokens, int64_t heads_per_group) {
   const int64_t token = static_cast<int64_t>(blockIdx.x);
   const int64_t global_head = static_cast<int64_t>(blockIdx.y);
   const int64_t chunk = static_cast<int64_t>(blockIdx.z);
@@ -198,8 +198,8 @@ __global__ void deepseek_v4_inv_rope_fp8_quant_chunk_kernel(
   const float scale_pow2 = exp2f(ceilf(log2f(scale_raw)));
 
   if (tid == 0) {
-    scale[group * scale_stride_group + token + out_chunk * scale_stride_k] =
-        scale_pow2;
+    scale[group * scale_stride_group + token * scale_stride_token +
+          out_chunk * scale_stride_k] = scale_pow2;
   }
 
   float q = value / scale_pow2;
@@ -209,7 +209,8 @@ __global__ void deepseek_v4_inv_rope_fp8_quant_chunk_kernel(
 
   const int64_t padding = aligned_tokens - num_tokens;
   if (token == 0 && tid < padding) {
-    scale[group * scale_stride_group + num_tokens + tid +
+    scale[group * scale_stride_group +
+          (num_tokens + tid) * scale_stride_token +
           out_chunk * scale_stride_k] = 0.0f;
   }
 }
@@ -291,10 +292,14 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
   } else {
     scale_storage = torch::empty({n_groups * num_scale_blocks * aligned_tokens},
                                  o.options().dtype(torch::kFloat32));
+    // Keep each group-local [token, block] scale matrix contiguous.  The
+    // downstream DeepSeek-V4 o-proj consumes one group at a time, so this
+    // layout preserves the public [token, group, block] view while avoiding a
+    // device copy for every layer and decode step.
     scale_buf =
         scale_storage.as_strided({n_groups, num_tokens, num_scale_blocks},
-                                 {num_scale_blocks * aligned_tokens, 1,
-                                  aligned_tokens});
+                                 {num_scale_blocks * aligned_tokens,
+                                  num_scale_blocks, 1});
   }
 
   if (num_tokens == 0 || num_heads == 0) {
@@ -328,7 +333,8 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
         cos_sin_cache.stride(0), static_cast<uint8_t*>(fp8_buf.data_ptr()),
         fp8_buf.stride(0), fp8_buf.stride(1),
         static_cast<float*>(scale_buf.data_ptr()), scale_buf.stride(0),
-        scale_buf.stride(2), num_tokens, aligned_tokens, heads_per_group);
+        scale_buf.stride(1), scale_buf.stride(2), num_tokens, aligned_tokens,
+        heads_per_group);
   }
 
   const auto err = musaGetLastError();
