@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import bisect
 import inspect
 from typing import Any
 
 import torch
 from mate.gdn_decode import gated_delta_rule_decode
 from mate.gdn_prefill import chunk_gated_delta_rule
+from vllm.config import CUDAGraphMode, get_current_vllm_config
+from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
     QwenGatedDeltaNetAttention,
@@ -58,6 +61,42 @@ def _get_gdn_input_projection_stream(*, create: bool) -> Any | None:
     return stream
 
 
+def _allocate_gdn_output(
+    shape: tuple[int, ...],
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+    capture_sizes: tuple[int, ...],
+) -> torch.Tensor:
+    """Allocate GDN output while zeroing only possible graph padding."""
+    forward_context = get_forward_context()
+    batch_descriptor = forward_context.batch_descriptor
+    if (
+        forward_context.attn_metadata is None
+        or forward_context.cudagraph_runtime_mode == CUDAGraphMode.NONE
+        or batch_descriptor is None
+    ):
+        return torch.zeros(shape, dtype=dtype, device=device)
+
+    current_bucket = batch_descriptor.num_tokens
+    bucket_index = (
+        bisect.bisect_left(capture_sizes, current_bucket) if capture_sizes else -1
+    )
+    if (
+        bucket_index < 0
+        or bucket_index >= len(capture_sizes)
+        or capture_sizes[bucket_index] != current_bucket
+        or shape[0] != current_bucket
+    ):
+        return torch.zeros(shape, dtype=dtype, device=device)
+
+    previous_bucket = capture_sizes[bucket_index - 1] if bucket_index > 0 else 0
+    output = torch.empty(shape, dtype=dtype, device=device)
+    if current_bucket - previous_bucket > 1:
+        output[previous_bucket:current_bucket].zero_()
+    return output
+
+
 @QwenGatedDeltaNetAttention.register_oot
 class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
     """MUSA replacement for Qwen3.5 GDN attention.
@@ -75,6 +114,10 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
     ) -> None:
         super().__init__(config, vllm_config, prefix, gqa_interleaved_layout)
         self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
+        compilation_config = vllm_config.compilation_config
+        self._gdn_cudagraph_capture_sizes = tuple(
+            compilation_config.cudagraph_capture_sizes or ()
+        )
 
     def _forward_input_projections(
         self,
@@ -163,10 +206,11 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
                 self.head_v_dim,
             )
 
-        core_attn_out = torch.zeros(
+        core_attn_out = _allocate_gdn_output(
             (num_tokens, self.num_v_heads // self.tp_size, self.head_v_dim),
             dtype=hidden_states.dtype,
             device=hidden_states.device,
+            capture_sizes=self._gdn_cudagraph_capture_sizes,
         )
 
         torch.ops.vllm.qwen_gdn_attention_core(
