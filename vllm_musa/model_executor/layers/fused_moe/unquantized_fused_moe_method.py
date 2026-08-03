@@ -3,9 +3,11 @@ import inspect
 import torch
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe import (
-    TritonExperts,
     UnquantizedFusedMoEMethod,
     fused_experts,
+)
+from vllm.model_executor.layers.fused_moe.experts.triton_moe import (
+    TritonExperts,
 )
 
 try:
@@ -98,9 +100,9 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             # to FusedMoE, so the runner never supplies a separate
             # shared_experts_input here; x is the shared expert's input, matching
             # the routed experts it now rides with.
-            assert shared_experts_input is None, (
-                "folded shared expert expects shared_experts=None"
-            )
+            assert (
+                shared_experts_input is None
+            ), "folded shared expert expects shared_experts=None"
             shared_logits, _ = layer._musa_shared_gate(x)
             topk_weights, topk_ids = extend_topk_with_shared(
                 topk_weights,

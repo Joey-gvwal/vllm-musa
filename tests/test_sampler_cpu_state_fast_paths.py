@@ -26,6 +26,37 @@ requires_musa = pytest.mark.skipif(
 )
 
 
+def test_legacy_seeded_multinomial_is_limited_to_qwen_text_vocabs(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(sampler, "musa_seeded_multinomial_enabled", lambda: True)
+    monkeypatch.setattr(sampler.current_platform, "is_musa", lambda: True)
+    monkeypatch.setattr(sampler, "is_musa_tensor", lambda _tensor: True)
+    generators = {0: object()}
+
+    assert sampler.can_use_musa_seeded_multinomial(
+        torch.empty((1, 151936)), generators, "raw_logprobs"
+    )
+    assert sampler.can_use_musa_seeded_multinomial(
+        torch.empty((1, 152064)), generators, "raw_logprobs"
+    )
+    assert sampler.can_use_musa_seeded_multinomial(
+        torch.empty((1, 248320)), generators, "raw_logprobs"
+    )
+    assert not sampler.can_use_musa_seeded_multinomial(
+        torch.empty((1, 102400)), generators, "raw_logprobs"
+    )
+    assert not sampler.can_use_musa_seeded_multinomial(
+        torch.empty((1, 8448)), generators, "raw_logprobs"
+    )
+    assert not sampler.can_use_musa_seeded_multinomial(
+        torch.empty((1, 151936)), {}, "raw_logprobs"
+    )
+    assert not sampler.can_use_musa_seeded_multinomial(
+        torch.empty((1, 151936)), generators, "processed_logprobs"
+    )
+
+
 def test_uniform_sampler_metadata_patch_is_active_and_qwen_gated() -> None:
     metadata_fields = {field.name for field in fields(SamplingMetadata)}
     assert "uniform_top_k" in metadata_fields
