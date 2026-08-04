@@ -5,6 +5,45 @@ pytest.importorskip("tilelang")
 causal_conv1d = pytest.importorskip("vllm_musa.jit_kernel.tilelang.causal_conv1d")
 
 
+def _prefill_gate(**overrides):
+    kwargs = {
+        "width": 4,
+        "dim": 10240,
+        "dtype": torch.bfloat16,
+        "max_seq_len": 4096,
+        "batch_size": 2,
+        "has_conv_states": True,
+        "has_cache_indices": True,
+        "cache_indices_stride": 1,
+        "x_inner_stride": 1,
+        "out_inner_stride": 1,
+        "weight_inner_stride": 1,
+    }
+    kwargs.update(overrides)
+    return causal_conv1d._should_use_width4_prefill_split(**kwargs)
+
+
+def test_prefill_split_gate_accepts_validated_tp1_width():
+    assert _prefill_gate(dim=10240)
+
+
+def test_prefill_split_gate_rejects_other_shapes_and_small_prefill():
+    assert not _prefill_gate(width=3)
+    assert not _prefill_gate(dim=2048)
+    assert not _prefill_gate(dim=2560)
+    assert not _prefill_gate(dim=12288)
+    assert not _prefill_gate(dim=8192)
+    assert not _prefill_gate(max_seq_len=2048)
+    assert not _prefill_gate(batch_size=1)
+    assert not _prefill_gate(has_conv_states=False)
+    assert not _prefill_gate(has_cache_indices=False)
+    assert not _prefill_gate(cache_indices_stride=2)
+    assert not _prefill_gate(x_inner_stride=2)
+    assert not _prefill_gate(out_inner_stride=2)
+    assert not _prefill_gate(weight_inner_stride=2)
+    assert not _prefill_gate(dtype=torch.float16)
+
+
 def test_decode_kernel_keeps_supported_mixed_dtypes(monkeypatch):
     captured = {}
 
@@ -54,8 +93,14 @@ def test_decode_kernel_keeps_supported_mixed_dtypes(monkeypatch):
         "float32",
         "bfloat16",
     )
-    assert captured["kernel_config"][13] is True
-    assert captured["kernel_config"][16] is True
+    assert captured["kernel_config"][13:19] == (
+        False,  # has_bias
+        True,  # has_cache_indices
+        False,  # has_cache_index_mapping
+        True,  # has_initial_states
+        True,  # use_pad_slot
+        True,  # silu_activation
+    )
     assert captured["scalars"][-1] == causal_conv1d.NULL_BLOCK_ID
 
 
@@ -94,8 +139,14 @@ def test_decode_kernel_preserves_same_dtype_path(monkeypatch):
     assert captured["x"] is not None
     assert captured["x"].dtype == torch.float32
     assert captured["kernel_config"][:5] == ("float32",) * 5
-    assert captured["kernel_config"][13] is False
-    assert captured["kernel_config"][16] is False
+    assert captured["kernel_config"][13:19] == (
+        False,  # has_bias
+        False,  # has_cache_indices
+        False,  # has_cache_index_mapping
+        True,  # has_initial_states
+        False,  # use_pad_slot
+        False,  # silu_activation
+    )
     assert captured["scalars"][-1] == causal_conv1d.PAD_SLOT_ID
 
 
