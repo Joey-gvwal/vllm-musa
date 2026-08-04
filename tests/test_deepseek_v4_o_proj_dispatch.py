@@ -11,6 +11,9 @@ MODULE_PATH = (
     / "fp8_einsum.py"
 )
 GEMV_PATH = Path(__file__).resolve().parents[1] / "csrc" / "musa" / "gemv.mu"
+CUSTOM_OPS_PATH = (
+    Path(__file__).resolve().parents[1] / "vllm_musa" / "_custom_ops.py"
+)
 
 
 def _module_tree() -> ast.Module:
@@ -93,3 +96,51 @@ def test_o_proj_gemv_uses_calibrated_capture_ladder_tiles() -> None:
     assert dispatch.index("SelectDeepSeekV4Fp8OProjTile(") < dispatch.index(
         "ParseForcedBlockConfig(&forced_config)"
     )
+
+
+def test_o_proj_gemv_writes_one_group_result_directly() -> None:
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    tree = _module_tree()
+    dispatcher = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "try_musa_deepseek_v4_fp8_einsum_gemv"
+    )
+    gemv_call = next(
+        node
+        for node in ast.walk(dispatcher)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "musa_fused_gemv"
+    )
+    output_keyword = next(
+        keyword for keyword in gemv_call.keywords if keyword.arg == "output"
+    )
+
+    assert isinstance(output_keyword.value, ast.Name)
+    assert output_keyword.value.id == "direct_group_out"
+    assert "group_out_view if group_out_view.is_contiguous() else None" in source
+    assert "if direct_group_out is None:" in source
+    assert "group_out_view.copy_(group_out)" in source
+
+
+def test_musa_fused_gemv_accepts_caller_owned_fp8_output() -> None:
+    tree = ast.parse(CUSTOM_OPS_PATH.read_text(encoding="utf-8"))
+    wrapper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "musa_fused_gemv"
+    )
+    output_arg = next(arg for arg in wrapper.args.args if arg.arg == "output")
+    assert output_arg.arg == "output"
+
+    native_call = next(
+        node
+        for node in ast.walk(wrapper)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "musa_fused_gemv"
+    )
+    assert isinstance(native_call.args[2], ast.Name)
+    assert native_call.args[2].id == "output"

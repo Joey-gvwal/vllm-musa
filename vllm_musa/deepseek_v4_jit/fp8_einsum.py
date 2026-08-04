@@ -161,13 +161,19 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
         from vllm_musa import _custom_ops as musa_ops
 
         for group_idx in range(groups):
+            group_out_view = out[:, group_idx, :]
+            direct_group_out = (
+                group_out_view if group_out_view.is_contiguous() else None
+            )
             group_out = musa_ops.musa_fused_gemv(
                 activation[:, group_idx, :].contiguous(),
                 weight[group_idx].contiguous(),
                 activation_scale[:, group_idx, :].contiguous(),
                 scales[group_idx].contiguous(),
+                output=direct_group_out,
             )
-            out[:, group_idx, :].copy_(group_out)
+            if direct_group_out is None:
+                group_out_view.copy_(group_out)
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
