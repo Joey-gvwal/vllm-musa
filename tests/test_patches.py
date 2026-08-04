@@ -906,77 +906,49 @@ class TestMUSAPlatformDefaults:
 
             assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
 
-    def test_deepseek_v4_tp8_profile_unset_keeps_default_envs(self):
+    def test_deepseek_v4_tp8_uses_validated_defaults_without_profile_env(self):
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
             architectures=["DeepseekV4ForCausalLM"],
             tensor_parallel_size=8,
         )
-        profile_keys = [
-            "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE",
-            "VLLM_MUSA_GEMV_MOE_BLOCK",
-            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X",
-            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-        ]
 
         with patch.dict(os.environ, {}, clear=False):
-            for key in profile_keys:
+            for key in (
+                "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE",
+                "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE",
+                "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
+                "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
+                "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
+            ):
                 os.environ.pop(key, None)
+            os.environ.pop("VLLM_MUSA_GEMV_MOE_BLOCK", None)
+            os.environ.pop("VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X", None)
 
             MUSAPlatformBase.check_and_update_config(vllm_config)
 
-            assert "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV" not in os.environ
-            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
+            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "256"
+            assert "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE" not in os.environ
+            assert (
+                os.environ.get("VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE")
+                is None
+            )
+
+    def test_non_deepseek_v4_keeps_generic_envs_untouched(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(architectures=["Qwen3ForCausalLM"])
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VLLM_MUSA_GEMV_MOE_BLOCK", None)
+            os.environ.pop("VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X", None)
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+            assert "VLLM_MUSA_GEMV_MOE_BLOCK" not in os.environ
             assert "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in os.environ
-            assert "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE" not in os.environ
-            assert "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE" not in os.environ
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS" not in os.environ
-            )
-            assert "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS" not in os.environ
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE" not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
-                not in os.environ
-            )
 
-    def test_deepseek_v4_tp8_profile_sets_missing_envs(self):
+    def test_deepseek_v4_tp8_flashmla_uses_validated_page256(self):
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
@@ -986,398 +958,66 @@ class TestMUSAPlatformDefaults:
             index_topk=512,
             cache_block_size=64,
         )
-        profile_keys = [
-            "VLLM_MUSA_GEMV_MOE_BLOCK",
-            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X",
-            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-        ]
 
-        with patch.dict(
-            os.environ,
-            {"VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "balanced_long_prefill"},
-            clear=False,
-        ):
-            for key in profile_keys:
-                os.environ.pop(key, None)
-
-            MUSAPlatformBase.check_and_update_config(vllm_config)
-
-            assert "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV" not in os.environ
-            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
-            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "256"
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"] == "256"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE"]
-                == "dsa_full"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS"] == "1"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"]
-                == "2048"
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE" not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
-                not in os.environ
-            )
-            assert (
-                "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
-                not in os.environ
-            )
-            assert vllm_config.cache_config.block_size == 256
-
-    def test_deepseek_v4_tp8_aggressive_profile_sets_prefill_tuning(self):
-        from vllm_musa.platform import MUSAPlatformBase
-
-        vllm_config = self._make_vllm_config(
-            architectures=["DeepseekV4ForCausalLM"],
-            tensor_parallel_size=8,
-            use_mla=True,
-            index_topk=512,
-            cache_block_size=64,
-        )
-        profile_keys = [
-            "VLLM_MUSA_GEMV_MOE_BLOCK",
-            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X",
-            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT",
-        ]
-
-        with patch.dict(
-            os.environ,
-            {"VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "aggressive_long_prefill"},
-            clear=False,
-        ):
-            for key in profile_keys:
-                os.environ.pop(key, None)
-
-            MUSAPlatformBase.check_and_update_config(vllm_config)
-
-            assert "VLLM_MUSA_DEEPSEEK_V4_FUSED_MOE_GEMV" not in os.environ
-            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "16x8"
-            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "256"
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"] == "256"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE"]
-                == "dsa_full"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS"] == "1"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"]
-                == "2048"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"] == "1"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT"]
-                == "1"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT"]
-                == "1"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
-                ]
-                == "1"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
-                ]
-                == "1"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
-                ]
-                == "1"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
-                ]
-                == "640"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
-                ]
-                == "512"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
-                ]
-                == "0"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
-                ]
-                == "1"
-            )
-            assert vllm_config.cache_config.block_size == 256
-
-    def test_deepseek_v4_tp8_profile_preserves_explicit_overrides(self):
-        from vllm_musa.platform import MUSAPlatformBase
-
-        vllm_config = self._make_vllm_config(
-            architectures=["DeepseekV4ForCausalLM"],
-            tensor_parallel_size=8,
-            use_mla=True,
-            index_topk=512,
-            cache_block_size=256,
-        )
-        env = {
-            "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "aggressive_long_prefill",
-            "VLLM_MUSA_GEMV_MOE_BLOCK": "32x8",
-            "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X": "128",
-            "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "64",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE": "opt1",
-            "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS": "0",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT": "384",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS": "128",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED": "1",
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT": "0",
-        }
-
-        with patch.dict(os.environ, env, clear=False):
-            MUSAPlatformBase.check_and_update_config(vllm_config)
-
-            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
-            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "128"
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"] == "64"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE"] == "opt1"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS"] == "0"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS"] == "0"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"] == "0"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT"]
-                == "0"
-            )
-            assert (
-                os.environ["VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT"]
-                == "0"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
-                ]
-                == "0"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
-                ]
-                == "0"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
-                ]
-                == "0"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
-                ]
-                == "384"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
-                ]
-                == "128"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
-                ]
-                == "1"
-            )
-            assert (
-                os.environ[
-                    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
-                ]
-                == "0"
-            )
-            assert vllm_config.cache_config.block_size == 64
-
-    def test_deepseek_v4_tp8_profile_rejects_unknown_name(self):
-        from vllm_musa.platform import MUSAPlatformBase
-
-        vllm_config = self._make_vllm_config(
-            architectures=["DeepseekV4ForCausalLM"],
-            tensor_parallel_size=8,
-        )
-
-        with patch.dict(
-            os.environ,
-            {"VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE": "typo"},
-            clear=False,
-        ):
-            try:
-                MUSAPlatformBase.check_and_update_config(vllm_config)
-            except ValueError as exc:
-                message = str(exc)
-            else:
-                raise AssertionError("expected invalid profile to raise ValueError")
-
-            assert "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE" in message
-            assert "balanced_long_prefill" in message
-            assert "aggressive_long_prefill" in message
-
-    def test_deepseek_v4_flashmla_sparse_defaults_block64(self):
-        from vllm_musa.platform import MUSAPlatformBase
-
-        vllm_config = self._make_vllm_config(
-            architectures=["DeepseekV4ForCausalLM"],
-            use_mla=True,
-            index_topk=512,
-            cache_block_size=16,
-        )
-
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE", None)
-            MUSAPlatformBase.check_and_update_config(vllm_config)
-
-        assert vllm_config.cache_config.block_size == 64
-
-    def test_deepseek_v4_flashmla_sparse_preserves_explicit_block64(self):
-        from vllm_musa.platform import MUSAPlatformBase
-
-        vllm_config = self._make_vllm_config(
-            architectures=["DeepseekV4ForCausalLM"],
-            use_mla=True,
-            index_topk=512,
-            cache_block_size=256,
-        )
-
+        # A retired gate must not be able to turn the validated path off.
         with patch.dict(
             os.environ,
             {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "64"},
-        ):
-            MUSAPlatformBase.check_and_update_config(vllm_config)
-
-        assert vllm_config.cache_config.block_size == 64
-
-    def test_deepseek_v4_flashmla_sparse_allows_block256_opt_in(self):
-        from vllm_musa.platform import MUSAPlatformBase
-
-        vllm_config = self._make_vllm_config(
-            architectures=["DeepseekV4ForCausalLM"],
-            use_mla=True,
-            index_topk=512,
-            cache_block_size=64,
-        )
-
-        with patch.dict(
-            os.environ,
-            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "256"},
+            clear=False,
         ):
             MUSAPlatformBase.check_and_update_config(vllm_config)
 
         assert vllm_config.cache_config.block_size == 256
 
-    def test_deepseek_v4_flashmla_sparse_rejects_invalid_block_size(self):
+    def test_deepseek_v4_non_tp8_flashmla_keeps_generic_page64(self):
         from vllm_musa.platform import MUSAPlatformBase
 
         vllm_config = self._make_vllm_config(
             architectures=["DeepseekV4ForCausalLM"],
-            use_mla=True,
-            index_topk=512,
-            cache_block_size=64,
-        )
-
-        with patch.dict(
-            os.environ,
-            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "128"},
-        ):
-            with pytest.raises(ValueError, match="must be 64 or 256"):
-                MUSAPlatformBase.check_and_update_config(vllm_config)
-
-    def test_non_deepseek_v4_flashmla_sparse_ignores_block256_opt_in(self):
-        from vllm_musa.platform import MUSAPlatformBase
-
-        vllm_config = self._make_vllm_config(
-            architectures=["OtherSparseMLAForCausalLM"],
+            tensor_parallel_size=4,
             use_mla=True,
             index_topk=512,
             cache_block_size=256,
         )
 
-        with patch.dict(
-            os.environ,
-            {"VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE": "256"},
-        ):
-            MUSAPlatformBase.check_and_update_config(vllm_config)
+        MUSAPlatformBase.check_and_update_config(vllm_config)
 
         assert vllm_config.cache_config.block_size == 64
+
+    def test_non_deepseek_sparse_mla_keeps_generic_page64(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["OtherSparseMLAForCausalLM"],
+            tensor_parallel_size=8,
+            use_mla=True,
+            index_topk=512,
+            cache_block_size=256,
+        )
+
+        MUSAPlatformBase.check_and_update_config(vllm_config)
+
+        assert vllm_config.cache_config.block_size == 64
+
+    def test_deepseek_v4_tp8_preserves_explicit_generic_overrides(self):
+        from vllm_musa.platform import MUSAPlatformBase
+
+        vllm_config = self._make_vllm_config(
+            architectures=["DeepseekV4ForCausalLM"],
+            tensor_parallel_size=8,
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "VLLM_MUSA_GEMV_MOE_BLOCK": "32x8",
+                "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X": "128",
+            },
+            clear=False,
+        ):
+            MUSAPlatformBase.check_and_update_config(vllm_config)
+            assert os.environ["VLLM_MUSA_GEMV_MOE_BLOCK"] == "32x8"
+            assert os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] == "128"
 
     def test_update_block_size_for_backend_defaults_and_hybrid_modes(
         self, monkeypatch
@@ -2068,20 +1708,10 @@ class TestBuildTimeSeries:
         )
         series = self._read_patch(series)
 
-        assert (
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS" in series
-        )
-        assert (
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
-            in series
-        )
-        assert (
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
-            in series
-        )
-        assert (
-            "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT" in series
-        )
+        assert "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL" not in series
+        assert "return True" in series
+        assert "width = 640" in series
+        assert "chunk_rows = 512" in series
         assert "sorted=materialized_topk_sorted" in series
         assert "materialized_direct_topk" in series
         assert "direct_local" in series

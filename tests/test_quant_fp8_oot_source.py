@@ -33,10 +33,3 @@ def test_quant_fp8_oot_group_quant_uses_musa_helper():
     assert "if x.dim() != 2:" in source
     assert "fp8_utils.per_token_group_quant_fp8" in source
     assert "return self.forward_native(x, scale, scale_ub, use_triton)" in source
-
-
-def test_deepseek_v4_defaults_do_not_enable_group_quant_fallback():
-    repo_root = Path(__file__).resolve().parents[1]
-    source = (repo_root / "vllm_musa" / "deepseek_v4_fallbacks.py").read_text()
-
-    assert "VLLM_MUSA_ENABLE_TORCH_FP8_GROUP_QUANT_FALLBACK" not in source

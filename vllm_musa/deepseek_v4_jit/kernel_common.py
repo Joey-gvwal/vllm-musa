@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 _TILELANG_MUSA_OPT1_DEVICE_COMPILE_FLAGS = [
@@ -57,13 +56,10 @@ _TILELANG_MUSA_DSA_FULL_DEVICE_COMPILE_FLAGS = [
 def _tilelang_musa_compile_profile_flags(
     default_profile: str | None = None,
 ) -> list[str] | None:
-    profile = (
-        os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE", "")
-        .strip()
-        .lower()
-    )
-    if profile == "" and default_profile is not None:
-        profile = default_profile.strip().lower()
+    # DeepSeek-V4 TileLang kernels use the validated DSA-full compilation
+    # profile by default.  ``default_profile`` remains an internal API for
+    # shape-specific helpers; no process environment is consulted.
+    profile = (default_profile or "dsa_full").strip().lower()
     if profile in {"", "default", "none", "0"}:
         return None
     if profile == "opt1":
@@ -75,8 +71,8 @@ def _tilelang_musa_compile_profile_flags(
     if profile == "dsa_full":
         return _TILELANG_MUSA_DSA_FULL_DEVICE_COMPILE_FLAGS
     raise ValueError(
-        "Unsupported VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE="
-        f"{profile!r}; expected one of default,opt1,ls,dsa,dsa_full"
+        f"Unsupported DeepSeek-V4 TileLang compile profile {profile!r}; "
+        "expected one of default,opt1,ls,dsa,dsa_full"
     )
 
 
@@ -93,29 +89,12 @@ def _add_pass_config(
 
 def _tilelang_musa_pass_configs(tilelang, *, compile_profile: str | None = None):
     """Return optional MUSA pass configs without requiring a specific TileLang build."""
-    old_pass_config = os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_PASS_CONFIG")
-    default_profile = "opt1" if old_pass_config == "1" else compile_profile
-    compile_flags = _tilelang_musa_compile_profile_flags(default_profile)
-    if old_pass_config != "1" and compile_flags is None:
+    compile_flags = _tilelang_musa_compile_profile_flags(compile_profile)
+    if compile_flags is None:
         return None
 
     pass_configs = {}
-    if old_pass_config == "1":
-        _add_pass_config(pass_configs, tilelang, "TL_ENABLE_MUSA_BURST", True)
-        _add_pass_config(pass_configs, tilelang, "TL_ENABLE_REDUCE_BURST", True)
-    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_AGGRESSIVE_PASS_CONFIG") == "1":
-        _add_pass_config(pass_configs, tilelang, "TL_DISABLE_THREAD_STORAGE_SYNC", True)
-        _add_pass_config(pass_configs, tilelang, "TL_DISABLE_SAFE_MEMORY_ACCESS", True)
-        _add_pass_config(pass_configs, tilelang, "TL_ENABLE_LOWER_LDGSTG", True)
-        _add_pass_config(
-            pass_configs, tilelang, "TL_ENABLE_LOWER_LDGSTG_PREDICATED", True
-        )
-    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_INDEX_PROMOTION") == "1":
-        _add_pass_config(
-            pass_configs, tilelang, "TL_DISABLE_INDEX_TYPE_PROMOTION", True
-        )
-    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS") == "1":
-        _add_pass_config(pass_configs, tilelang, "TL_DISABLE_HOST_ASSERTS", True)
+    _add_pass_config(pass_configs, tilelang, "TL_DISABLE_HOST_ASSERTS", True)
     if compile_flags is not None:
         _add_pass_config(
             pass_configs, tilelang, "TL_DEVICE_COMPILE_FLAGS", compile_flags
@@ -131,6 +110,7 @@ def _tilelang_musa_burst_reduce_pass_configs(
     pass_configs = {}
     _add_pass_config(pass_configs, tilelang, "TL_ENABLE_MUSA_BURST", True)
     _add_pass_config(pass_configs, tilelang, "TL_ENABLE_REDUCE_BURST", True)
+    _add_pass_config(pass_configs, tilelang, "TL_DISABLE_HOST_ASSERTS", True)
     compile_flags = _tilelang_musa_compile_profile_flags(compile_profile)
     if compile_flags is not None:
         _add_pass_config(
@@ -160,8 +140,7 @@ def _tilelang_musa_aggressive_pass_configs(
         _add_pass_config(
             pass_configs, tilelang, "TL_DISABLE_INDEX_TYPE_PROMOTION", True
         )
-    if os.environ.get("VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS") == "1":
-        _add_pass_config(pass_configs, tilelang, "TL_DISABLE_HOST_ASSERTS", True)
+    _add_pass_config(pass_configs, tilelang, "TL_DISABLE_HOST_ASSERTS", True)
     return pass_configs or None
 
 

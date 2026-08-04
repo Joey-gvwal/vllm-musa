@@ -4,16 +4,7 @@
 
 from __future__ import annotations
 
-import os
-
 import torch
-
-_MHC_PRE_DEEPGEMM_SPLIT_K_ENV = "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_DEEPGEMM_SPLIT_K"
-_MHC_PRE_BIG_FUSE_THREADS_ENV = "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_THREADS"
-_MHC_PRE_BIG_FUSE_HIDDEN_BLOCK_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_HIDDEN_BLOCK"
-)
-_MHC_PRE_BIG_FUSE_PASS_CONFIG_ENV = "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_BIG_FUSE_PASS_CONFIG"
 
 
 def mhc_pre_musa(
@@ -605,26 +596,13 @@ def select_mhc_prenorm_split_k(num_tokens: int, hc_hidden_size: int) -> int:
     return 16 if num_tokens <= 1024 else 8
 
 
-def _get_env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
-
-
 def _get_mhc_pre_deepgemm_split_k(
     num_tokens: int,
     hc_hidden_size: int,
 ) -> int:
-    split_k = _get_env_int(
-        _MHC_PRE_DEEPGEMM_SPLIT_K_ENV,
-        select_mhc_prenorm_split_k(num_tokens, hc_hidden_size),
-    )
+    split_k = select_mhc_prenorm_split_k(num_tokens, hc_hidden_size)
     if split_k <= 0:
-        raise ValueError(f"{_MHC_PRE_DEEPGEMM_SPLIT_K_ENV} must be > 0, got {split_k}")
+        raise ValueError(f"MHC pre DeepGEMM split_k must be > 0, got {split_k}")
     if hc_hidden_size % split_k != 0:
         raise ValueError(
             "DeepGEMM MHC prenorm requires K divisible by split_k, "
@@ -711,25 +689,13 @@ def _resolve_mhc_pre_big_fuse_config(
     is_decode_like = num_tokens <= 64
     is_mid_prefill = 128 < num_tokens <= 512
 
-    threads = _get_env_int(_MHC_PRE_BIG_FUSE_THREADS_ENV, 0)
-    if threads <= 0:
-        threads = 128 if is_tiny_decode else 256 if is_decode_like else 128
-    if threads not in (128, 256):
-        raise ValueError(
-            f"{_MHC_PRE_BIG_FUSE_THREADS_ENV} must be 128 or 256, got {threads}"
-        )
-
-    hidden_block = _get_env_int(_MHC_PRE_BIG_FUSE_HIDDEN_BLOCK_ENV, 0)
-    if hidden_block <= 0:
-        hidden_block = 512 if is_tiny_decode or is_mid_prefill else 1024
-
-    pass_config = os.getenv(_MHC_PRE_BIG_FUSE_PASS_CONFIG_ENV, "auto").strip().lower()
-    if pass_config == "auto":
-        pass_config = (
-            "aggressive_index32"
-            if (is_decode_like or is_mid_prefill) and n_splits != 1
-            else "safe"
-        )
+    threads = 128 if is_tiny_decode else 256 if is_decode_like else 128
+    hidden_block = 512 if is_tiny_decode or is_mid_prefill else 1024
+    pass_config = (
+        "aggressive_index32"
+        if (is_decode_like or is_mid_prefill) and n_splits != 1
+        else "safe"
+    )
     return threads, hidden_block, pass_config
 
 

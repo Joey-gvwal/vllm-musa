@@ -37,69 +37,6 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV = "VLLM_MUSA_GEMV_MOE_BLOCK"
 _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK = "32x8"
-_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_SIZE"
-)
-_DEEPSEEK_V4_TP8_PROFILE_ENV = "VLLM_MUSA_DEEPSEEK_V4_TP8_PROFILE"
-_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_PROFILE = "balanced_long_prefill"
-_DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_PROFILE = "aggressive_long_prefill"
-_DEEPSEEK_V4_INDEXER_Q_CACHE_ENV = "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_Q_CACHE"
-_DEEPSEEK_V4_INDEXER_BLOCKSELECT_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_BLOCKSELECT"
-)
-_DEEPSEEK_V4_INDEXER_PARTIALSORT_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT"
-)
-_DEEPSEEK_V4_INDEXER_PARTIALSORT_MERGE_BARRIER_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_PARTIALSORT_MERGE_BARRIER"
-)
-_DEEPSEEK_V4_INDEXER_FULL_ROW_SHORTCUT_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_FULL_ROW_SHORTCUT"
-)
-_DEEPSEEK_V4_INDEXER_MATERIALIZED_LOGITS_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_LOGITS"
-)
-_DEEPSEEK_V4_INDEXER_MATERIALIZED_OVERSELECT_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_OVERSELECT"
-)
-_DEEPSEEK_V4_INDEXER_MATERIALIZED_CHUNK_ROWS_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_CHUNK_ROWS"
-)
-_DEEPSEEK_V4_INDEXER_MATERIALIZED_TOPK_SORTED_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_TOPK_SORTED"
-)
-_DEEPSEEK_V4_INDEXER_MATERIALIZED_DIRECT_ENV = (
-    "VLLM_MUSA_DEEPSEEK_V4_INDEXER_TOPK_PREFILL_MATERIALIZED_DIRECT"
-)
-_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_DEFAULTS = {
-    _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV: "16x8",
-    "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X": "256",
-    _DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV: "256",
-    "VLLM_MUSA_DEEPSEEK_V4_TILELANG_COMPILE_PROFILE": "dsa_full",
-    "VLLM_MUSA_DEEPSEEK_V4_TILELANG_DISABLE_HOST_ASSERTS": "1",
-    "VLLM_MUSA_DEEPSEEK_V4_MHC_PRE_TILELANG_MAX_TOKENS": "2048",
-}
-_DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_DEFAULTS = {
-    **_DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_DEFAULTS,
-    _DEEPSEEK_V4_INDEXER_Q_CACHE_ENV: "1",
-    _DEEPSEEK_V4_INDEXER_BLOCKSELECT_ENV: "1",
-    _DEEPSEEK_V4_INDEXER_PARTIALSORT_ENV: "1",
-    _DEEPSEEK_V4_INDEXER_PARTIALSORT_MERGE_BARRIER_ENV: "1",
-    _DEEPSEEK_V4_INDEXER_FULL_ROW_SHORTCUT_ENV: "1",
-    _DEEPSEEK_V4_INDEXER_MATERIALIZED_LOGITS_ENV: "1",
-    _DEEPSEEK_V4_INDEXER_MATERIALIZED_OVERSELECT_ENV: "640",
-    _DEEPSEEK_V4_INDEXER_MATERIALIZED_CHUNK_ROWS_ENV: "512",
-    _DEEPSEEK_V4_INDEXER_MATERIALIZED_TOPK_SORTED_ENV: "0",
-    _DEEPSEEK_V4_INDEXER_MATERIALIZED_DIRECT_ENV: "1",
-}
-_DEEPSEEK_V4_TP8_PROFILE_DEFAULTS = {
-    _DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_PROFILE: (
-        _DEEPSEEK_V4_TP8_BALANCED_LONG_PREFILL_DEFAULTS
-    ),
-    _DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_PROFILE: (
-        _DEEPSEEK_V4_TP8_AGGRESSIVE_LONG_PREFILL_DEFAULTS
-    ),
-}
 
 
 def _is_deepseek_v4_model(model_config: Any | None) -> bool:
@@ -303,67 +240,19 @@ def _is_qwen3_qk_rope_kv_fusion_config(vllm_config: Any) -> bool:
     )
 
 
-def _deepseek_v4_flashmla_sparse_block_size(model_config: Any | None) -> int:
-    value = os.getenv(_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV)
-    if value is None or not _is_deepseek_v4_model(model_config):
-        return 64
-
-    value = value.strip()
-    if value in ("64", "256"):
-        return int(value)
-    raise ValueError(
-        f"{_DEEPSEEK_V4_FLASHMLA_SPARSE_BLOCK_ENV} must be 64 or 256, " f"got {value!r}"
-    )
-
-
-def _apply_deepseek_v4_tp8_profile(
+def _deepseek_v4_flashmla_sparse_block_size(
     model_config: Any | None,
     tensor_parallel_size: int | None,
-) -> None:
-    profile = os.getenv(_DEEPSEEK_V4_TP8_PROFILE_ENV)
-    if profile is None:
-        return
+) -> int:
+    """Return the validated FlashMLA sparse page size for DeepSeek-V4.
 
-    profile = profile.strip()
-    if not profile or not _is_deepseek_v4_model(model_config):
-        return
-    profile_defaults = _DEEPSEEK_V4_TP8_PROFILE_DEFAULTS.get(profile)
-    if profile_defaults is None:
-        valid_profiles = ", ".join(
-            repr(name) for name in sorted(_DEEPSEEK_V4_TP8_PROFILE_DEFAULTS)
-        )
-        raise ValueError(
-            f"{_DEEPSEEK_V4_TP8_PROFILE_ENV} must be one of "
-            f"{valid_profiles}, "
-            f"got {profile!r}"
-        )
-    if tensor_parallel_size != 8:
-        logger.info(
-            "Ignoring %s=%s because tensor_parallel_size=%s; the profile is "
-            "validated only for DeepSeek-V4 TP8.",
-            _DEEPSEEK_V4_TP8_PROFILE_ENV,
-            profile,
-            tensor_parallel_size,
-        )
-        return
-
-    applied = []
-    preserved = []
-    for env_name, default_value in profile_defaults.items():
-        if env_name in os.environ:
-            preserved.append(env_name)
-            continue
-        os.environ[env_name] = default_value
-        applied.append(f"{env_name}={default_value}")
-
-    logger.info(
-        "Applied DeepSeek-V4 TP8 profile %s=%s; set defaults: %s; preserved "
-        "explicit envs: %s.",
-        _DEEPSEEK_V4_TP8_PROFILE_ENV,
-        profile,
-        ", ".join(applied) if applied else "none",
-        ", ".join(preserved) if preserved else "none",
-    )
+    The 256-token page is part of the DeepSeek-V4 TP8 kernel contract.  Keep
+    the generic 64-token page for other models and parallel layouts; this is a
+    model/shape decision rather than a process-wide environment switch.
+    """
+    if _is_deepseek_v4_model(model_config) and tensor_parallel_size == 8:
+        return 256
+    return 64
 
 
 @cache
@@ -821,19 +710,29 @@ class MUSAPlatformBase(Platform):
             )
 
         if _is_deepseek_v4_model(model_config):
-            _apply_deepseek_v4_tp8_profile(
-                model_config,
-                getattr(parallel_config, "tensor_parallel_size", None),
+            # Keep the generic GEMV selector available for other models, but
+            # make the validated DeepSeek-V4 TP8 choice independent of a
+            # DeepSeek-specific profile environment variable. Explicit
+            # generic overrides still win for A/B diagnostics.
+            tensor_parallel_size = getattr(
+                parallel_config, "tensor_parallel_size", None
             )
+            if (
+                tensor_parallel_size == 8
+                and "VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X" not in os.environ
+            ):
+                os.environ["VLLM_MUSA_FUSED_ADD_RMSNORM_BLOCK_X"] = "256"
             if _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV not in os.environ:
                 os.environ[_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV] = (
-                    _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK
+                    "16x8"
+                    if tensor_parallel_size == 8
+                    else _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK
                 )
                 logger.info(
                     "Defaulting DeepSeek-V4 MUSA GEMV/MoE block selector to "
                     "%s=%s (set it explicitly to override).",
                     _DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV,
-                    _DEEPSEEK_V4_DEFAULT_GEMV_MOE_BLOCK,
+                    os.environ[_DEEPSEEK_V4_GEMV_MOE_BLOCK_ENV],
                 )
 
         if parallel_config.worker_cls == "auto":
@@ -885,7 +784,8 @@ class MUSAPlatformBase(Platform):
                     use_flashmla_sparse = True
 
                 sparse_block_size = _deepseek_v4_flashmla_sparse_block_size(
-                    model_config
+                    model_config,
+                    getattr(parallel_config, "tensor_parallel_size", None),
                 )
                 if use_flashmla_sparse and cache_config.block_size != sparse_block_size:
                     cache_config.block_size = sparse_block_size

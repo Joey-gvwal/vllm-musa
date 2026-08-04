@@ -33,12 +33,12 @@ inline int GetGroupsPerBlock(int64_t num_groups) {
   return 1;
 }
 
-template <typename T, typename DST_DTYPE, int GROUP_SIZE>
+template <typename T, typename DST_DTYPE, int GROUP_SIZE, bool APPLY_CLAMP>
 __global__ void silu_and_mul_per_token_group_fp8_quant_kernel(
     const T* __restrict__ input, void* __restrict__ output_q,
     float* __restrict__ output_s, const int hidden, const int num_groups,
     const int groups_per_block, const float eps, const float min_8bit,
-    const float max_8bit) {
+    const float max_8bit, const float swiglu_limit) {
   constexpr int THREADS_PER_GROUP = 16;
   constexpr int ELEMS_PER_THREAD = GROUP_SIZE / THREADS_PER_GROUP;
 
@@ -59,15 +59,54 @@ __global__ void silu_and_mul_per_token_group_fp8_quant_kernel(
       static_cast<int64_t>(row) * hidden + group * GROUP_SIZE;
 
   float values[ELEMS_PER_THREAD];
+  bool quantize_to_min[ELEMS_PER_THREAD];
   float local_absmax = eps;
 
 #pragma unroll
   for (int i = 0; i < ELEMS_PER_THREAD; ++i) {
     const int col = lane_id * ELEMS_PER_THREAD + i;
-    const float gate = static_cast<float>(input[input_base + col]);
-    const float up = static_cast<float>(input[input_base + hidden + col]);
-    const float silu = gate / (1.0f + expf(-gate));
-    const T rounded = static_cast<T>(silu * up);
+    float gate = static_cast<float>(input[input_base + col]);
+    float up = static_cast<float>(input[input_base + hidden + col]);
+    if constexpr (APPLY_CLAMP) {
+      // The native path materializes a canonical BF16/FP16 NaN for a NaN
+      // operand or for (-inf * sigmoid(-inf)).  With -ffast-math, keeping the
+      // whole chain in one kernel can otherwise fold 0*NaN to zero.  Record
+      // the exceptional result from IEEE bit patterns before doing arithmetic;
+      // the reference quantizer maps that NaN through fmax(NaN, fp8_min) to
+      // fp8_min.  Avoid isnan/isinf because fast-math may assume them false.
+      const uint32_t gate_bits = __float_as_uint(gate);
+      const uint32_t up_bits = __float_as_uint(up);
+      const bool gate_nan =
+          (gate_bits & 0x7fffffffu) > 0x7f800000u;
+      const bool gate_neg_inf = gate_bits == 0xff800000u;
+      const bool up_nan = (up_bits & 0x7fffffffu) > 0x7f800000u;
+      quantize_to_min[i] = gate_nan || gate_neg_inf || up_nan;
+
+      // SiluAndMulWithClamp materializes BF16/FP16 clamp outputs. Round the
+      // scalar limit to the input dtype before applying it, and use ordered
+      // comparisons so NaNs remain NaNs just as torch.clamp does.
+      const float rounded_limit =
+          static_cast<float>(static_cast<T>(swiglu_limit));
+      gate = gate > rounded_limit ? rounded_limit : gate;
+      up = up < -rounded_limit
+               ? -rounded_limit
+               : (up > rounded_limit ? rounded_limit : up);
+    }
+    T rounded;
+    if constexpr (APPLY_CLAMP) {
+      // MUSA dispatches SiluAndMulWithClamp through its OOT forward_native
+      // implementation. Its sigmoid and two multiplies each materialize the
+      // input dtype, so preserve those boundaries before FP8 absmax/packing.
+      const T sigmoid_rounded =
+          static_cast<T>(1.0f / (1.0f + expf(-gate)));
+      const T silu_rounded =
+          static_cast<T>(gate * static_cast<float>(sigmoid_rounded));
+      rounded = static_cast<T>(static_cast<float>(silu_rounded) * up);
+    } else {
+      quantize_to_min[i] = false;
+      const float silu = gate / (1.0f + expf(-gate));
+      rounded = static_cast<T>(silu * up);
+    }
     const float value = static_cast<float>(rounded);
     values[i] = value;
     local_absmax = fmaxf(local_absmax, fabsf(value));
@@ -84,16 +123,17 @@ __global__ void silu_and_mul_per_token_group_fp8_quant_kernel(
 #pragma unroll
   for (int i = 0; i < ELEMS_PER_THREAD; ++i) {
     const int col = lane_id * ELEMS_PER_THREAD + i;
-    float q = values[i] / scale;
+    float q = quantize_to_min[i] ? min_8bit : values[i] / scale;
     q = fminf(fmaxf(q, min_8bit), max_8bit);
     out[output_base + col] = DST_DTYPE(q);
   }
 }
 
-void silu_and_mul_per_token_group_fp8_quant(
+template <bool APPLY_CLAMP>
+void silu_and_mul_per_token_group_fp8_quant_impl(
     const torch::Tensor& input, torch::Tensor& output_q,
     torch::Tensor& output_s, int64_t group_size, double eps, double fp8_min,
-    double fp8_max) {
+    double fp8_max, double swiglu_limit) {
   TORCH_CHECK(input.is_contiguous());
   TORCH_CHECK(output_q.is_contiguous());
   TORCH_CHECK(output_s.is_contiguous());
@@ -126,13 +166,15 @@ void silu_and_mul_per_token_group_fp8_quant(
 
 #define LAUNCH_SILU_QUANT_KERNEL(T, DST_DTYPE)                            \
   do {                                                                    \
-    silu_and_mul_per_token_group_fp8_quant_kernel<T, DST_DTYPE, 128>      \
+    silu_and_mul_per_token_group_fp8_quant_kernel<T, DST_DTYPE, 128,      \
+                                                    APPLY_CLAMP>           \
         <<<num_blocks, num_threads, 0, stream>>>(                         \
             static_cast<const T*>(input.data_ptr()), output_q.data_ptr(), \
             static_cast<float*>(output_s.data_ptr()),                     \
             static_cast<int>(hidden), static_cast<int>(num_groups),       \
             groups_per_block, static_cast<float>(eps),                    \
-            static_cast<float>(fp8_min), static_cast<float>(fp8_max));    \
+            static_cast<float>(fp8_min), static_cast<float>(fp8_max),     \
+            static_cast<float>(swiglu_limit));                            \
   } while (0)
 
   VLLM_DISPATCH_FLOATING_TYPES(
@@ -149,4 +191,23 @@ void silu_and_mul_per_token_group_fp8_quant(
       }));
 
 #undef LAUNCH_SILU_QUANT_KERNEL
+}
+
+void silu_and_mul_per_token_group_fp8_quant(
+    const torch::Tensor& input, torch::Tensor& output_q,
+    torch::Tensor& output_s, int64_t group_size, double eps, double fp8_min,
+    double fp8_max) {
+  silu_and_mul_per_token_group_fp8_quant_impl<false>(
+      input, output_q, output_s, group_size, eps, fp8_min, fp8_max, 0.0);
+}
+
+void silu_and_mul_clamp_per_token_group_fp8_quant(
+    const torch::Tensor& input, torch::Tensor& output_q,
+    torch::Tensor& output_s, int64_t group_size, double eps, double fp8_min,
+    double fp8_max, double swiglu_limit) {
+  TORCH_CHECK(std::isfinite(swiglu_limit) && swiglu_limit > 0.0,
+              "swiglu_limit must be finite and positive.");
+  silu_and_mul_per_token_group_fp8_quant_impl<true>(
+      input, output_q, output_s, group_size, eps, fp8_min, fp8_max,
+      swiglu_limit);
 }
