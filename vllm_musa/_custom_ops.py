@@ -60,6 +60,7 @@ def musa_fused_gemv(
     use_rms_norm: bool = False,
     gamma: torch.Tensor = None,
     eps: float = 1e-6,
+    output: torch.Tensor | None = None,
 ):
     use_int4_w4a16 = False
     out_shape = x.shape[:-1] + (
@@ -84,7 +85,13 @@ def musa_fused_gemv(
             qweight.dtype == torch.float8_e4m3fn
         ), "FP8 grouped matmul weight only support float8_e4m3fn!"
         assert qweight_scales is not None, "FP8 grouped matmul weight scales is None!"
-        output = torch.empty(out_shape, device=x.device, dtype=torch.bfloat16)
+        if output is None:
+            output = torch.empty(out_shape, device=x.device, dtype=torch.bfloat16)
+        else:
+            assert output.shape == out_shape
+            assert output.device == x.device
+            assert output.dtype == torch.bfloat16
+            assert output.is_contiguous()
         torch.ops._C_musa_ops.musa_fused_gemv(
             x,
             qweight,
@@ -109,6 +116,7 @@ def musa_fused_gemv(
         out_shape = x.shape[:-1] + (
             qweight.shape[0] if not use_swigelu else qweight.shape[0] // 2,
         )
+        assert output is None, "caller-owned output is only supported for FP8 GEMV"
         output = torch.empty(out_shape, device=x.device, dtype=x.dtype)
         torch.ops._C_musa_ops.musa_fused_gemv(
             x,
@@ -125,6 +133,7 @@ def musa_fused_gemv(
         return output
     # general gemv
     else:
+        assert output is None, "caller-owned output is only supported for FP8 GEMV"
         output = torch.empty(out_shape, device=x.device, dtype=x.dtype)
         torch.ops._C_musa_ops.musa_fused_gemv(
             x,
