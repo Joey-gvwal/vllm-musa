@@ -4,10 +4,10 @@ Date: Tue, 4 Aug 2026 06:30:00 +0800
 Subject: [PATCH] perf: specialize Qwen3.6 BF16 W1 tile at C25
 
 Qwen3.6-35B-A3B's folded BF16 MoE has asymmetric projections: W1 uses
-K=2048/N=1024 while W2 uses K=512/N=2048.  A 60-case sweep using captured
-real-routing distributions showed that keeping the current N32/K64/W4 tile
-for W2 but using N64/K128/W8 for W1 improves the complete MoE path by 1.57%
-in aggregate, with 48/60 wins and no regression above 2%.
+K=2048/N=1024 while W2 uses K=512/N=2048. Use a wider N64/K128/W8 tile for
+W1 while keeping the default N32/K64/W4 tile for W2. This preserves the
+projection-specific launch geometry without changing the generic BF16 MoE
+configuration.
 
 Keep the existing M32 alignment so W1 and W2 can reuse the sorted-expert
 workspace.  Guard the specialization on the exact MUSA BF16 C25 shape and
@@ -47,11 +47,11 @@ index 73135e18d..82d70cd6d 100644
 +        and config.get("num_warps") == 4
 +        and config.get("num_stages") == 1
 +    ):
-+        # Qwen3.6's BF16 W1 projection is K=2048/N=1024, while W2 is
-+        # K=512/N=2048. Real-routing C25 sweeps show that W1 benefits from
-+        # wider K/N tiles and eight warps, but applying the same config to W2
-+        # erases the gain. Keep the shared BLOCK_SIZE_M so expert alignment is
-+        # reusable, and specialize only the first projection.
++        # Qwen3.6 BF16 uses different W1 and W2 projection shapes but shares
++        # the sorted-expert workspace. Keep the common BLOCK_SIZE_M and use
++        # wider K/N tiles and eight warps for W1. Retain the default W2
++        # configuration so this specialization applies only to the first
++        # projection.
 +        w1_config = dict(config)
 +        w1_config.update(
 +            BLOCK_SIZE_N=64,

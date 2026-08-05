@@ -42,10 +42,8 @@ def _compute_routing(
         return jit_result
 
     if num_fused_shared_experts:
-        # Correctness fallback for builds where the JIT top-k kernel is disabled
-        # or unavailable. The combined gate produces routed logits followed by
-        # one shared logit; split them before the ordinary router so the shared
-        # expert can never participate in routed top-k selection.
+        # Combined logits contain routed columns followed by one shared logit.
+        # Keep the shared expert out of routed top-k selection.
         assert num_fused_shared_experts == 1
         routed_experts = self.global_num_experts
         routed_logits = router_logits[:, :routed_experts].contiguous()

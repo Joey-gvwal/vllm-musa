@@ -17,8 +17,9 @@ is pre-patched.
   the highest prefix. Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **104 patches**. The final patch binds DeepSeek-V4 shared-MLP and
-sparse-indexer policy to the MUSA optimization contract. The series contains
+Currently **107 patches**. This branch adds Qwen3.6 patches for common GDN
+decode metadata reuse, uniform-decode SSM slot-mapping removal, and the BF16 W1
+tile specialization on top of the upstream 104-patch series. The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.24.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept

@@ -105,8 +105,7 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             )
             routed_topk = self.moe.experts_per_token
             if topk_weights.shape[1] == routed_topk:
-                # Compatibility fallback for an upstream runner that did not
-                # combine the routed and shared gate projections.
+                # Append the shared route when only routed weights are present.
                 shared_logits, _ = layer._musa_shared_gate(x)
                 topk_weights, topk_ids = extend_topk_with_shared(
                     topk_weights,
@@ -115,8 +114,7 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
                     layer._musa_shared_expert_id,
                 )
             else:
-                # The MUSA router already appended the shared id/weight while
-                # consuming the combined [routed, shared] gate output.
+                # Combined gate routing includes one shared id and weight.
                 assert topk_weights.shape[1] == routed_topk + 1
                 assert topk_ids.shape[1] == routed_topk + 1
             global_num_experts = layer._musa_shared_expert_id + 1
