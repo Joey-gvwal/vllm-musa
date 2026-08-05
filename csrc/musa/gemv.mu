@@ -661,6 +661,32 @@ bool SelectDeepSeekV4Fp8OProjTile(
     return IsForcedBlockConfigValid(*config, nr_n, hidden_size, vlen);
 }
 
+bool SelectDeepSeekV4Fp8SharedGateUpTile(
+    int current_arch,
+    bool is_fp8,
+    bool use_swigelu,
+    bool use_rms_norm,
+    bool use_int4_w4a16,
+    int reduce_size,
+    int hidden_size,
+    int nr_n,
+    int scale_k_group_tile,
+    int vlen,
+    int bseqlen,
+    BlockConfig* config) {
+    if (current_arch < 300 || !is_fp8 || use_swigelu || use_rms_norm ||
+        use_int4_w4a16 || reduce_size != 512 || hidden_size != 4096 ||
+        nr_n != 512 || scale_k_group_tile != 128 || bseqlen != 1) {
+        return false;
+    }
+
+    // Python dispatch already limits this exact contract to the DeepSeek-V4
+    // TP8 shared-expert gate-up layer.  Select the cold-L2 winner here before
+    // the routed-MoE 16x8 environment default can leak into the dense GEMV.
+    *config = BlockConfig{4, 32, 0.f, true};
+    return IsForcedBlockConfigValid(*config, nr_n, hidden_size, vlen);
+}
+
 void musa_fused_gemv(
     torch::Tensor &A,
     torch::Tensor &B,
@@ -775,7 +801,7 @@ void musa_fused_gemv(
         fallback_config = BlockConfig{128, 1, -1.0f, false};
     }
     BlockConfig forced_config{0, 0, 0.f, false};
-    BlockConfig deepseek_v4_o_proj_config{0, 0, 0.f, false};
+    BlockConfig deepseek_v4_linear_config{0, 0, 0.f, false};
     BlockConfig* best_config = &fallback_config;
     if (SelectDeepSeekV4Fp8OProjTile(
             current_arch,
@@ -789,8 +815,21 @@ void musa_fused_gemv(
             scale_k_group_tile,
             vlen,
             bseqlen,
-            &deepseek_v4_o_proj_config)) {
-        best_config = &deepseek_v4_o_proj_config;
+            &deepseek_v4_linear_config) ||
+        SelectDeepSeekV4Fp8SharedGateUpTile(
+            current_arch,
+            is_fp8,
+            use_swigelu,
+            use_rms_norm,
+            use_int4_w4a16,
+            reduce_size,
+            hidden_size,
+            nr_n,
+            scale_k_group_tile,
+            vlen,
+            bseqlen,
+            &deepseek_v4_linear_config)) {
+        best_config = &deepseek_v4_linear_config;
     } else {
         if (ParseForcedBlockConfig(&forced_config)) {
             TORCH_CHECK(
