@@ -49,7 +49,16 @@ def _matches_flash_base(model: ModelSignature) -> bool:
     )
 
 
-def _matches_tp8_reference(execution: ExecutionSignature) -> bool:
+def _matches_tp8_reference(
+    execution: ExecutionSignature,
+    *,
+    allow_multi_batch: bool = False,
+) -> bool:
+    max_num_seqs_matches = execution.max_num_seqs == 1
+    if allow_multi_batch:
+        max_num_seqs_matches = (
+            execution.max_num_seqs is not None and execution.max_num_seqs > 0
+        )
     return (
         execution.has_parallel_config
         and execution.tensor_parallel_size == 8
@@ -60,7 +69,7 @@ def _matches_tp8_reference(execution: ExecutionSignature) -> bool:
         and execution.has_quant_config
         and not execution.is_pooling_model
         and execution.cache_dtype == "fp8"
-        and execution.max_num_seqs == 1
+        and max_num_seqs_matches
         and execution.attention_backend == "flashmla"
         and execution.compilation_mode == "none"
         and execution.cudagraph_mode == "full_decode_only"
@@ -102,6 +111,16 @@ def resolve_deepseek_v4_contract(
                     OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER,
                 }
             )
+        # The shared-expert clamp + FP8 down-projection is shape-safe for every
+        # positive max-num-seqs in the same no-MTP TP8 decode contract.  The
+        # original migration accidentally restricted this already-validated
+        # path to the single-sequence capture experiment, disabling it for the
+        # production capture ladder (e.g. max-num-seqs=64).
+        if _matches_tp8_reference(execution, allow_multi_batch=True) and not (
+            execution.batch_invariant_enabled
+        ):
+            preferred.add(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+
         if _matches_tp8_reference(execution):
             preferred.update(
                 {
@@ -109,8 +128,6 @@ def resolve_deepseek_v4_contract(
                     OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256,
                 }
             )
-            if not execution.batch_invariant_enabled:
-                preferred.add(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
 
     profile = (
         "deepseek_v4.tp8_flash_base"

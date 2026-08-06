@@ -106,6 +106,22 @@ def test_flash_base_tp4_is_supported_but_not_tp8_preferred() -> None:
     assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER)
 
 
+def test_flash_base_multibatch_keeps_shared_mlp_path() -> None:
+    config = _flash_base_config()
+    config.scheduler_config.max_num_seqs = 64
+
+    contract = resolve_optimization_contract(config)
+
+    assert contract.profile == "deepseek_v4.unvalidated"
+    assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
+    )
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
+    )
+
+
 def test_model_config_without_execution_topology_is_support_only() -> None:
     config = _flash_base_config()
 
@@ -279,7 +295,7 @@ def test_speculative_execution_keeps_support_but_disables_tp8_preferences() -> N
         ("compilation_config", "cudagraph_mode", "PIECEWISE"),
     ],
 )
-def test_one_field_execution_mismatch_disables_tp8_profile(
+def test_one_field_execution_mismatch_keeps_only_shared_mlp(
     owner: str,
     field: str,
     value: object,
@@ -290,7 +306,10 @@ def test_one_field_execution_mismatch_disables_tp8_profile(
     contract = resolve_optimization_contract(config)
 
     assert contract.supports(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
-    assert not contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+    if owner == "scheduler_config":
+        assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+    else:
+        assert not contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert not contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
     )
@@ -331,6 +350,7 @@ def test_pooling_and_missing_quant_runtime_disable_tp8_profile() -> None:
     contract = resolve_optimization_contract(config, is_pooling_model=True)
 
     assert contract.supports(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+    assert not contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert not contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
     )
