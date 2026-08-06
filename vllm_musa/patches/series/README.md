@@ -15,9 +15,12 @@ is pre-patched.
   sequence and patches removed from the commit stack cannot leave stale files.
   Author headers are normalized to the synthetic `musa <musa@local>` identity.
 
-Currently **105 patches** — the MUSA source edits against the immutable vLLM commit
-recorded as `VLLM_COMMIT` in `third_party/PINS` (release label `v0.26.0`), applied
-at build. Runtime object/registration patches (which patch live objects at import)
-are kept separately in `vllm_musa/patches/`, not in this build-time series. Run
+Currently **108 patches**. This branch carries the v0.26.0 MUSA source edits
+plus the Qwen3.6 patches for common GDN decode metadata reuse, uniform-decode
+SSM slot-mapping removal, and BF16 W1 tile specialization. The series contains
+MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
+in `third_party/PINS` (release label `v0.26.0`), applied at build. Runtime
+object/registration patches (which patch live objects at import) are kept
+separately in `vllm_musa/patches/`, not in this build-time series. Run
 `python3 tools/musa_sync.py verify` to replay and verify the complete manifest
 against that exact pinned commit.

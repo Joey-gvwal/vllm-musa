@@ -13,6 +13,7 @@ offline in normal CI.
 """
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -68,6 +69,14 @@ def test_series_bijection_with_manifest(m):
         f"series⇔manifest mismatch: only on disk={on_disk - in_manifest}; "
         f"only in manifest={in_manifest - on_disk}"
     )
+
+
+def test_series_readme_count_matches_disk() -> None:
+    readme = (PATCHES / "series" / "README.md").read_text(encoding="utf-8")
+    match = re.search(r"Currently \*\*(\d+) patches\*\*", readme)
+    assert match is not None, "series README must state the current patch count"
+    on_disk = sum(1 for _ in (PATCHES / "series").glob("*.patch"))
+    assert int(match.group(1)) == on_disk
 
 
 def test_object_patches_have_cat6_entries(m):

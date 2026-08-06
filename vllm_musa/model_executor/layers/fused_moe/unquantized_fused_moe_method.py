@@ -100,16 +100,23 @@ class MusaUnquantizedFusedMoEMethod(UnquantizedFusedMoEMethod):
             # to FusedMoE, so the runner never supplies a separate
             # shared_experts_input here; x is the shared expert's input, matching
             # the routed experts it now rides with.
-            assert (
-                shared_experts_input is None
-            ), "folded shared expert expects shared_experts=None"
-            shared_logits, _ = layer._musa_shared_gate(x)
-            topk_weights, topk_ids = extend_topk_with_shared(
-                topk_weights,
-                topk_ids,
-                shared_logits,
-                layer._musa_shared_expert_id,
+            assert shared_experts_input is None, (
+                "folded shared expert expects shared_experts=None"
             )
+            routed_topk = self.moe.experts_per_token
+            if topk_weights.shape[1] == routed_topk:
+                # Append the shared route when only routed weights are present.
+                shared_logits, _ = layer._musa_shared_gate(x)
+                topk_weights, topk_ids = extend_topk_with_shared(
+                    topk_weights,
+                    topk_ids,
+                    shared_logits,
+                    layer._musa_shared_expert_id,
+                )
+            else:
+                # Combined gate routing includes one shared id and weight.
+                assert topk_weights.shape[1] == routed_topk + 1
+                assert topk_ids.shape[1] == routed_topk + 1
             global_num_experts = layer._musa_shared_expert_id + 1
         else:
             global_num_experts = layer.global_num_experts

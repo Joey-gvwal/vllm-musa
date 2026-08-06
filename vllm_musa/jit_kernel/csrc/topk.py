@@ -24,6 +24,7 @@ def _topk_softmax_impl(
     renormalize: bool = False,
     moe_softcapping: float = 0.0,
     correction_bias: Optional[torch.Tensor] = None,
+    num_fused_shared_experts: int = 0,
 ) -> None:
     has_correction_bias = correction_bias is not None
     bias_arg = correction_bias if has_correction_bias else topk_weights.reshape(-1)
@@ -35,6 +36,7 @@ def _topk_softmax_impl(
         float(moe_softcapping),
         bias_arg,
         bool(has_correction_bias),
+        int(num_fused_shared_experts),
     )
 
 
@@ -65,6 +67,7 @@ def _topk_softmax_custom(
     renormalize: bool = False,
     moe_softcapping: float = 0.0,
     has_correction_bias: bool = False,
+    num_fused_shared_experts: int = 0,
 ) -> None:
     bias_arg = correction_bias if has_correction_bias else topk_weights.reshape(-1)
     _topk_module().sgl_musa_topk_softmax(
@@ -75,6 +78,7 @@ def _topk_softmax_custom(
         float(moe_softcapping),
         bias_arg,
         bool(has_correction_bias),
+        int(num_fused_shared_experts),
     )
 
 
@@ -86,6 +90,7 @@ def _topk_softmax_custom_fake(
     renormalize: bool = False,
     moe_softcapping: float = 0.0,
     has_correction_bias: bool = False,
+    num_fused_shared_experts: int = 0,
 ) -> None:
     return
 
@@ -142,6 +147,7 @@ def topk_softmax(
     renormalize: bool = False,
     moe_softcapping: float = 0.0,
     correction_bias: Optional[torch.Tensor] = None,
+    num_fused_shared_experts: int = 0,
 ) -> None:
     """sgl_kernel-compatible top-k softmax entry point."""
     has_correction_bias = correction_bias is not None
@@ -154,6 +160,7 @@ def topk_softmax(
         renormalize,
         moe_softcapping,
         has_correction_bias,
+        num_fused_shared_experts,
     )
 
 
