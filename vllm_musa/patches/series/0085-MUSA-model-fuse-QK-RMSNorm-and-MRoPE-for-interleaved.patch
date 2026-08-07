@@ -11,14 +11,18 @@ issue a long tail of elementwise kernels.
 The IR operation stays as the fallback for every shape this kernel declines.
 Set VLLM_MUSA_FUSED_QK_MROPE=0 to disable.
 ---
- vllm/model_executor/models/qwen3_next.py | 77 ++++++++++++++++++++++++
- 1 file changed, 77 insertions(+)
+ vllm/model_executor/models/qwen3_next.py | 78 ++++++++++++++++++++++++
+ 1 file changed, 78 insertions(+)
 
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
 index 1591007..a854734 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
-@@ -287,6 +287,30 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+@@ -5,2 +5,3 @@
++import os
+ from collections.abc import Iterable
+ from itertools import islice
+@@ -287,6 +288,30 @@ class Qwen3NextSparseMoeBlock(nn.Module):
          return final_hidden_states.view(orig_shape)
  
  

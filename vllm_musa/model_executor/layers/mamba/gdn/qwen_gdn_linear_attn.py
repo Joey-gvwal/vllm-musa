@@ -111,8 +111,15 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         vllm_config,
         prefix: str = "",
         gqa_interleaved_layout: bool = False,
+        reduce_results: bool = True,
     ) -> None:
-        super().__init__(config, vllm_config, prefix, gqa_interleaved_layout)
+        super().__init__(
+            config,
+            vllm_config,
+            prefix,
+            gqa_interleaved_layout,
+            reduce_results,
+        )
         self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
         compilation_config = vllm_config.compilation_config
         self._gdn_cudagraph_capture_sizes = tuple(
@@ -268,7 +275,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         ):
             return False
 
-        from vllm.model_executor.layers.fla.ops import (
+        from vllm.third_party.flash_linear_attention.ops import (
             fused_sigmoid_gating_delta_rule_update,
         )
         from vllm.model_executor.layers.mamba.mamba_utils import (
@@ -521,7 +528,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         core_attn_out: torch.Tensor,
         attn_metadata,
     ) -> None:
-        from vllm.model_executor.layers.fla.ops import (
+        from vllm.third_party.flash_linear_attention.ops import (
             fused_sigmoid_gating_delta_rule_update,
         )
         from vllm.model_executor.layers.mamba.mamba_utils import (
