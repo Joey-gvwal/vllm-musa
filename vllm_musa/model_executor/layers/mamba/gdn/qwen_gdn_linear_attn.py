@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import bisect
 import inspect
+import os
 from typing import Any
 
 import torch
@@ -15,11 +16,6 @@ from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
     QwenGatedDeltaNetAttention,
-)
-
-from vllm_musa.optimization_contract import (
-    OptimizationFeature,
-    resolve_optimization_contract,
 )
 
 logger = init_logger(__name__)
@@ -120,7 +116,6 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             gqa_interleaved_layout,
             reduce_results,
         )
-        self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
         compilation_config = vllm_config.compilation_config
         self._gdn_cudagraph_capture_sizes = tuple(
             compilation_config.cudagraph_capture_sizes or ()
@@ -354,9 +349,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # whole-pool contiguity copy.
         if ssm_state.dtype == torch.float32:
             try:
-                _musa_sep = self._musa_optimization_contract.prefers(
-                    OptimizationFeature.HYBRID_SEPARATE_MAMBA_POOL
-                )
+                _musa_sep = os.environ.get("VLLM_MUSA_MAMBA_SEPARATE_POOL", "1") == "1"
                 # MUSA: write the mate decode output straight into the
                 # preallocated core_attn_out buffer (bf16) to skip a per-layer copy.
                 _out_view = core_attn_out[:num_decode_tokens].view(
@@ -539,16 +532,9 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             causal_conv1d_update,
         )
 
-        causal_conv1d_kwargs = {}
         try:
             from vllm_musa.jit_kernel.tilelang.causal_conv1d import (
                 musa_tilelang_causal_conv1d_fn as causal_conv1d_fn,
-            )
-
-            causal_conv1d_kwargs["allow_width4_prefill_split"] = (
-                self._musa_optimization_contract.prefers(
-                    OptimizationFeature.QWEN35_GDN_WIDTH4_PREFILL
-                )
             )
         except Exception:
             pass  # MUSA: fall back to Triton causal_conv1d_fn on import failure
@@ -620,7 +606,6 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             cache_indices=non_spec_state_indices_tensor,
             query_start_loc=non_spec_query_start_loc,
             metadata=attn_metadata,
-            **causal_conv1d_kwargs,
         ).transpose(0, 1)
 
         query_spec, key_spec, value_spec = self.rearrange_mixed_qkv(mixed_qkv_spec)
