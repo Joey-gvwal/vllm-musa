@@ -21,6 +21,13 @@ QWEN_PATCH = (
     / "series"
     / "0085-MUSA-model-fuse-QK-RMSNorm-and-MRoPE-for-interleaved.patch"
 )
+SHARED_EXPERT_PATCH = (
+    ROOT
+    / "vllm_musa"
+    / "patches"
+    / "series"
+    / "0074-MUSA-model-fold-the-Qwen3.5-shared-expert-into-fused.patch"
+)
 
 
 def test_qwen_gdn_forwards_v026_reduce_results() -> None:
@@ -42,3 +49,17 @@ def test_qwen_mrope_patch_imports_os_before_use() -> None:
 
     assert "+import os" in source
     assert source.index("+import os") < source.index("os.environ.get")
+
+
+def test_v026_qwen_paths_do_not_depend_on_pr166_contract_package() -> None:
+    gdn_source = GDN_SOURCE.read_text(encoding="utf-8")
+    shared_expert_patch = SHARED_EXPERT_PATCH.read_text(encoding="utf-8")
+
+    assert "optimization_contract" not in gdn_source
+    assert "OptimizationFeature" not in gdn_source
+    assert "allow_width4_prefill_split" not in gdn_source
+    assert "VLLM_MUSA_MAMBA_SEPARATE_POOL" in gdn_source
+
+    assert "optimization_contract" not in shared_expert_patch
+    assert "OptimizationFeature" not in shared_expert_patch
+    assert "VLLM_MUSA_MOE_SHARED_EXPERT_FUSION" in shared_expert_patch
