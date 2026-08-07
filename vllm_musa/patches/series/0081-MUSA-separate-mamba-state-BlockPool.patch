@@ -1,23 +1,23 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Tue, 14 Jul 2026 12:00:00 +0800
-Subject: [PATCH] MUSA: separate mamba state BlockPool
+Subject: [PATCH] MUSA: separate mamba state BlockPools
 
-Give mamba state its own contiguous BlockPool, sized from max_num_seqs so it
-never binds, and keep it out of the attention pool's proportional shrink. The
-mamba groups then own a small contiguous block-id space and mate's GDN decode
+Give mamba state its own contiguous BlockPools, sized from max_num_seqs so they
+never bind, and keep them out of the attention pool's proportional shrink. The
+mamba groups then own small contiguous block-id spaces and mate's GDN decode
 updates the recurrent state in place instead of gathering and scattering it.
 
 On by default; set VLLM_MUSA_MAMBA_SEPARATE_POOL=0 to fall back to the shared pool.
 ---
- vllm/v1/core/kv_cache_utils.py | 76 ++++++++++++++++++++++++++++++++++
- 1 file changed, 76 insertions(+)
+ vllm/v1/core/kv_cache_utils.py | 111 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 111 insertions(+)
 
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
 index a0f8718..c9a7867 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1386,6 +1386,63 @@ def _use_musa_deepseek_v4_zero_offset_kv_tensors(
+@@ -1386,6 +1386,88 @@ def _use_musa_deepseek_v4_zero_offset_kv_tensors(
  _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
  
  
@@ -37,9 +37,9 @@ index a0f8718..c9a7867 100644
 +    """Split KV memory into a small contiguous mamba pool and the attention pool.
 +
 +    Mamba groups get one dedicated tensor per layer (segregated-contiguous,
-+    indexed by their own block-id space); the mamba pool is sized so it never
-+    binds (attention admission caps running requests at <= max_num_seqs, each
-+    needing 1 block per mamba group).
++    indexed by their own block-id space); the mamba pool is sized from the
++    MambaSpec admission bound so it never binds (attention admission caps
++    running requests at <= max_num_seqs).
 +    Returns (kv_cache_tensors, attn_num_blocks, mamba_num_blocks).
 +    """
 +    mamba_groups = [g for g in kv_cache_groups if isinstance(g.kv_cache_spec, MambaSpec)]
@@ -47,15 +47,40 @@ index a0f8718..c9a7867 100644
 +        g for g in kv_cache_groups if not isinstance(g.kv_cache_spec, MambaSpec)
 +    ]
 +    max_num_seqs = vllm_config.scheduler_config.max_num_seqs
-+    # Peak live blocks = num_mamba_groups * max_num_seqs (1 block/seq/group);
-+    # plus the null block and slack.
-+    mamba_num_blocks = len(mamba_groups) * (max_num_seqs + 8) + 1
 +    mamba_page = get_uniform_page_size([g.kv_cache_spec for g in mamba_groups])
++    profiling_num_blocks = (
++        vllm_config.cache_config.num_gpu_blocks_override
++        if available_memory == 0
++        else None
++    )
++    if profiling_num_blocks is not None:
++        # v0.26 CUDA-Graph memory profiling requests a temporary minimal cache
++        # through num_gpu_blocks_override. The scheduler and its per-group
++        # Mamba BlockPool are not live yet, so each layer tensor only needs the
++        # overridden number of addressable blocks.
++        mamba_num_blocks = profiling_num_blocks
++    else:
++        # Each Mamba group owns a local BlockPool/address space. Therefore
++        # its block count is per group, not multiplied by the number of
++        # sibling groups. Use the MambaSpec admission bound (which also
++        # covers aligned/speculative state) and reserve only BlockPool's
++        # null block. This is the v0.24 implementation that prevents the
++        # separate pool from consuming one copy per group too many.
++        mamba_blocks_per_request = max(
++            cdiv(
++                group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
++                mamba_page,
++            )
++            for group in mamba_groups
++        )
++        mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
 +    mamba_layers = [ln for g in mamba_groups for ln in g.layer_names]
 +    mamba_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
-+    if mamba_bytes >= available_memory:
++    # available_memory=0 is a v0.26 profiling sentinel; the block override
++    # above supplies the temporary tensor size in that path.
++    if available_memory > 0 and mamba_bytes >= available_memory:
 +        raise ValueError("MUSA separate mamba pool needs more memory than available")
-+    remaining = available_memory - mamba_bytes
++    remaining = max(available_memory - mamba_bytes, 0)
 +    attn_group_size = max(len(g.layer_names) for g in attn_groups)
 +    attn_page = get_uniform_page_size([g.kv_cache_spec for g in attn_groups])
 +    attn_num_blocks = get_num_blocks(
@@ -81,7 +106,7 @@ index a0f8718..c9a7867 100644
  def get_kv_cache_config_from_groups(
      vllm_config: VllmConfig,
      kv_cache_groups: list[KVCacheGroupSpec],
-@@ -1436,6 +1493,21 @@ def get_kv_cache_config_from_groups(
+@@ -1436,6 +1518,21 @@ def get_kv_cache_config_from_groups(
          num_blocks, kv_cache_tensors = _get_kv_cache_config_packed(
              vllm_config, kv_cache_groups, available_memory
          )
@@ -103,7 +128,23 @@ index a0f8718..c9a7867 100644
      else:
          # General case:
          # We will have group_size memory pools, each is shared by one layer from
-@@ -2216,6 +2288,10 @@ def get_kv_cache_configs(
+@@ -1891,3 +2000,15 @@ def get_kv_cache_groups(
++    if (
++        musa_mamba_separate_pool_enabled()
++        and any(isinstance(spec, MambaSpec) for spec in kv_cache_spec.values())
++        and any(not isinstance(spec, MambaSpec) for spec in kv_cache_spec.values())
++    ):
++        # The MUSA pools have independent page sizes and block-id spaces. The
++        # v0.26 generic hybrid path pads every spec to one physical page size,
++        # which both defeats page64 and requires a num-blocks-first attention
++        # layout. Preserve each family's native page and only reuse the group
++        # construction step here.
++        return _get_kv_cache_groups_uniform_page_size(kv_cache_spec)
++
+     if is_kv_cache_spec_uniform(kv_cache_spec):
+         # KV cache of all layers are the same, which is true for
+         # most models. Allocate the same amount of memory for
+@@ -2216,6 +2325,10 @@ def get_kv_cache_configs(
  
          # Shrink tensor size proportionally
          for tensor in kv_cache_config.kv_cache_tensors:

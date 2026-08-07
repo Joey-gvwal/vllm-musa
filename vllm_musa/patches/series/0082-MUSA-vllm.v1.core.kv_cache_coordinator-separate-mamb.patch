@@ -1,11 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Wed, 29 Jul 2026 11:12:00 +0800
-Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pool
+Subject: [PATCH] MUSA: vllm.v1.core.kv_cache_coordinator separate mamba pools
 
 ---
- vllm/v1/core/kv_cache_coordinator.py | 33 +++++++++++++++++++++++++++-
- 1 file changed, 32 insertions(+), 1 deletion(-)
+ vllm/v1/core/kv_cache_coordinator.py | 39 +++++++++++++++++++++++++++++++----
+ 1 file changed, 36 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
 index df8769c..725f69a 100644
@@ -23,38 +23,42 @@ index df8769c..725f69a 100644
      SingleTypeKVCacheManager,
      get_manager_for_kv_cache_spec,
  )
-@@ -95,6 +97,22 @@ class KVCacheCoordinator(ABC):
+@@ -95,6 +97,26 @@ class KVCacheCoordinator(ABC):
              metrics_collector=metrics_collector,
          )
  
-+        # MUSA: dedicated non-binding BlockPool for mamba state, so mamba
-+        # groups own a small contiguous block-id space and the mate GDN
-+        # decode runs in place. Sized in the config to never bind.
-+        self.musa_mamba_block_pool = None
++        # MUSA: each Mamba group gets a dedicated non-binding BlockPool, so
++        # every group owns a local contiguous block-id space and the mate GDN
++        # decode runs in place. The configured count is per group.
++        self.musa_mamba_block_pools = {}
 +        _musa_mamba_nb = getattr(
 +            kv_cache_config, "musa_mamba_num_blocks", None
 +        )
 +        if musa_mamba_separate_pool_enabled() and _musa_mamba_nb:
-+            self.musa_mamba_block_pool = BlockPool(
-+                num_gpu_blocks=_musa_mamba_nb,
-+                enable_caching=False,
-+                hash_block_size=hash_block_size,
-+                enable_kv_cache_events=False,
-+                metrics_collector=None,
-+            )
++            for _musa_group_id, _musa_group in enumerate(
++                kv_cache_config.kv_cache_groups
++            ):
++                if isinstance(_musa_group.kv_cache_spec, MambaSpec):
++                    self.musa_mamba_block_pools[_musa_group_id] = BlockPool(
++                        num_gpu_blocks=_musa_mamba_nb,
++                        enable_caching=False,
++                        hash_block_size=hash_block_size,
++                        enable_kv_cache_events=False,
++                        metrics_collector=None,
++                    )
 +
          # KV cache group indices that get the EAGLE last-block drop.
          self.eagle_group_ids: set[int] = {
              i for i, g in enumerate(kv_cache_config.kv_cache_groups) if g.is_eagle_group
-@@ -108,7 +126,14 @@ class KVCacheCoordinator(ABC):
+@@ -108,7 +130,14 @@ class KVCacheCoordinator(ABC):
                  kv_cache_spec=kv_cache_group.kv_cache_spec,
                  max_in_flight_tokens=max_in_flight_tokens,
                  max_model_len=max_model_len,
 -                block_pool=self.block_pool,
 +                block_pool=(
-+                    self.musa_mamba_block_pool
++                    self.musa_mamba_block_pools.get(i)
 +                    if (
-+                        self.musa_mamba_block_pool is not None
++                        i in self.musa_mamba_block_pools
 +                        and isinstance(kv_cache_group.kv_cache_spec, MambaSpec)
 +                    )
 +                    else self.block_pool
@@ -62,11 +66,11 @@ index df8769c..725f69a 100644
                  enable_caching=enable_caching,
                  kv_cache_group_id=i,
                  dcp_world_size=dcp_world_size,
-@@ -165,6 +190,12 @@ class KVCacheCoordinator(ABC):
+@@ -165,6 +194,12 @@ class KVCacheCoordinator(ABC):
          """
          num_blocks_to_allocate = 0
          for i, manager in enumerate(self.single_type_managers):
-+            if self.musa_mamba_block_pool is not None and isinstance(
++            if self.musa_mamba_block_pools and isinstance(
 +                manager, MambaManager
 +            ):
 +                # MUSA: mamba is on its own non-binding pool; do not count
