@@ -12,12 +12,32 @@ from vllm_musa.optimization_contract import (
     bind_optimization_contract,
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract.policy import (
+    deepseek_v4_mtp_async_prefill_queue_fence_enabled,
+    deepseek_v4_mtp_car_graph_guard_enabled,
+    deepseek_v4_mtp_car_graph_staging_plan,
+    deepseek_v4_mtp_graph_registered_inputs_enabled,
+    deepseek_v4_mtp_prefill_step_requires_sync,
+    deepseek_v4_mtp_sparse_prefill_headroom_bytes,
+)
 
 
-def _flash_base_config(*, tp: int = 8, speculative: bool = False):
+def _flash_base_config(
+    *,
+    tp: int = 8,
+    speculative: bool = False,
+    speculative_method: str = "mtp",
+    max_num_seqs: int = 1,
+    max_num_batched_tokens: int = 8195,
+    mtp_draft: bool = False,
+    cache_dtype: str = "fp8",
+    async_scheduling: bool = True,
+):
+    architectures = ["DeepSeekV4MTPModel" if mtp_draft else "DeepseekV4ForCausalLM"]
+    model_type = "deepseek_mtp" if mtp_draft else "deepseek_v4"
     text_config = SimpleNamespace(
-        architectures=["DeepseekV4ForCausalLM"],
-        model_type="deepseek_v4",
+        architectures=architectures,
+        model_type=model_type,
         hidden_size=4096,
         num_hidden_layers=43,
         num_attention_heads=64,
@@ -38,7 +58,8 @@ def _flash_base_config(*, tp: int = 8, speculative: bool = False):
         },
     )
     model_config = SimpleNamespace(
-        architectures=["DeepseekV4ForCausalLM"],
+        architectures=architectures,
+        model_type=model_type,
         hf_text_config=text_config,
         hf_config=text_config,
         dtype="bfloat16",
@@ -56,14 +77,25 @@ def _flash_base_config(*, tp: int = 8, speculative: bool = False):
             data_parallel_size=1,
             decode_context_parallel_size=1,
         ),
-        cache_config=SimpleNamespace(cache_dtype="fp8", block_size=64),
-        scheduler_config=SimpleNamespace(max_num_seqs=1),
+        cache_config=SimpleNamespace(cache_dtype=cache_dtype, block_size=64),
+        scheduler_config=SimpleNamespace(
+            max_num_seqs=max_num_seqs,
+            max_num_batched_tokens=max_num_batched_tokens,
+            async_scheduling=async_scheduling,
+        ),
         attention_config=SimpleNamespace(backend="FLASHMLA"),
         compilation_config=SimpleNamespace(
             mode="NONE",
             cudagraph_mode="FULL_DECODE_ONLY",
         ),
-        speculative_config=object() if speculative else None,
+        speculative_config=(
+            SimpleNamespace(
+                method=speculative_method,
+                num_speculative_tokens=4,
+            )
+            if speculative
+            else None
+        ),
         quant_config=SimpleNamespace(weight_block_size=[128, 128]),
     )
 
@@ -154,25 +186,19 @@ def test_incomplete_deepseek_identity_fails_closed() -> None:
             "model_config",
             "dtype",
             "float16",
-            frozenset(
-                {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
-            ),
+            frozenset({OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}),
         ),
         (
             "model_config",
             "quantization",
             "compressed-tensors",
-            frozenset(
-                {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
-            ),
+            frozenset({OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}),
         ),
         (
             "model_config",
             "use_mla",
             False,
-            frozenset(
-                {OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}
-            ),
+            frozenset({OptimizationFeature.DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD}),
         ),
     ],
 )
@@ -276,12 +302,213 @@ def test_model_config_use_mla_takes_precedence_over_missing_hf_fact() -> None:
 
 
 def test_speculative_execution_keeps_support_but_disables_tp8_preferences() -> None:
-    contract = resolve_optimization_contract(_flash_base_config(speculative=True))
+    config = _flash_base_config(speculative=True)
+    contract = resolve_optimization_contract(config)
 
     assert contract.supports(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert not contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert not contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
+    )
+    assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_MTP_CAR_GRAPH_STAGING_ARENA)
+    assert deepseek_v4_mtp_graph_registered_inputs_enabled(config)
+    plan = deepseek_v4_mtp_car_graph_staging_plan(config)
+    assert plan is not None
+    assert plan.eager_reserve_bytes == 68 * 1024 * 1024
+    assert plan.car_ops_per_descriptor == 87
+    assert plan.bytes_per_token == 8192
+    assert plan.graph_data_capacity_bytes == 110_469_120
+    assert plan.graph_meta_capacity_bytes == 117_596_160
+    assert plan.max_meta_bytes_per_slot == 16 * 1024
+    assert plan.communicator_buffer_bytes == 184 * 1024 * 1024
+    assert plan.capture_descriptors == frozenset(
+        ((5, 1), (10, 2), (20, 4), (40, 8), (80, 16))
+    )
+    assert plan.allows_descriptor(
+        SimpleNamespace(
+            num_tokens=80,
+            num_reqs=16,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        )
+    )
+    assert not plan.allows_descriptor(
+        SimpleNamespace(
+            num_tokens=160,
+            num_reqs=32,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        )
+    )
+    assert not plan.allows_descriptor(
+        SimpleNamespace(
+            num_tokens=80,
+            num_reqs=None,
+            uniform=True,
+            has_lora=False,
+            num_active_loras=0,
+        )
+    )
+    assert not deepseek_v4_mtp_prefill_step_requires_sync(
+        SimpleNamespace(scheduled_new_reqs=[]),
+    )
+
+
+def test_mtp_car_graph_staging_plan_requires_mtp4() -> None:
+    config = _flash_base_config(speculative=True, max_num_seqs=64)
+    config.speculative_config.num_speculative_tokens = 3
+
+    assert deepseek_v4_mtp_car_graph_guard_enabled(config)
+    assert deepseek_v4_mtp_car_graph_staging_plan(config) is None
+
+
+def test_mtp4_bs1_preserves_registered_graph_path() -> None:
+    config = _flash_base_config(speculative=True, max_num_seqs=1)
+
+    assert deepseek_v4_mtp_graph_registered_inputs_enabled(config)
+    assert deepseek_v4_mtp_car_graph_staging_plan(config) is not None
+
+
+def test_tp8_mtp_target_prefers_sparse_prefill_fixes() -> None:
+    config = _flash_base_config(
+        speculative=True,
+        max_num_seqs=64,
+        cache_dtype="fp8_ds_mla",
+    )
+    contract = resolve_optimization_contract(config)
+
+    assert contract.profile == "deepseek_v4.tp8_flash_base_mtp"
+    assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT)
+    assert contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM
+    )
+    assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_MTP_CAR_GRAPH_STAGING_ARENA)
+    assert contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_ASYNC_PREFILL_QUEUE_FENCE
+    )
+    assert deepseek_v4_mtp_sparse_prefill_headroom_bytes(config) == 1_073_938_432
+
+    config.parallel_config.disable_custom_all_reduce = True
+    assert deepseek_v4_mtp_sparse_prefill_headroom_bytes(config) == 537_067_520
+
+
+def test_tp8_mtp_multibatch_syncs_only_prefill_or_mixed_steps() -> None:
+    config = _flash_base_config(
+        speculative=True,
+        max_num_seqs=64,
+        cache_dtype="fp8_ds_mla",
+    )
+    def step(*, new=(), cached_context=(), scheduled=("a", "b")):
+        context_req_ids = set(cached_context)
+        return SimpleNamespace(
+            scheduled_new_reqs=list(new),
+            scheduled_cached_reqs=SimpleNamespace(
+                num_output_tokens=[
+                    0 if req_id in context_req_ids else 1 for req_id in scheduled
+                ]
+            ),
+            num_scheduled_tokens=dict.fromkeys(scheduled, 1),
+            # A structured-output decode may legitimately have no drafts.
+            scheduled_spec_decode_tokens={},
+        )
+
+    assert deepseek_v4_mtp_async_prefill_queue_fence_enabled(config)
+    assert not deepseek_v4_mtp_prefill_step_requires_sync(step())
+    assert deepseek_v4_mtp_prefill_step_requires_sync(
+        step(new=("new",), scheduled=("new", "a"))
+    )
+    assert deepseek_v4_mtp_prefill_step_requires_sync(step(cached_context=("a",)))
+
+    sync_config = _flash_base_config(
+        speculative=True,
+        max_num_seqs=64,
+        cache_dtype="fp8_ds_mla",
+        async_scheduling=False,
+    )
+    assert not resolve_optimization_contract(sync_config).prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_ASYNC_PREFILL_QUEUE_FENCE
+    )
+    assert not deepseek_v4_mtp_async_prefill_queue_fence_enabled(sync_config)
+
+
+def test_flashmla_owner_hint_only_fills_a_missing_backend() -> None:
+    config = _flash_base_config(
+        speculative=True,
+        max_num_seqs=64,
+        cache_dtype="fp8_ds_mla",
+    )
+    config.attention_config.backend = None
+
+    unhinted = resolve_optimization_contract(config)
+    hinted = resolve_optimization_contract(
+        config,
+        attention_backend_hint="flashmla",
+    )
+
+    assert not unhinted.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT
+    )
+    assert hinted.prefers(OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT)
+
+    config.attention_config.backend = "FLASH_ATTN"
+    conflicting = resolve_optimization_contract(
+        config,
+        attention_backend_hint="flashmla",
+    )
+    assert conflicting.execution.attention_backend == "flash_attn"
+    assert not conflicting.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT
+    )
+
+
+def test_tp8_mtp_draft_prefers_sparse_prefill_fixes() -> None:
+    config = _flash_base_config(
+        max_num_seqs=64,
+        mtp_draft=True,
+        cache_dtype="fp8_ds_mla",
+    )
+    contract = resolve_optimization_contract(config)
+
+    assert contract.model.role is ModelRole.MTP_DRAFT
+    assert contract.profile == "deepseek_v4.tp8_flash_mtp_draft"
+    assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT)
+    assert contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM
+    )
+
+
+@pytest.mark.parametrize(
+    ("owner", "field", "value"),
+    [
+        ("parallel_config", "tensor_parallel_size", 4),
+        ("scheduler_config", "max_num_seqs", 1),
+        ("scheduler_config", "max_num_seqs", None),
+        ("cache_config", "cache_dtype", "auto"),
+        ("attention_config", "backend", "FLASH_ATTN"),
+        ("compilation_config", "mode", "VLLM_COMPILE"),
+        ("compilation_config", "cudagraph_mode", "PIECEWISE"),
+    ],
+)
+def test_tp8_mtp_sparse_prefill_fixes_fail_closed(
+    owner: str,
+    field: str,
+    value: object,
+) -> None:
+    config = _flash_base_config(
+        max_num_seqs=64,
+        mtp_draft=True,
+    )
+    setattr(getattr(config, owner), field, value)
+
+    contract = resolve_optimization_contract(config)
+
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT
+    )
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM
     )
 
 
@@ -309,7 +536,9 @@ def test_one_field_execution_mismatch_keeps_only_shared_mlp(
     if owner == "scheduler_config":
         assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     else:
-        assert not contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
+        assert not contract.prefers(
+            OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8
+        )
     assert not contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256
     )

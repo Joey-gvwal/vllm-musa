@@ -17,6 +17,12 @@ from vllm_musa.optimization_contract import (
     OptimizationFeature,
     resolve_optimization_contract,
 )
+from vllm_musa.optimization_contract.policy import (
+    DeepSeekV4MtpCarGraphStagingPlan,
+    deepseek_v4_mtp_car_graph_guard_enabled,
+    deepseek_v4_mtp_car_graph_staging_plan,
+    deepseek_v4_mtp_graph_registered_inputs_enabled,
+)
 
 logger = init_logger(__name__)
 _INT32_MAX = (1 << 31) - 1
@@ -25,9 +31,21 @@ _INT32_MAX = (1 << 31) - 1
 _MAX_GRAPH_RANK_DATA_BYTES = 8 * 1024 * 1024
 _MAX_RANKS = 8
 _MU_POINTER_ATTRIBUTE_RANGE_START_ADDR = 11
+_GRAPH_STAGING_ALIGNMENT = 256
 
 
 cudaError_t = ctypes.c_int
+
+
+def _max_cudagraph_capture_size(vllm_config: Any) -> int | None:
+    compilation_config = getattr(vllm_config, "compilation_config", None)
+    capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)
+    if not capture_sizes:
+        return None
+    try:
+        return max(int(size) for size in capture_sizes)
+    except (TypeError, ValueError):
+        return None
 
 
 def _use_graph_registered_inputs_for_current_model() -> bool:
@@ -50,10 +68,32 @@ def _use_graph_registered_inputs_for_current_model() -> bool:
     capture_sizes = getattr(compilation_config, "cudagraph_capture_sizes", None)
     if not capture_sizes:
         return False
-    try:
-        return max(int(size) for size in capture_sizes) <= 1
-    except (TypeError, ValueError):
+    max_capture_size = _max_cudagraph_capture_size(vllm_config)
+    if max_capture_size is None:
         return False
+    if deepseek_v4_mtp_graph_registered_inputs_enabled(vllm_config):
+        return 0 < max_capture_size <= 5
+    return max_capture_size <= 1
+
+
+def _graph_staging_plan_for_current_model() -> DeepSeekV4MtpCarGraphStagingPlan | None:
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        vllm_config = get_current_vllm_config_or_none()
+    except (ImportError, RuntimeError):
+        return None
+    return deepseek_v4_mtp_car_graph_staging_plan(vllm_config)
+
+
+def _dsv4_mtp_graph_guard_for_current_model() -> bool:
+    try:
+        from vllm.config import get_current_vllm_config_or_none
+
+        vllm_config = get_current_vllm_config_or_none()
+    except (ImportError, RuntimeError):
+        return False
+    return deepseek_v4_mtp_car_graph_guard_enabled(vllm_config)
 
 
 class cudaIpcMemHandle_t(ctypes.Structure):
@@ -419,6 +459,33 @@ class _MusaJitCustomAllreduceImpl:
         self._use_graph_registered_inputs = (
             _use_graph_registered_inputs_for_current_model()
         )
+        self._dsv4_mtp_graph_guard = _dsv4_mtp_graph_guard_for_current_model()
+        self._graph_staging_plan = _graph_staging_plan_for_current_model()
+        if self._graph_staging_plan is not None:
+            # Every eligible DSV4 MTP4 eager/graph CAR tensor is bounded by the
+            # contract below. Larger tensors already fail should_custom_* and
+            # use the standard collective, so allocating the global 512-MiB
+            # staging pair only wastes this memory-constrained model's budget.
+            self.max_size = min(
+                self.max_size,
+                self._graph_staging_plan.communicator_buffer_bytes,
+            )
+        self._use_graph_staging_arena = (
+            self._graph_staging_plan is not None
+            and not self._use_graph_registered_inputs
+        )
+        self._use_graph_collective_fallback = (
+            self._dsv4_mtp_graph_guard and self._graph_staging_plan is None
+        )
+        self._graph_staging_eager_reserve_bytes = (
+            self._graph_staging_plan.eager_reserve_bytes
+            if self._graph_staging_plan is not None
+            else self.max_size
+        )
+        self._graph_staging_data_start = self._graph_staging_eager_reserve_bytes
+        self._graph_staging_meta_start = self._graph_staging_eager_reserve_bytes
+        self._graph_staging_data_limit = self.max_size
+        self._graph_staging_meta_limit = self.max_size
         self._comm_id: int | None = None
         self.meta_ptrs: list[int] = []
         self.meta_opened_ipc_ptrs: list[int] = []
@@ -426,6 +493,7 @@ class _MusaJitCustomAllreduceImpl:
         self.buffer_opened_ipc_ptrs: list[int] = []
         self.buffer_rank_data: torch.Tensor | None = None
         self.graph_rank_data: torch.Tensor | None = None
+        self.meta_size = 0
         self._pending_graph_inputs: list[torch.Tensor] = []
         self._graph_input_refs: list[torch.Tensor] = []
         self._graph_local_handles: dict[int, bytes] = {}
@@ -433,6 +501,13 @@ class _MusaJitCustomAllreduceImpl:
         self._graph_opened_ptrs: list[int] = []
         self._next_graph_slot = 0
         self._graph_registered_input_enabled = self._use_graph_registered_inputs
+        self._graph_staging_data_offset = self._graph_staging_data_start
+        self._graph_staging_meta_offset = self._graph_staging_meta_start
+        self._graph_staging_ledger: list[
+            tuple[int, int, str, int, int, int, int, int]
+        ] = []
+        self._graph_staging_cpu_refs: list[torch.Tensor] = []
+        self._graph_staging_capture_sealed = False
 
         if isinstance(device, int):
             device = torch.device(f"musa:{device}")
@@ -451,9 +526,12 @@ class _MusaJitCustomAllreduceImpl:
                 self._SUPPORTED_WORLD_SIZES,
             )
             return
+        self._validate_graph_staging_plan_consensus()
 
         try:
             meta_bytes = jit_ar.meta_size(self.world_size)
+            self.meta_size = meta_bytes
+            self._configure_graph_staging_arena()
             meta_buffer = _make_shared_buffer(meta_bytes + self.max_size, group=group)
             self.meta_ptrs = meta_buffer.pointers
             self.meta_opened_ipc_ptrs = meta_buffer.opened_ipc_ptrs
@@ -503,14 +581,31 @@ class _MusaJitCustomAllreduceImpl:
                 dtype=torch.int64,
                 device=self.device,
             )
-            if self._graph_registered_input_enabled:
-                logger.info_once(
-                    "MUSA fused CAR-RMSNorm graph registered-input path is enabled "
-                    "(capacity=%d, max_input_bytes=%d). Eager execution and larger "
-                    "graph inputs use the staging path.",
-                    graph_slots,
-                    self._GRAPH_REGISTERED_INPUT_MAX_BYTES,
-                )
+            logger.info_once(
+                "MUSA fused CAR-RMSNorm graph registered-input path is enabled "
+                "(capacity=%d, max_input_bytes=%d). Eager execution and larger "
+                "graph inputs use the staging path.",
+                graph_slots,
+                self._GRAPH_REGISTERED_INPUT_MAX_BYTES,
+            )
+        elif self._use_graph_staging_arena:
+            logger.info_once(
+                "Using ordinal-partitioned MUSA JIT custom all-reduce staging arena "
+                "for DeepSeek-V4 MTP graphs (eager_reserve_bytes=%d, "
+                "data_capacity_bytes=%d, meta_capacity_bytes=%d, "
+                "communicator_buffer_bytes=%d, descriptors=%s).",
+                self._graph_staging_eager_reserve_bytes,
+                self._graph_staging_plan.graph_data_capacity_bytes,
+                self._graph_staging_plan.graph_meta_capacity_bytes,
+                self._graph_staging_plan.communicator_buffer_bytes,
+                tuple(sorted(self._graph_staging_plan.capture_descriptors)),
+            )
+        elif self._use_graph_collective_fallback:
+            logger.info_once(
+                "Using the standard collective fallback instead of MUSA JIT "
+                "custom all-reduce for DeepSeek-V4 MTP graph capture. Eager "
+                "execution retains the fixed-staging custom path."
+            )
         else:
             logger.info_once(
                 "Using fixed-staging MUSA JIT custom all-reduce for "
@@ -524,23 +619,385 @@ class _MusaJitCustomAllreduceImpl:
             self.max_size,
         )
 
+    def _configure_graph_staging_arena(self) -> None:
+        plan = self._graph_staging_plan
+        if plan is None:
+            return
+        data_start = plan.eager_reserve_bytes
+        meta_start = self._align_graph_staging_size(
+            self.meta_size + plan.eager_reserve_bytes
+        )
+        data_limit = data_start + plan.graph_data_capacity_bytes
+        meta_limit = meta_start + plan.graph_meta_capacity_bytes
+        invalid_reason = None
+        if self.meta_size > plan.max_meta_bytes_per_slot:
+            invalid_reason = (
+                f"meta_size={self.meta_size} exceeds "
+                f"max_meta_bytes_per_slot={plan.max_meta_bytes_per_slot}"
+            )
+        elif data_limit > self.max_size or meta_limit > self.max_size:
+            invalid_reason = (
+                f"data_limit={data_limit}, meta_limit={meta_limit}, "
+                f"capacity={self.max_size}"
+            )
+        if invalid_reason is not None:
+            logger.warning_once(
+                "Disabling the DSV4 MTP graph CAR staging arena: %s. Graph "
+                "capture will use the standard collective fallback.",
+                invalid_reason,
+            )
+            self._graph_staging_plan = None
+            self._use_graph_staging_arena = False
+            self._use_graph_collective_fallback = self._dsv4_mtp_graph_guard
+            self._graph_staging_eager_reserve_bytes = self.max_size
+            self._graph_staging_data_start = self.max_size
+            self._graph_staging_meta_start = self.max_size
+            self._graph_staging_data_limit = self.max_size
+            self._graph_staging_meta_limit = self.max_size
+            return
+        self._graph_staging_data_start = data_start
+        self._graph_staging_meta_start = meta_start
+        self._graph_staging_data_limit = data_limit
+        self._graph_staging_meta_limit = meta_limit
+
     @contextmanager
     def capture(self):
         if self._IS_CAPTURING:
             raise RuntimeError("Nested MUSA custom-allreduce capture is unsupported")
+        if getattr(self, "_use_graph_staging_arena", False) and getattr(
+            self, "_graph_staging_capture_sealed", False
+        ):
+            raise RuntimeError(
+                "MUSA custom AR graph staging arena cannot be reused while "
+                "previously captured graphs may still reference its slots"
+            )
         self._pending_graph_inputs = []
+        self._graph_staging_data_offset = getattr(self, "_graph_staging_data_start", 0)
+        self._graph_staging_meta_offset = getattr(self, "_graph_staging_meta_start", 0)
+        self._graph_staging_ledger = []
+        self._graph_staging_cpu_refs = []
         capture_succeeded = False
+        capture_error: BaseException | None = None
+        consensus_error: BaseException | None = None
         try:
             self._IS_CAPTURING = True
             yield
             capture_succeeded = True
+        except BaseException as exc:
+            capture_error = exc
         finally:
             try:
                 if capture_succeeded and self._pending_graph_inputs:
                     self._register_graph_buffers()
+                if getattr(self, "_use_graph_staging_arena", False):
+                    try:
+                        self._validate_graph_staging_capture(
+                            capture_succeeded,
+                            capture_error,
+                        )
+                        if capture_succeeded:
+                            self._graph_staging_capture_sealed = True
+                    except BaseException as exc:
+                        consensus_error = exc
             finally:
                 self._pending_graph_inputs = []
                 self._IS_CAPTURING = False
+        if consensus_error is not None:
+            if capture_error is not None:
+                raise consensus_error from capture_error
+            raise consensus_error
+        if capture_error is not None:
+            raise capture_error
+
+    @staticmethod
+    def _align_graph_staging_size(size: int) -> int:
+        alignment = _GRAPH_STAGING_ALIGNMENT
+        return (size + alignment - 1) // alignment * alignment
+
+    def _graph_staging_plan_fingerprint(self) -> tuple[object, ...]:
+        plan = self._graph_staging_plan
+        plan_fingerprint: tuple[object, ...] | None = None
+        if plan is not None:
+            plan_fingerprint = (
+                plan.eager_reserve_bytes,
+                tuple(sorted(plan.capture_descriptors)),
+                plan.car_ops_per_descriptor,
+                plan.bytes_per_token,
+                plan.graph_data_capacity_bytes,
+                plan.graph_meta_capacity_bytes,
+                plan.max_meta_bytes_per_slot,
+                plan.communicator_buffer_bytes,
+            )
+        return (
+            self._dsv4_mtp_graph_guard,
+            self._use_graph_registered_inputs,
+            self._use_graph_staging_arena,
+            self._use_graph_collective_fallback,
+            plan_fingerprint,
+        )
+
+    def _validate_graph_staging_plan_consensus(self) -> None:
+        if self.world_size <= 1:
+            return
+        local_fingerprint = self._graph_staging_plan_fingerprint()
+        ranks = dist.get_process_group_ranks(self.group)
+        fingerprints: list[tuple[object, ...] | None] = [None] * self.world_size
+        fingerprints[self.rank] = local_fingerprint
+        for group_rank, src in enumerate(ranks):
+            payload = [fingerprints[group_rank]]
+            dist.broadcast_object_list(payload, src=src, group=self.group, device="cpu")
+            fingerprints[group_rank] = payload[0]
+        if any(fingerprint != local_fingerprint for fingerprint in fingerprints):
+            raise RuntimeError(
+                "MUSA custom AR graph contract differs across ranks: "
+                f"rank={self.rank}, fingerprints={fingerprints}"
+            )
+
+    def _graph_staging_capture_active(self) -> bool:
+        return (
+            getattr(self, "_use_graph_staging_arena", False)
+            and getattr(self, "_IS_CAPTURING", False)
+            and self._graph_staging_descriptor_enabled()
+            and self._is_current_stream_capturing()
+        )
+
+    def _graph_staging_descriptor_enabled(self) -> bool:
+        if not (
+            getattr(self, "_use_graph_staging_arena", False)
+            and getattr(self, "_IS_CAPTURING", False)
+        ):
+            return True
+        descriptor = self._current_graph_staging_descriptor()
+        plan = getattr(self, "_graph_staging_plan", None)
+        return plan is not None and plan.allows_descriptor(descriptor)
+
+    def _graph_capture_requires_standard_collective(self) -> bool:
+        if not getattr(self, "_IS_CAPTURING", False):
+            return False
+        if getattr(self, "_use_graph_collective_fallback", False):
+            return True
+        return (
+            getattr(self, "_use_graph_staging_arena", False)
+            and not self._graph_staging_descriptor_enabled()
+        )
+
+    def _require_custom_ar_graph_path(self) -> None:
+        if self._graph_capture_requires_standard_collective():
+            raise RuntimeError(
+                "MUSA JIT custom all-reduce was invoked for a graph descriptor "
+                "whose contract requires the standard collective"
+            )
+
+    @staticmethod
+    def _current_graph_staging_descriptor() -> Any | None:
+        try:
+            from vllm.forward_context import (
+                get_forward_context,
+                is_forward_context_available,
+            )
+
+            if not is_forward_context_available():
+                return None
+            descriptor = get_forward_context().batch_descriptor
+        except (ImportError, LookupError, RuntimeError):
+            return None
+        return descriptor
+
+    def _graph_staging_launch_args(
+        self,
+        tensor: torch.Tensor,
+        op_kind: str,
+    ) -> tuple[torch.Tensor, torch.Tensor, int, int, int]:
+        assert self.buffer_rank_data is not None
+        assert self.signal_ptrs_cpu is not None
+        if not self._graph_staging_capture_active():
+            return (
+                self.buffer_rank_data,
+                self.signal_ptrs_cpu,
+                self.meta_ptrs[self.rank],
+                self.buffer_ptrs[self.rank],
+                self._graph_staging_eager_reserve_bytes
+                if getattr(self, "_use_graph_staging_arena", False)
+                else self.max_size,
+            )
+
+        descriptor = self._current_graph_staging_descriptor()
+        if descriptor is None:
+            raise RuntimeError(
+                "MUSA custom AR graph staging capture is missing BatchDescriptor"
+            )
+        descriptor_key = (int(descriptor.num_tokens), int(descriptor.num_reqs))
+        input_bytes = tensor.numel() * tensor.element_size()
+        data_size = self._align_graph_staging_size(input_bytes)
+        meta_size = self._align_graph_staging_size(self.meta_size + input_bytes)
+        data_offset = self._graph_staging_data_offset
+        meta_offset = self._graph_staging_meta_offset
+        data_end = data_offset + data_size
+        meta_end = meta_offset + meta_size
+        if (
+            data_end > self._graph_staging_data_limit
+            or meta_end > self._graph_staging_meta_limit
+        ):
+            raise RuntimeError(
+                "MUSA custom AR graph staging arena is exhausted: "
+                f"op={op_kind}, descriptor={descriptor_key}, "
+                f"input_bytes={input_bytes}, data_end={data_end}, "
+                f"meta_end={meta_end}, "
+                f"data_limit={self._graph_staging_data_limit}, "
+                f"meta_limit={self._graph_staging_meta_limit}, "
+                f"captured_ops={len(self._graph_staging_ledger)}"
+            )
+        rank_data = self.buffer_rank_data + data_offset
+        signal_ptrs = self.signal_ptrs_cpu + meta_offset
+        self._graph_staging_cpu_refs.extend((rank_data, signal_ptrs))
+        self._graph_staging_data_offset = data_end
+        self._graph_staging_meta_offset = meta_end
+        self._graph_staging_ledger.append(
+            (
+                descriptor_key[0],
+                descriptor_key[1],
+                op_kind,
+                input_bytes,
+                data_offset,
+                data_size,
+                meta_offset,
+                meta_size,
+            )
+        )
+        return (
+            rank_data,
+            signal_ptrs,
+            self.meta_ptrs[self.rank] + meta_offset,
+            self.buffer_ptrs[self.rank] + data_offset,
+            data_size,
+        )
+
+    def _graph_staging_manifest_error(self) -> str | None:
+        plan = self._graph_staging_plan
+        if plan is None:
+            return "graph staging plan is unavailable"
+        grouped: dict[tuple[int, int], list[tuple[Any, ...]]] = {}
+        for entry in self._graph_staging_ledger:
+            grouped.setdefault((entry[0], entry[1]), []).append(entry)
+        for descriptor, entries in grouped.items():
+            if descriptor not in plan.capture_descriptors:
+                return f"unsupported captured descriptor={descriptor}"
+            num_tokens, _ = descriptor
+            expected_input_bytes = num_tokens * plan.bytes_per_token
+            if len(entries) != plan.car_ops_per_descriptor:
+                return (
+                    f"descriptor={descriptor} captured_ops={len(entries)} "
+                    f"expected_ops={plan.car_ops_per_descriptor}"
+                )
+            if any(entry[3] != expected_input_bytes for entry in entries):
+                return (
+                    f"descriptor={descriptor} has unexpected input byte sizes: "
+                    f"{sorted({entry[3] for entry in entries})}, "
+                    f"expected={expected_input_bytes}"
+                )
+            expected_data_bytes = self._align_graph_staging_size(
+                plan.expected_descriptor_data_bytes(num_tokens)
+            )
+            actual_data_bytes = sum(entry[5] for entry in entries)
+            if actual_data_bytes != expected_data_bytes:
+                return (
+                    f"descriptor={descriptor} data_bytes={actual_data_bytes} "
+                    f"expected={expected_data_bytes}"
+                )
+            expected_meta_bytes = plan.car_ops_per_descriptor * (
+                self._align_graph_staging_size(self.meta_size + expected_input_bytes)
+            )
+            actual_meta_bytes = sum(entry[7] for entry in entries)
+            if actual_meta_bytes != expected_meta_bytes:
+                return (
+                    f"descriptor={descriptor} meta_bytes={actual_meta_bytes} "
+                    f"expected={expected_meta_bytes}"
+                )
+        expected_data_total = sum(
+            self._align_graph_staging_size(
+                plan.expected_descriptor_data_bytes(num_tokens)
+            )
+            for num_tokens, _ in grouped
+        )
+        expected_meta_total = sum(
+            self._align_graph_staging_size(
+                self.meta_size + num_tokens * plan.bytes_per_token
+            )
+            * plan.car_ops_per_descriptor
+            for num_tokens, _ in grouped
+        )
+        if (
+            self._graph_staging_data_offset - self._graph_staging_data_start
+            != expected_data_total
+            or self._graph_staging_meta_offset - self._graph_staging_meta_start
+            != expected_meta_total
+        ):
+            return (
+                "graph staging arena totals differ from descriptor manifest: "
+                f"data={self._graph_staging_data_offset - self._graph_staging_data_start}"
+                f"/{expected_data_total}, "
+                f"meta={self._graph_staging_meta_offset - self._graph_staging_meta_start}"
+                f"/{expected_meta_total}"
+            )
+        return None
+
+    def _validate_graph_staging_capture(
+        self,
+        capture_succeeded: bool,
+        capture_error: BaseException | None,
+    ) -> None:
+        manifest_error = (
+            self._graph_staging_manifest_error() if capture_succeeded else None
+        )
+        local_payload: dict[str, Any] = {
+            "success": capture_succeeded and manifest_error is None,
+            "error": (
+                manifest_error
+                if manifest_error is not None
+                else (
+                    None
+                    if capture_error is None
+                    else f"{type(capture_error).__name__}: {capture_error}"
+                )
+            ),
+            "ledger": self._graph_staging_ledger,
+        }
+        gathered: list[dict[str, Any] | None] = [None] * self.world_size
+        gathered[self.rank] = local_payload
+        ranks = sorted(dist.get_process_group_ranks(group=self.group))
+        for group_rank, global_rank in enumerate(ranks):
+            payload = [gathered[group_rank]]
+            dist.broadcast_object_list(
+                payload,
+                src=global_rank,
+                group=self.group,
+                device="cpu",
+            )
+            gathered[group_rank] = payload[0]
+        failures = [
+            (rank, None if payload is None else payload["error"])
+            for rank, payload in enumerate(gathered)
+            if payload is None or not payload["success"]
+        ]
+        if failures:
+            raise RuntimeError(
+                "MUSA custom AR graph staging capture failed across ranks: "
+                f"{failures}"
+            )
+        ledgers = [payload["ledger"] for payload in gathered if payload is not None]
+        if any(ledger != self._graph_staging_ledger for ledger in ledgers):
+            raise RuntimeError(
+                "MUSA custom AR graph staging ledger differs across ranks: "
+                f"local_ops={len(self._graph_staging_ledger)}, "
+                f"gathered_ops={[len(ledger) for ledger in ledgers]}"
+            )
+        logger.info_once(
+            "Captured %d disjoint MUSA custom AR graph staging slots "
+            "(data_bytes=%d, meta_bytes=%d).",
+            len(self._graph_staging_ledger),
+            self._graph_staging_data_offset - self._graph_staging_data_start,
+            self._graph_staging_meta_offset - self._graph_staging_meta_start,
+        )
 
     def _graph_pointer_meta(self, tensor: torch.Tensor) -> tuple[bytes, int]:
         pointer = tensor.data_ptr()
@@ -641,7 +1098,8 @@ class _MusaJitCustomAllreduceImpl:
 
     def _use_registered_graph_input(self, tensor: torch.Tensor) -> bool:
         return (
-            self._graph_registered_input_eligible(tensor)
+            self._use_graph_registered_inputs
+            and self._graph_registered_input_eligible(tensor)
             and self._IS_CAPTURING
             and self._is_current_stream_capturing()
         )
@@ -649,10 +1107,28 @@ class _MusaJitCustomAllreduceImpl:
     def should_custom_ar(self, inp: torch.Tensor) -> bool:
         if self.disabled:
             return False
+        if (
+            self._IS_CAPTURING
+            and (self._use_graph_collective_fallback or self._use_graph_staging_arena)
+            and self._graph_capture_requires_standard_collective()
+        ):
+            return False
+        if (
+            self._IS_CAPTURING
+            and self._use_graph_registered_inputs
+            and not self._graph_registered_input_eligible(inp)
+        ):
+            return False
         if inp.dtype not in (torch.float16, torch.bfloat16, torch.float32):
             return False
         inp_size = inp.numel() * inp.element_size()
         if inp_size % 16 != 0 or inp_size > self.max_size:
+            return False
+        if (
+            getattr(self, "_use_graph_staging_arena", False)
+            and not getattr(self, "_IS_CAPTURING", False)
+            and inp_size > self._graph_staging_eager_reserve_bytes
+        ):
             return False
         return inp.is_contiguous()
 
@@ -663,6 +1139,12 @@ class _MusaJitCustomAllreduceImpl:
         output_dtype: torch.dtype | None = None,
     ) -> bool:
         if self.disabled or self.world_size not in (2, 4, 8) or inp.ndim != 2:
+            return False
+        if (
+            self._IS_CAPTURING
+            and (self._use_graph_collective_fallback or self._use_graph_staging_arena)
+            and self._graph_capture_requires_standard_collective()
+        ):
             return False
         if not self._is_communicator_tensor(inp):
             return False
@@ -686,6 +1168,11 @@ class _MusaJitCustomAllreduceImpl:
         output_numel = inp.numel() * self.world_size
         output_element_size = 4 if output_dtype == torch.float32 else inp.element_size()
         output_size = output_numel * output_element_size
+        if (
+            getattr(self, "_use_graph_staging_arena", False)
+            and output_size > self._graph_staging_eager_reserve_bytes
+        ):
+            return False
         return (
             inp_size <= self.max_size
             and inp_size % 16 == 0
@@ -709,6 +1196,12 @@ class _MusaJitCustomAllreduceImpl:
     ) -> str | None:
         if self.disabled:
             return "communicator is disabled"
+        if (
+            self._IS_CAPTURING
+            and (self._use_graph_collective_fallback or self._use_graph_staging_arena)
+            and self._graph_capture_requires_standard_collective()
+        ):
+            return "active graph capture requires the standard collective"
         if inp.device.type != "musa" or weight.device.type != "musa":
             return f"device mismatch: input={inp.device} weight={weight.device}"
         if inp.dim() != 2 or weight.dim() != 1:
@@ -733,6 +1226,15 @@ class _MusaJitCustomAllreduceImpl:
         inp_size = inp.numel() * inp.element_size()
         if inp_size % 16 != 0 or inp_size > self.max_size:
             return f"unsupported byte size: bytes={inp_size} max_size={self.max_size}"
+        if (
+            getattr(self, "_use_graph_staging_arena", False)
+            and not getattr(self, "_IS_CAPTURING", False)
+            and inp_size > self._graph_staging_eager_reserve_bytes
+        ):
+            return (
+                "input exceeds the eager partition of the graph staging arena: "
+                f"bytes={inp_size} reserve={self._graph_staging_eager_reserve_bytes}"
+            )
         return None
 
     def should_fused_allreduce_rmsnorm(
@@ -812,24 +1314,35 @@ class _MusaJitCustomAllreduceImpl:
     def _custom_all_reduce_impl(self, input: torch.Tensor) -> torch.Tensor:
         assert self.buffer_rank_data is not None
         assert self.signal_ptrs_cpu is not None
-        if (
-            self._use_graph_registered_inputs
-            and self._IS_CAPTURING
-            and self._is_current_stream_capturing()
-        ):
+        self._require_custom_ar_graph_path()
+        if self._IS_CAPTURING and self._use_registered_graph_input(input):
             return self._graph_custom_all_reduce_impl(input)
         out = torch.empty_like(input)
         shot = jit_ar.preferred_shot(
             self.world_size, input.numel() * input.element_size()
         )
+        if self._use_graph_staging_arena:
+            (
+                rank_data,
+                signal_ptrs,
+                self_meta_ptr,
+                self_buffer_ptr,
+                max_size,
+            ) = self._graph_staging_launch_args(input, "allreduce")
+        else:
+            rank_data = self.buffer_rank_data
+            signal_ptrs = self.signal_ptrs_cpu
+            self_meta_ptr = self.meta_ptrs[self.rank]
+            self_buffer_ptr = self.buffer_ptrs[self.rank]
+            max_size = self.max_size
         jit_ar.launch_unregistered(
-            self.buffer_rank_data,
-            self.signal_ptrs_cpu,
+            rank_data,
+            signal_ptrs,
             input,
             out,
-            self.meta_ptrs[self.rank],
-            self.buffer_ptrs[self.rank],
-            self.max_size,
+            self_meta_ptr,
+            self_buffer_ptr,
+            max_size,
             self.rank,
             self.world_size,
             shot,
@@ -838,6 +1351,7 @@ class _MusaJitCustomAllreduceImpl:
 
     def _graph_custom_all_reduce_impl(self, input: torch.Tensor) -> torch.Tensor:
         assert self.signal_ptrs_cpu is not None
+        self._require_custom_ar_graph_path()
         rank_data = self._graph_rank_data_for_input(input)
         out = torch.empty_like(input)
         jit_ar.launch_graph_registered(
@@ -921,17 +1435,33 @@ class _MusaJitCustomAllreduceImpl:
         self, input: torch.Tensor, weight: torch.Tensor, eps: float
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert self.buffer_rank_data is not None
+        self._require_custom_ar_graph_path()
         norm_out = torch.empty_like(input)
         reduced = torch.empty_like(input)
         shot = jit_ar.preferred_shot(
             self.world_size, input.numel() * input.element_size()
         )
         use_registered = self._use_registered_graph_input(input)
-        rank_data = (
-            self._graph_rank_data_for_input(input)
-            if use_registered
-            else self.buffer_rank_data
-        )
+        if use_registered:
+            rank_data = self._graph_rank_data_for_input(input)
+            signal_ptrs = self.signal_ptrs_cpu
+            self_meta_ptr = self.meta_ptrs[self.rank]
+            self_buffer_ptr = self.buffer_ptrs[self.rank]
+            max_size = self.max_size
+        elif self._use_graph_staging_arena:
+            (
+                rank_data,
+                signal_ptrs,
+                self_meta_ptr,
+                self_buffer_ptr,
+                max_size,
+            ) = self._graph_staging_launch_args(input, "fused_rmsnorm")
+        else:
+            rank_data = self.buffer_rank_data
+            signal_ptrs = self.signal_ptrs_cpu
+            self_meta_ptr = self.meta_ptrs[self.rank]
+            self_buffer_ptr = self.buffer_ptrs[self.rank]
+            max_size = self.max_size
         launcher = (
             jit_ar.launch_fused_allreduce_rmsnorm_registered
             if use_registered
@@ -939,14 +1469,14 @@ class _MusaJitCustomAllreduceImpl:
         )
         launcher(
             rank_data,
-            self.signal_ptrs_cpu,
+            signal_ptrs,
             input,
             weight,
             norm_out,
             reduced,
-            self.meta_ptrs[self.rank],
-            self.buffer_ptrs[self.rank],
-            self.max_size,
+            self_meta_ptr,
+            self_buffer_ptr,
+            max_size,
             self.rank,
             self.world_size,
             shot,
@@ -1010,6 +1540,7 @@ class _MusaJitCustomAllreduceImpl:
         self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         assert self.buffer_rank_data is not None
+        self._require_custom_ar_graph_path()
         norm_out = torch.empty_like(input)
         residual_out = torch.empty_like(input)
         reduced = torch.empty_like(input)
@@ -1017,11 +1548,26 @@ class _MusaJitCustomAllreduceImpl:
             self.world_size, input.numel() * input.element_size()
         )
         use_registered = self._use_registered_graph_input(input)
-        rank_data = (
-            self._graph_rank_data_for_input(input)
-            if use_registered
-            else self.buffer_rank_data
-        )
+        if use_registered:
+            rank_data = self._graph_rank_data_for_input(input)
+            signal_ptrs = self.signal_ptrs_cpu
+            self_meta_ptr = self.meta_ptrs[self.rank]
+            self_buffer_ptr = self.buffer_ptrs[self.rank]
+            max_size = self.max_size
+        elif self._use_graph_staging_arena:
+            (
+                rank_data,
+                signal_ptrs,
+                self_meta_ptr,
+                self_buffer_ptr,
+                max_size,
+            ) = self._graph_staging_launch_args(input, "fused_residual_rmsnorm")
+        else:
+            rank_data = self.buffer_rank_data
+            signal_ptrs = self.signal_ptrs_cpu
+            self_meta_ptr = self.meta_ptrs[self.rank]
+            self_buffer_ptr = self.buffer_ptrs[self.rank]
+            max_size = self.max_size
         launcher = (
             jit_ar.launch_fused_allreduce_residual_rmsnorm_registered
             if use_registered
@@ -1029,16 +1575,16 @@ class _MusaJitCustomAllreduceImpl:
         )
         launcher(
             rank_data,
-            self.signal_ptrs_cpu,
+            signal_ptrs,
             input,
             residual,
             weight,
             norm_out,
             residual_out,
             reduced,
-            self.meta_ptrs[self.rank],
-            self.buffer_ptrs[self.rank],
-            self.max_size,
+            self_meta_ptr,
+            self_buffer_ptr,
+            max_size,
             self.rank,
             self.world_size,
             shot,
@@ -1050,17 +1596,33 @@ class _MusaJitCustomAllreduceImpl:
         self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert self.buffer_rank_data is not None
+        self._require_custom_ar_graph_path()
         norm_out = torch.empty_like(input)
         residual_out = torch.empty_like(input)
         shot = jit_ar.preferred_shot(
             self.world_size, input.numel() * input.element_size()
         )
         use_registered = self._use_registered_graph_input(input)
-        rank_data = (
-            self._graph_rank_data_for_input(input)
-            if use_registered
-            else self.buffer_rank_data
-        )
+        if use_registered:
+            rank_data = self._graph_rank_data_for_input(input)
+            signal_ptrs = self.signal_ptrs_cpu
+            self_meta_ptr = self.meta_ptrs[self.rank]
+            self_buffer_ptr = self.buffer_ptrs[self.rank]
+            max_size = self.max_size
+        elif self._use_graph_staging_arena:
+            (
+                rank_data,
+                signal_ptrs,
+                self_meta_ptr,
+                self_buffer_ptr,
+                max_size,
+            ) = self._graph_staging_launch_args(input, "fused_residual_rmsnorm_no_raw")
+        else:
+            rank_data = self.buffer_rank_data
+            signal_ptrs = self.signal_ptrs_cpu
+            self_meta_ptr = self.meta_ptrs[self.rank]
+            self_buffer_ptr = self.buffer_ptrs[self.rank]
+            max_size = self.max_size
         launcher = (
             jit_ar.launch_fused_allreduce_residual_rmsnorm_no_raw_registered
             if use_registered
@@ -1068,15 +1630,15 @@ class _MusaJitCustomAllreduceImpl:
         )
         launcher(
             rank_data,
-            self.signal_ptrs_cpu,
+            signal_ptrs,
             input,
             residual,
             weight,
             norm_out,
             residual_out,
-            self.meta_ptrs[self.rank],
-            self.buffer_ptrs[self.rank],
-            self.max_size,
+            self_meta_ptr,
+            self_buffer_ptr,
+            max_size,
             self.rank,
             self.world_size,
             shot,
@@ -1119,6 +1681,9 @@ class _MusaJitCustomAllreduceImpl:
         self._graph_local_handles = {}
         self._graph_input_refs = []
         self._pending_graph_inputs = []
+        self._graph_staging_ledger = []
+        self._graph_staging_cpu_refs = []
+        self._graph_staging_capture_sealed = False
         self._next_graph_slot = 0
         self.disabled = True
 
@@ -1171,7 +1736,8 @@ class MusaJitCustomAllreduce:
 
         if self._jit_available:
             logger.info_once(
-                "Using MUSA JIT custom all-reduce for eager and CUDA graph paths."
+                "Using MUSA JIT custom all-reduce for eager and eligible CUDA "
+                "graph paths."
             )
 
     @property

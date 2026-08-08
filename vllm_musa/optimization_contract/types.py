@@ -15,6 +15,7 @@ class ModelFamily(str, Enum):
 class ModelRole(str, Enum):
     UNKNOWN = "unknown"
     TEXT = "text_generation"
+    MTP_DRAFT = "mtp_draft"
     COSYVOICE_TALKER = "cosyvoice_talker"
 
 
@@ -25,12 +26,23 @@ class OptimizationFeature(str, Enum):
         "deepseek_v4.materialized_prefill_indexer"
     )
     DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256 = "deepseek_v4.tp8_flashmla_sparse_page256"
+    DEEPSEEK_V4_TP8_MTP_SPARSE_DIRECT_OUT = "deepseek_v4.tp8_mtp_sparse_direct_out"
+    DEEPSEEK_V4_TP8_MTP_SPARSE_PREFILL_HEADROOM = (
+        "deepseek_v4.tp8_mtp_sparse_prefill_headroom"
+    )
+    DEEPSEEK_V4_TP8_MTP_ASYNC_PREFILL_QUEUE_FENCE = (
+        "deepseek_v4.tp8_mtp_async_prefill_queue_fence"
+    )
     DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256 = (
         "deepseek_v4.tp8_fused_add_rmsnorm_block256"
     )
     DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD = (
         "deepseek_v4.car_graph_input_capture_guard"
     )
+    DEEPSEEK_V4_MTP_CAR_GRAPH_REGISTERED_INPUTS = (
+        "deepseek_v4.mtp_car_graph_registered_inputs"
+    )
+    DEEPSEEK_V4_MTP_CAR_GRAPH_STAGING_ARENA = "deepseek_v4.mtp_car_graph_staging_arena"
     QWEN_V2_SAMPLING = "qwen.v2_sampling"
     QWEN_LEGACY_SAMPLING = "qwen.legacy_sampling"
     QWEN_FA3_SCHEDULER = "qwen.fa3_scheduler"
@@ -104,6 +116,8 @@ class ExecutionSignature:
     compilation_mode: str | None = None
     cudagraph_mode: str | None = None
     batch_invariant_enabled: bool = False
+    speculative_method: str | None = None
+    async_scheduling: bool = False
 
 
 @dataclass(frozen=True, slots=True)
