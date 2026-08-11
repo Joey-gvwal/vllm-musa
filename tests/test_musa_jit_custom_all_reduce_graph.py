@@ -470,6 +470,42 @@ def test_graph_staging_recapture_fails_closed_while_old_graphs_may_live() -> Non
             pass
 
 
+def test_profiling_graph_staging_capture_does_not_seal_arena(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
+    impl._IS_CAPTURING = False
+    impl._use_graph_staging_arena = True
+    impl._graph_staging_capture_sealed = False
+    impl._graph_staging_data_start = 1024
+    impl._graph_staging_meta_start = 2048
+    impl._pending_graph_inputs = []
+    monkeypatch.setattr(impl, "_validate_graph_staging_capture", lambda *_: None)
+    profiling = True
+    monkeypatch.setattr(
+        custom_ar,
+        "_is_cudagraph_memory_profile_capture",
+        lambda: profiling,
+    )
+
+    with impl.capture():
+        impl._graph_staging_ledger.append(
+            (320, 64, "allreduce", 1, 2, 3, 4, 5)
+        )
+
+    assert not impl._graph_staging_capture_sealed
+
+    # A later real capture may populate the arena and then seals it against
+    # unsafe reuse while the captured graph can still be alive.
+    profiling = False
+    with impl.capture():
+        impl._graph_staging_ledger.append(
+            (5, 1, "allreduce", 1, 2, 3, 4, 5)
+        )
+
+    assert impl._graph_staging_capture_sealed
+
+
 def _capture_consensus_impl() -> object:
     impl = object.__new__(custom_ar._MusaJitCustomAllreduceImpl)
     impl.rank = 0

@@ -99,6 +99,19 @@ def _dsv4_mtp_graph_guard_for_current_model() -> bool:
     return deepseek_v4_mtp_car_graph_guard_enabled(vllm_config)
 
 
+def _is_cudagraph_memory_profile_capture() -> bool:
+    """Return whether vLLM is capturing throwaway memory-profile graphs."""
+    try:
+        from vllm.compilation.counter import compilation_counter
+    except (ImportError, RuntimeError):
+        return False
+    # vLLM v0.26 profiles temporary graphs before capture_model() increments
+    # this counter.  Those graphs are explicitly cleared by
+    # profile_cudagraph_memory(), so their staging slots may be reused by the
+    # subsequent persistent capture.
+    return compilation_counter.num_gpu_runner_capture_triggers == 0
+
+
 class cudaIpcMemHandle_t(ctypes.Structure):
     _fields_ = [("internal", ctypes.c_byte * 128)]
 
@@ -707,7 +720,16 @@ class _MusaJitCustomAllreduceImpl:
                             capture_succeeded,
                             capture_error,
                         )
-                        if capture_succeeded:
+                        # vLLM v0.26 enters graph_capture() once for throwaway
+                        # graph-memory profiling and again for the persistent
+                        # model graphs.  The profiler clears its graphs before
+                        # capture_model(), so only the persistent capture must
+                        # seal the arena against unsafe reuse.
+                        if (
+                            capture_succeeded
+                            and self._graph_staging_ledger
+                            and not _is_cudagraph_memory_profile_capture()
+                        ):
                             self._graph_staging_capture_sealed = True
                     except BaseException as exc:
                         consensus_error = exc
