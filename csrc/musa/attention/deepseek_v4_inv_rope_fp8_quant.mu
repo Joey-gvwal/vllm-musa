@@ -159,6 +159,62 @@ __global__ void deepseek_v4_inv_rope_fp8_quant_kernel(
   }
 }
 
+// The FP32-scale path has no cross-chunk packing dependency. Give each
+// 128-element quantization chunk its own block so the four chunks in a
+// DeepSeek-V4 head can execute concurrently. Only real tokens are launched;
+// token 0 also clears the at-most-three scale-padding slots required by the
+// downstream aligned layout.
+__global__ void deepseek_v4_inv_rope_fp8_quant_chunk_kernel(
+    const __mt_bfloat16* __restrict__ o, int64_t o_stride_token,
+    int64_t o_stride_head, const void* __restrict__ positions,
+    int position_kind, const float* __restrict__ cos_sin_cache,
+    int64_t cache_stride_pos, uint8_t* __restrict__ fp8_out,
+    int64_t fp8_stride_group, int64_t fp8_stride_token,
+    float* __restrict__ scale, int64_t scale_stride_group,
+    int64_t scale_stride_token, int64_t scale_stride_k, int64_t num_tokens,
+    int64_t aligned_tokens, int64_t heads_per_group) {
+  const int64_t token = static_cast<int64_t>(blockIdx.x);
+  const int64_t global_head = static_cast<int64_t>(blockIdx.y);
+  const int64_t chunk = static_cast<int64_t>(blockIdx.z);
+  const int tid = threadIdx.x;
+
+  const int64_t group = global_head / heads_per_group;
+  const int64_t head_in_group = global_head - group * heads_per_group;
+  const int64_t out_chunk = head_in_group * kChunksPerHead + chunk;
+  const int64_t dim = chunk * kQuantGroupSize + tid;
+
+  const int64_t pos = load_index(positions, position_kind, token);
+  const float* cos_ptr = cos_sin_cache + pos * cache_stride_pos;
+  const float* sin_ptr = cos_ptr + kRopeDim / 2;
+  const __mt_bfloat16* input =
+      o + token * o_stride_token + global_head * o_stride_head;
+  uint8_t* output = fp8_out + group * fp8_stride_group +
+                    token * fp8_stride_token + head_in_group * kHeadDim;
+
+  const float value = load_rotated_or_raw(input, dim, cos_ptr, sin_ptr);
+  __shared__ float reduce[kThreads];
+  const float absmax = reduce_max_128(reduce, tid, fabsf(value));
+  const float scale_raw = fmaxf(absmax / kFp8Max, kScaleEps);
+  const float scale_pow2 = exp2f(ceilf(log2f(scale_raw)));
+
+  if (tid == 0) {
+    scale[group * scale_stride_group + token * scale_stride_token +
+          out_chunk * scale_stride_k] = scale_pow2;
+  }
+
+  float q = value / scale_pow2;
+  q = fminf(fmaxf(q, kFp8Min), kFp8Max);
+  const __mt_fp8_e4m3 packed(q);
+  output[dim] = packed.__x;
+
+  const int64_t padding = aligned_tokens - num_tokens;
+  if (token == 0 && tid < padding) {
+    scale[group * scale_stride_group +
+          (num_tokens + tid) * scale_stride_token +
+          out_chunk * scale_stride_k] = 0.0f;
+  }
+}
+
 int index_kind(const torch::Tensor& tensor, const char* name) {
   if (tensor.scalar_type() == torch::kInt32) {
     return kIndexInt32;
@@ -236,10 +292,14 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
   } else {
     scale_storage = torch::empty({n_groups * num_scale_blocks * aligned_tokens},
                                  o.options().dtype(torch::kFloat32));
+    // Keep each group-local [token, block] scale matrix contiguous.  The
+    // downstream DeepSeek-V4 o-proj consumes one group at a time, so this
+    // layout preserves the public [token, group, block] view while avoiding a
+    // device copy for every layer and decode step.
     scale_buf =
         scale_storage.as_strided({n_groups, num_tokens, num_scale_blocks},
-                                 {num_scale_blocks * aligned_tokens, 1,
-                                  aligned_tokens});
+                                 {num_scale_blocks * aligned_tokens,
+                                  num_scale_blocks, 1});
   }
 
   if (num_tokens == 0 || num_heads == 0) {
@@ -263,15 +323,18 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
             scale_buf.stride(0), scale_buf.stride(2), num_tokens,
             heads_per_group);
   } else {
-    deepseek_v4_inv_rope_fp8_quant_kernel<false>
-        <<<grid, block, 0, stream>>>(
-            static_cast<const __mt_bfloat16*>(o.data_ptr()), o.stride(0),
-            o.stride(1), positions.data_ptr(), index_kind(positions, "positions"),
-            static_cast<const float*>(cos_sin_cache.data_ptr()),
-            cos_sin_cache.stride(0), static_cast<uint8_t*>(fp8_buf.data_ptr()),
-            fp8_buf.stride(0), fp8_buf.stride(1), scale_buf.data_ptr(),
-            scale_buf.stride(0), scale_buf.stride(2), num_tokens,
-            heads_per_group);
+    const dim3 chunk_grid(static_cast<unsigned int>(num_tokens),
+                          static_cast<unsigned int>(num_heads),
+                          static_cast<unsigned int>(kChunksPerHead));
+    deepseek_v4_inv_rope_fp8_quant_chunk_kernel<<<chunk_grid, block, 0, stream>>>(
+        static_cast<const __mt_bfloat16*>(o.data_ptr()), o.stride(0),
+        o.stride(1), positions.data_ptr(), index_kind(positions, "positions"),
+        static_cast<const float*>(cos_sin_cache.data_ptr()),
+        cos_sin_cache.stride(0), static_cast<uint8_t*>(fp8_buf.data_ptr()),
+        fp8_buf.stride(0), fp8_buf.stride(1),
+        static_cast<float*>(scale_buf.data_ptr()), scale_buf.stride(0),
+        scale_buf.stride(1), scale_buf.stride(2), num_tokens, aligned_tokens,
+        heads_per_group);
   }
 
   const auto err = musaGetLastError();

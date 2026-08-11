@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 10 Aug 2026 16:35:00 +0800
+Subject: [PATCH] MUSA: restore DeepSeek-V4 shared SwiGLU model hook on v0.26
+
+---
+ vllm/models/deepseek_v4/nvidia/model.py | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index 4fab221d..8b34fdfa 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -135,6 +135,13 @@ class DeepseekV4MLP(nn.Module):
+ 
+     def forward(self, x):
+         gate_up, _ = self.gate_up_proj(x)
++        if isinstance(self.act_fn, SiluAndMulWithClamp):
++            fused_forward = getattr(self.down_proj, "forward_swiglu_clamp", None)
++            if fused_forward is not None:
++                fused_output = fused_forward(gate_up, self.act_fn.swiglu_limit)
++                if fused_output is not None:
++                    return fused_output
++
+         x = self.act_fn(gate_up)
+         x, _ = self.down_proj(x)
+         return x

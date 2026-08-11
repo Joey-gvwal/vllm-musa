@@ -616,6 +616,77 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
            IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
 }
 
+bool SelectDeepSeekV4Fp8OProjTile(
+    int current_arch,
+    bool is_fp8,
+    bool use_swigelu,
+    bool use_rms_norm,
+    bool use_int4_w4a16,
+    int reduce_size,
+    int hidden_size,
+    int nr_n,
+    int scale_k_group_tile,
+    int vlen,
+    int bseqlen,
+    BlockConfig* config) {
+    if (current_arch < 300 || !is_fp8 || use_swigelu || use_rms_norm ||
+        use_int4_w4a16 || reduce_size != 1024 || hidden_size != 4096 ||
+        nr_n != 1024 || scale_k_group_tile != 128) {
+        return false;
+    }
+
+    // DeepSeek-V4 TP8 O-proj is [M,4096] x [1024,4096]^T.  The platform's
+    // VLLM_MUSA_GEMV_MOE_BLOCK=16x8 default belongs to routed MoE, but the
+    // non-MoE GEMV historically consumed it too.  Cold-L2 calibration on an
+    // S5000 mp60 shows that the production graph-capture ladder needs more N
+    // tiles at small M and different K reductions as M grows.  Match only the
+    // exact O-proj contract; unsupported/eager sizes retain the generic path.
+    switch (bseqlen) {
+        case 1:
+        case 2:
+        case 8:
+            *config = BlockConfig{4, 32, 0.f, true};
+            break;
+        case 4:
+        case 32:
+        case 64:
+            *config = BlockConfig{8, 16, 0.f, true};
+            break;
+        case 16:
+            *config = BlockConfig{32, 4, 0.f, true};
+            break;
+        default:
+            return false;
+    }
+    return IsForcedBlockConfigValid(*config, nr_n, hidden_size, vlen);
+}
+
+bool SelectDeepSeekV4Fp8SharedGateUpTile(
+    int current_arch,
+    bool is_fp8,
+    bool use_swigelu,
+    bool use_rms_norm,
+    bool use_int4_w4a16,
+    int reduce_size,
+    int hidden_size,
+    int nr_n,
+    int scale_k_group_tile,
+    int vlen,
+    int bseqlen,
+    BlockConfig* config) {
+    if (current_arch < 300 || !is_fp8 || use_swigelu || use_rms_norm ||
+        use_int4_w4a16 || reduce_size != 512 || hidden_size != 4096 ||
+        nr_n != 512 || scale_k_group_tile != 128 || bseqlen != 1) {
+        return false;
+    }
+
+    // Python dispatch already limits this exact contract to the DeepSeek-V4
+    // TP8 shared-expert gate-up layer.  Select the cold-L2 winner here before
+    // the routed-MoE 16x8 environment default can leak into the dense GEMV.
+    *config = BlockConfig{4, 32, 0.f, true};
+    return IsForcedBlockConfigValid(*config, nr_n, hidden_size, vlen);
+}
+
 void musa_fused_gemv(
     torch::Tensor &A,
     torch::Tensor &B,
@@ -730,18 +801,48 @@ void musa_fused_gemv(
         fallback_config = BlockConfig{128, 1, -1.0f, false};
     }
     BlockConfig forced_config{0, 0, 0.f, false};
+    BlockConfig deepseek_v4_linear_config{0, 0, 0.f, false};
     BlockConfig* best_config = &fallback_config;
-    if (ParseForcedBlockConfig(&forced_config)) {
-        TORCH_CHECK(
-            IsForcedBlockConfigValid(forced_config, nr_n, hidden_size, vlen),
-            kGemvMoeBlockEnv, "=", forced_config.block_n, "x",
-            forced_config.block_k, " is invalid for nr_n=", nr_n,
-            ", hidden_size=", hidden_size, ", vlen=", vlen);
-        best_config = &forced_config;
+    if (SelectDeepSeekV4Fp8OProjTile(
+            current_arch,
+            is_fp8,
+            use_swigelu,
+            use_rms_norm,
+            use_int4_w4a16,
+            reduce_size,
+            hidden_size,
+            nr_n,
+            scale_k_group_tile,
+            vlen,
+            bseqlen,
+            &deepseek_v4_linear_config) ||
+        SelectDeepSeekV4Fp8SharedGateUpTile(
+            current_arch,
+            is_fp8,
+            use_swigelu,
+            use_rms_norm,
+            use_int4_w4a16,
+            reduce_size,
+            hidden_size,
+            nr_n,
+            scale_k_group_tile,
+            vlen,
+            bseqlen,
+            &deepseek_v4_linear_config)) {
+        best_config = &deepseek_v4_linear_config;
     } else {
-        for (auto& config : configs) {
-            if (config.valid && config.score > best_config->score) {
-                best_config = &config;
+        if (ParseForcedBlockConfig(&forced_config)) {
+            TORCH_CHECK(
+                IsForcedBlockConfigValid(forced_config, nr_n, hidden_size, vlen),
+                kGemvMoeBlockEnv, "=", forced_config.block_n, "x",
+                forced_config.block_k, " is invalid for nr_n=", nr_n,
+                ", hidden_size=", hidden_size, ", vlen=", vlen);
+            best_config = &forced_config;
+        } else {
+            for (auto& config : configs) {
+                if (config.valid && config.score > best_config->score) {
+                    best_config = &config;
+                }
             }
         }
     }

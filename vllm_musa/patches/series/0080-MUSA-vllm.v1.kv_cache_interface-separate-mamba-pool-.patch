@@ -19,7 +19,7 @@ index 7a44d4e..89a3743 100644
  
  
  @dataclass
-@@ -968,6 +969,11 @@ class KVCacheConfig:
+@@ -968,6 +969,12 @@ class KVCacheConfig:
      see `_get_kv_cache_config_uniform_page_size` for more details.
      """
  

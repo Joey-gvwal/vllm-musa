@@ -53,9 +53,15 @@ def _should_use_musa_fp8_small_m_gemv(
     weight_scale: torch.Tensor,
     group_size: int,
     use_deep_gemm_e8m0: bool,
+    use_deepseek_v4_shared_gate_up_gemv: bool = False,
 ) -> bool:
+    use_calibrated_deepseek_v4_shape = (
+        use_deepseek_v4_shared_gate_up_gemv
+        and input.shape == (1, 4096)
+        and weight.shape == (512, 4096)
+    )
     if (
-        not _MUSA_FP8_SMALL_M_GEMV_ENABLED
+        not (_MUSA_FP8_SMALL_M_GEMV_ENABLED or use_calibrated_deepseek_v4_shape)
         or not current_platform.is_musa()
         or use_deep_gemm_e8m0
         or group_size != 128
@@ -87,6 +93,7 @@ class MUSADeepGemmFp8BlockScaledMMKernel(Fp8BlockScaledMMLinearKernel):
 
     def __init__(self, config: FP8ScaledMMLinearLayerConfig):
         super().__init__(config)
+        self.use_deepseek_v4_shared_gate_up_gemv = False
         self.use_deep_gemm_e8m0 = False
         act_scale_descriptor = config.activation_quant_key.scale
         self.is_deep_gemm_supported = is_deep_gemm_supported()
@@ -104,6 +111,16 @@ class MUSADeepGemmFp8BlockScaledMMKernel(Fp8BlockScaledMMLinearKernel):
         super().process_weights_after_loading(layer)
         params = self._get_layer_params(layer)
         assert layer.weight_block_size is not None
+
+        # Shape alone cannot distinguish the DeepSeek-V4 shared-expert gate-up
+        # from unrelated dense projections.  Cache the layer identity while
+        # the module prefix is still available and route only the TP8 shared
+        # expert instance through the calibrated BF16-input/FP8-weight GEMV.
+        self.use_deepseek_v4_shared_gate_up_gemv = (
+            getattr(layer, "tp_size", None) == 8
+            and ".shared_experts.gate_up_proj" in getattr(layer, "prefix", "")
+            and tuple(params.weight.shape) == (512, 4096)
+        )
 
         if self.is_deep_gemm_supported:
             weight_scale_invs = params.weight_scale_inv
@@ -161,7 +178,15 @@ class MUSADeepGemmFp8BlockScaledMMKernel(Fp8BlockScaledMMLinearKernel):
         group_size = self.weight_group_shape.col
 
         return run_deepgemm(
-            A, B, Bs, group_size, self.use_deep_gemm_e8m0, output=kwargs.get("output")
+            A,
+            B,
+            Bs,
+            group_size,
+            self.use_deep_gemm_e8m0,
+            output=kwargs.get("output"),
+            use_deepseek_v4_shared_gate_up_gemv=(
+                self.use_deepseek_v4_shared_gate_up_gemv
+            ),
         )
 
 
@@ -172,9 +197,15 @@ def run_deepgemm(
     group_size: int,
     use_deep_gemm_e8m0: bool,
     output: torch.Tensor | None = None,
+    use_deepseek_v4_shared_gate_up_gemv: bool = False,
 ) -> torch.Tensor:
     if _should_use_musa_fp8_small_m_gemv(
-        input, weight, weight_scale, group_size, use_deep_gemm_e8m0
+        input,
+        weight,
+        weight_scale,
+        group_size,
+        use_deep_gemm_e8m0,
+        use_deepseek_v4_shared_gate_up_gemv,
     ):
         return torch.ops.vllm.musa_fp8_small_m_gemv_op(
             input,

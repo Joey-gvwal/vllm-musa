@@ -15,9 +15,12 @@ is pre-patched.
   sequence and patches removed from the commit stack cannot leave stale files.
   Author headers are normalized to the synthetic `musa <musa@local>` identity.
 
-Currently **108 patches**. This branch carries the v0.26.0 MUSA source edits
+Currently **111 patches**. This branch carries the v0.26.0 MUSA source edits
 plus the Qwen3.6 patches for common GDN decode metadata reuse, uniform-decode
-SSM slot-mapping removal, and BF16 W1 tile specialization. The series contains
+SSM slot-mapping removal, and BF16 W1 tile specialization, plus the v0.26-native
+DeepSeek-V4 MTP sparse-prefill headroom and mixed-prefill queue-fence patches,
+and restores the shared-SwiGLU model hook omitted from the v0.26 port of #156.
+The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.26.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept

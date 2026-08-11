@@ -115,13 +115,13 @@ def test_row_parallel_dispatch_is_narrow_and_preserves_tp_semantics() -> None:
 
 
 def test_deepseek_model_patch_uses_optional_hook_before_activation() -> None:
-    patch = (
-        ROOT
-        / "vllm_musa"
-        / "patches"
-        / "series"
-        / "0094-MUSA-DeepSeek-V4-fuse-clamp-SwiGLU-FP8-down-proj.patch"
-    ).read_text()
+    series = ROOT / "vllm_musa" / "patches" / "series"
+    hook = 'getattr(self.down_proj, "forward_swiglu_clamp", None)'
+    candidates = [
+        path for path in series.glob("*.patch") if hook in path.read_text()
+    ]
+    assert len(candidates) == 1
+    patch = candidates[0].read_text()
 
     assert "isinstance(self.act_fn, SiluAndMulWithClamp)" in patch
     hook_pos = patch.index('getattr(self.down_proj, "forward_swiglu_clamp", None)')
