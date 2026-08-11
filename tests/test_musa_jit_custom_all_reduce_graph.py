@@ -359,8 +359,8 @@ def test_graph_staging_meta_partition_starts_after_eager_signal_region() -> None
         (5, 1, True),
         (80, 16, True),
         (80, None, False),
-        (160, 32, False),
-        (320, 64, False),
+        (160, 32, True),
+        (320, 64, True),
     ],
 )
 def test_graph_staging_gate_uses_forward_context_descriptor(

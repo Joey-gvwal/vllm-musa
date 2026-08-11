@@ -104,10 +104,18 @@ def test_multibatch_target_enables_mtp_policies() -> None:
     plan = deepseek_v4_mtp_car_graph_staging_plan(config)
     assert plan is not None
     assert plan.capture_descriptors == frozenset(
-        {(5, 1), (10, 2), (20, 4), (40, 8), (80, 16)}
+        {
+            (5, 1),
+            (10, 2),
+            (20, 4),
+            (40, 8),
+            (80, 16),
+            (160, 32),
+            (320, 64),
+        }
     )
     assert plan.car_ops_per_descriptor == 87
-    assert plan.communicator_buffer_bytes <= 512 * 1024 * 1024
+    assert plan.communicator_buffer_bytes == 512 * 1024 * 1024
 
 
 def test_bs1_uses_registered_inputs_but_not_prefill_fast_paths() -> None:
