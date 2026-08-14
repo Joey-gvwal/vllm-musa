@@ -601,7 +601,7 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
     int vlen,
     int bseqlen) {
     if (!is_fp8 || use_int4_w4a16 || num_experts != 256 ||
-        scale_k_group_tile != 128 || bseqlen != 1) {
+        scale_k_group_tile != 128) {
         return false;
     }
 
@@ -609,11 +609,24 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
                     reduce_size == 512 && nr_n == 256;
     const bool w2 = !use_swigelu && topk == 1 && hidden_size == 256 &&
                     reduce_size == 4096 && nr_n == 4096;
-    const BlockConfig config =
-        w1 ? BlockConfig{4, 32, 0.f, true}
-           : BlockConfig{32, 4, 0.f, true};
-    return (w1 || w2) &&
-           IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
+    if (!w1 && !w2) {
+        return false;
+    }
+
+    BlockConfig config{0, 0, 0.f, false};
+    if (bseqlen == 1) {
+        config = w1 ? BlockConfig{4, 32, 0.f, true}
+                    : BlockConfig{32, 4, 0.f, true};
+    } else if ((w1 && bseqlen == 8) || (w2 && bseqlen == 48)) {
+        // DSpark-7 verifies eight target tokens per request. Its W1 input is
+        // M=8 and routed W2 input is M*topk=48. S5000 microbenchmarks show
+        // 32x4 wins for both shapes; keep every other M on its calibrated
+        // generic path.
+        config = BlockConfig{32, 4, 0.f, true};
+    } else {
+        return false;
+    }
+    return IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
 }
 
 bool SelectDeepSeekV4Fp8OProjTile(
@@ -1001,8 +1014,9 @@ void musa_fused_gemv_moe(
     BlockConfig qwen_fp8_moe_config{32, 4, 0.f, true};
     BlockConfig deepseek_fp8_w1_config{32, 4, 0.f, true};
     BlockConfig deepseek_v4_fp8_moe_config =
-        use_swigelu ? BlockConfig{4, 32, 0.f, true}
-                    : BlockConfig{32, 4, 0.f, true};
+        use_swigelu && bseqlen == 1
+            ? BlockConfig{4, 32, 0.f, true}
+            : BlockConfig{32, 4, 0.f, true};
     BlockConfig* best_config = &fallback_config;
     if (ShouldUseDeepSeekV4Fp8MoeSplitTile(
             is_fp8,

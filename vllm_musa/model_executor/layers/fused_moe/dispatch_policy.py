@@ -65,6 +65,7 @@ _DEFAULT_THRESHOLDS: Final = MusaFusedMoeThresholds(
 
 def _s5000_fp8_shape(
     *,
+    multiprocessor_count: int = 60,
     local_experts: int,
     w1_output_size: int,
     w2_input_size: int,
@@ -77,7 +78,7 @@ def _s5000_fp8_shape(
 ) -> MusaFusedMoeShape:
     return MusaFusedMoeShape(
         device_capability=(3, 1),
-        multiprocessor_count=60,
+        multiprocessor_count=multiprocessor_count,
         local_experts=local_experts,
         w1_output_size=w1_output_size,
         w2_input_size=w2_input_size,
@@ -168,6 +169,35 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_max_tokens=5,
             grouped_gemm_min_tokens=None,
             source=f"s5000-mp60-20260721-e256-n512-k4096-{graph_mode}-block16-dense-v5",
+        )
+        for graph_mode in ("eager", "capture")
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _s5000_fp8_shape(
+            multiprocessor_count=56,
+            local_experts=256,
+            w1_output_size=512,
+            w2_input_size=256,
+            hidden_size=4096,
+            top_k=6,
+            w1_scale_shape=(256, 4, 32),
+            w2_scale_shape=(256, 32, 2),
+            gemv_block="16x8",
+            graph_mode=graph_mode,
+        ): _thresholds(
+            # DSpark-7 verifies eight target tokens in one graph replay. Graph
+            # preparation can resolve this dispatcher before stream capture,
+            # so eager and capture entries must agree on the M=8 boundary.
+            # The native selector pairs M=8 with the MP56-calibrated 32x4
+            # W1/W2 tiles while every larger M retains the upstream path.
+            gemv_max_tokens=8,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"s5000-mp56-20260814-e256-n512-k4096-{graph_mode}-"
+                "block16-dspark7-m8"
+            ),
         )
         for graph_mode in ("eager", "capture")
     }

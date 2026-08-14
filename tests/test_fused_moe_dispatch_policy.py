@@ -209,6 +209,44 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
         gemv_block="16x8",
     )
     assert thresholds_for_shape(dsv4_block16).gemv_max_tokens == 5
+    dsv4_block16_capture = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+        graph_mode="capture",
+    )
+    assert thresholds_for_shape(dsv4_block16_capture).gemv_max_tokens == 5
+    dsv4_block16_mp56 = _shape(
+        multiprocessor_count=56,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+    )
+    assert thresholds_for_shape(dsv4_block16_mp56).gemv_max_tokens == 8
+    dsv4_block16_mp56_capture = _shape(
+        multiprocessor_count=56,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+        graph_mode="capture",
+    )
+    assert thresholds_for_shape(dsv4_block16_mp56_capture).gemv_max_tokens == 8
     assert thresholds_for_shape(dsv4).grouped_gemm_min_tokens is None
     assert thresholds_for_shape(dsv2).gemv_max_tokens == 3
     assert thresholds_for_shape(dsv2).grouped_gemm_min_tokens is None
