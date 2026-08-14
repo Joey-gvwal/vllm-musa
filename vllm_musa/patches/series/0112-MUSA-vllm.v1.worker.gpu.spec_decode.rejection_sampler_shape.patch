@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 14 Aug 2026 16:40:00 +0800
+Subject: [PATCH] MUSA: adapt v0.26 speculative rejection sampler
+
+Preserve semantic feature flags before replacing optional tensors with typed
+dummy pointers. Normalize scalar or one-element random values at the Triton
+helper boundary, split the chained block-verification condition, and pass the
+non-sharded RNG block required by the patched gumbel helper.
+
+---
+ .../gpu/spec_decode/rejection_sampler_utils.py     | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+index 99dc0f71ab..ca3c5ac094 100644
+--- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+@@ -6,6 +6,15 @@ from vllm.triton_utils import tl, tldevice, triton
+ from vllm.v1.worker.gpu.sample.gumbel import gumbel_block_argmax, tl_rand32
+ 
+ 
++@triton.jit
++def _scalarize_one(x):
++    """Normalize a scalar or one-element Triton block to a scalar."""
++    if x.type.is_block():
++        return tl.sum(x, axis=0)
++    else:
++        return x
++
++
+ @triton.jit
+ def _compute_max_and_sumexp(logits):
+     max = tl.max(logits, axis=0)
+@@ -531,7 +540,7 @@ def _rejection_kernel(
+         logit_idx = start_idx + i
+         draft_sampled = tl.load(draft_sampled_ptr + logit_idx + 1).to(tl.int64)
+         pos = tl.load(pos_ptr + logit_idx)
+-        u = tl_rand32(seed, pos, includes_zero=False)
++        u = _scalarize_one(tl_rand32(seed, pos, includes_zero=False))
+         if USE_BLOCK_VERIFICATION and not is_greedy:
+             # Block verification (Sun et al., 2024): https://arxiv.org/abs/2403.10444
+             prefix_joint_ratio = tl.exp(
+@@ -626,7 +635,7 @@ def _rejection_kernel(
+                 tl.store(sampled_ptr + req_idx * sampled_stride + i, draft_sampled)
+             accepted_length += accepted
+     tl.store(rejected_steps_ptr + req_idx, accepted_length)
+-    if USE_BLOCK_VERIFICATION and not is_greedy and accepted_length < num_draft_tokens:
++    if (USE_BLOCK_VERIFICATION and not is_greedy) and accepted_length < num_draft_tokens:
+         # Compute the target and draft log exponential sums for the
+         # rejected token.
+         rejected_idx = start_idx + accepted_length
+@@ -776,6 +785,7 @@ def _resample_kernel(
+     value, idx = gumbel_block_argmax(
+         residual_logits,
+         block,
++        block,  # rng_block; this path is not vocabulary-sharded
+         mask,
+         resample_token_idx,
+         expanded_idx_mapping_ptr,
+@@ -892,6 +902,7 @@ def rejection_sample(
+     num_logits, vocab_size = target_logits.shape
+     draft_logits_stride_0 = 0
+     draft_logits_stride_1 = 0
++    synthetic_mode = synthetic_conditional_rates is not None
+     if has_draft_logits := draft_logits is not None:
+         draft_logits_stride_0 = draft_logits.stride(0)
+         draft_logits_stride_1 = draft_logits.stride(1)
+@@ -1080,7 +1091,7 @@ def rejection_sample(
+         vocab_num_blocks,
+         PADDED_VOCAB_NUM_BLOCKS=padded_vocab_num_blocks,
+         HAS_DRAFT_LOGITS=has_draft_logits,
+-        SYNTHETIC_MODE=synthetic_conditional_rates is not None,
++        SYNTHETIC_MODE=synthetic_mode,
+         USE_BLOCK_VERIFICATION=use_block_verification,
+         num_warps=1,
+     )
