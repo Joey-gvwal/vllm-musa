@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 14 Aug 2026 21:10:00 +0800
+Subject: [PATCH] MUSA: refresh MTP request-index cache and fence graph visibility
+
+MTP reuses CommonAttentionMetadata while changing query boundaries. Key the
+request-index cache by valid boundaries, invalidate it at the draft transition,
+and fence the asynchronous H2D write before FULL graph replay consumes the
+persistent metadata buffer.
+
+diff --git a/vllm/v1/attention/backend.py b/vllm/v1/attention/backend.py
+index 6f23cff0b1..94827c195d 100644
+--- a/vllm/v1/attention/backend.py
++++ b/vllm/v1/attention/backend.py
+@@ -486,6 +486,7 @@ class CommonAttentionMetadata:
+ 
+     _num_computed_tokens_cache: torch.Tensor | None = None
+     _token_to_req_indices_cache: torch.Tensor | None = None
++    _token_to_req_indices_layout: tuple[int, ...] | None = None
+ 
+     def batch_size(self) -> int:
+         return self.seq_lens.shape[0]
+@@ -534,30 +535,47 @@ class CommonAttentionMetadata:
+             self._num_computed_tokens_cache = self.seq_lens - query_lens
+         return self._num_computed_tokens_cache
+ 
++    def invalidate_query_layout_caches(self) -> None:
++        """Invalidate values derived from the per-request query layout."""
++        self._token_to_req_indices_cache = None
++        self._token_to_req_indices_layout = None
++        self._num_computed_tokens_cache = None
++
+     def token_to_req_indices(self, buffer: torch.Tensor) -> torch.Tensor:
+         """Build or reuse the per-token request index mapping."""
+         num_tokens = self.num_actual_tokens
+-        if self._token_to_req_indices_cache is not None:
+-            assert self._token_to_req_indices_cache.device == buffer.device
+-            assert self._token_to_req_indices_cache.dtype == torch.int32
+-            assert self._token_to_req_indices_cache.shape[0] >= num_tokens
+-            return self._token_to_req_indices_cache[:num_tokens]
+-
+-        starts = np.asarray(self.query_start_loc_cpu, dtype=np.int32)
++        starts = np.asarray(
++            self.query_start_loc_cpu[: self.num_reqs + 1], dtype=np.int32
++        )
+         query_lens = np.diff(starts)
++        num_mapped_tokens = int(query_lens.sum())
++        layout = (num_tokens, *map(int, starts))
++        cache = self._token_to_req_indices_cache
++        if (
++            cache is not None
++            and self._token_to_req_indices_layout == layout
++            and cache.device == buffer.device
++            and cache.dtype == torch.int32
++            and cache.data_ptr() == buffer.data_ptr()
++            and cache.shape[0] >= max(num_mapped_tokens, num_tokens)
++        ):
++            return cache[:num_tokens]
+         token_to_req_indices = np.repeat(
+-            np.arange(query_lens.shape[0], dtype=np.int32), query_lens
++            np.arange(self.num_reqs, dtype=np.int32), query_lens
+         )
+-        num_mapped_tokens = token_to_req_indices.shape[0]
+         assert buffer.shape[0] >= max(num_mapped_tokens, num_tokens)
+-        # copy from CPU to GPU
+         buffer[:num_mapped_tokens].copy_(
+             np_to_pinned_tensor(token_to_req_indices), non_blocking=True
+         )
++        if buffer.device.type == "musa":
++            device_module = torch.get_device_module()
++            if not device_module.is_current_stream_capturing():
++                device_module.current_stream(buffer.device).synchronize()
+         if num_mapped_tokens < num_tokens:
+             buffer[num_mapped_tokens:num_tokens].zero_()
+-        self._token_to_req_indices_cache = buffer[: max(num_mapped_tokens, num_tokens)]
+-        return self._token_to_req_indices_cache[:num_tokens]
++        self._token_to_req_indices_cache = buffer[:max(num_mapped_tokens, num_tokens)]
++        self._token_to_req_indices_layout = layout
++        return buffer[:num_tokens]
+ 
+     # TODO(lucas): remove once we have FULL-CG spec-decode support
+     def unpadded(
+diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
+index 9389983ad2..2109fd6a6d 100644
+--- a/vllm/v1/spec_decode/llm_base_proposer.py
++++ b/vllm/v1/spec_decode/llm_base_proposer.py
+@@ -688,6 +688,7 @@ class SpecDecodeBaseProposer:
+         common_attn_metadata.query_start_loc_cpu[: batch_size + 1] = torch.from_numpy(
+             self.token_arange_np[: batch_size + 1]
+         ).clone()
++        common_attn_metadata.invalidate_query_layout_caches()
+ 
+         # In padded drafter batch, we need to adjust the sequence lengths
+         # to remove the "padding" (i.e. rejected tokens).
