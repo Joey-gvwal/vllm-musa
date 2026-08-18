@@ -208,7 +208,7 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
         w2_scale_shape=(256, 32, 2),
         gemv_block="16x8",
     )
-    assert thresholds_for_shape(dsv4_block16).gemv_max_tokens == 5
+    assert thresholds_for_shape(dsv4_block16).gemv_max_tokens == 8
     dsv4_block16_capture = _shape(
         multiprocessor_count=60,
         local_experts=256,
@@ -221,7 +221,7 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
         gemv_block="16x8",
         graph_mode="capture",
     )
-    assert thresholds_for_shape(dsv4_block16_capture).gemv_max_tokens == 5
+    assert thresholds_for_shape(dsv4_block16_capture).gemv_max_tokens == 8
     dsv4_block16_mp56 = _shape(
         multiprocessor_count=56,
         local_experts=256,
