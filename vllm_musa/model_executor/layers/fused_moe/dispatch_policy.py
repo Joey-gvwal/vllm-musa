@@ -166,14 +166,15 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_block="16x8",
             graph_mode=graph_mode,
         ): _thresholds(
-            # DSpark-7 verifies eight target tokens per request. Keep this
-            # exact block16 shape on native GEMV through M=8; larger batches
-            # retain the established upstream path.
-            gemv_max_tokens=8,
+            # Cold-L2 crossover calibration covers adaptive target verify
+            # lengths, not only the fixed DSpark-7 M=8 shape.  The MP60
+            # split-tile selector uses 32x4 through M=12; hot routing regresses
+            # at M=13, so larger token batches retain the upstream path.
+            gemv_max_tokens=12,
             grouped_gemm_min_tokens=None,
             source=(
-                f"s5000-mp60-20260815-e256-n512-k4096-{graph_mode}-"
-                "block16-dspark7-m8"
+                f"s5000-mp60-20260818-e256-n512-k4096-{graph_mode}-"
+                "block16-split32-m12"
             ),
         )
         for graph_mode in ("eager", "capture")

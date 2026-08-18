@@ -599,6 +599,7 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
     int scale_k_group_tile,
     int nr_n,
     int vlen,
+    int num_mp,
     int bseqlen) {
     if (!is_fp8 || use_int4_w4a16 || num_experts != 256 ||
         scale_k_group_tile != 128) {
@@ -614,14 +615,20 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
     }
 
     BlockConfig config{0, 0, 0.f, false};
+    const bool mp60_w1_range =
+        num_mp == 60 && w1 && bseqlen >= 2 && bseqlen <= 12;
+    const bool mp60_w2_range = num_mp == 60 && w2 && bseqlen >= 6 &&
+                               bseqlen <= 72 && bseqlen % 6 == 0;
     if (bseqlen == 1) {
         config = w1 ? BlockConfig{4, 32, 0.f, true}
                     : BlockConfig{32, 4, 0.f, true};
-    } else if ((w1 && bseqlen == 8) || (w2 && bseqlen == 48)) {
-        // DSpark-7 verifies eight target tokens per request. Its W1 input is
-        // M=8 and routed W2 input is M*topk=48. S5000 microbenchmarks show
-        // 32x4 wins for both shapes; keep every other M on its calibrated
-        // generic path.
+    } else if (mp60_w1_range || mp60_w2_range ||
+               (w1 && bseqlen == 8) || (w2 && bseqlen == 48)) {
+        // On MP60, cold-L2 route-mode sweeps place the native/upstream
+        // crossover at target M=12. W1 sees M rows while routed W2 sees
+        // M*topk rows, so the same target interval is [2,12] and [6,72]
+        // respectively. Keep the legacy exact M=8 choice on MP56; other MP56
+        // shapes retain their previously calibrated generic path.
         config = BlockConfig{32, 4, 0.f, true};
     } else {
         return false;
@@ -1029,6 +1036,7 @@ void musa_fused_gemv_moe(
             scale_k_group_tile,
             nr_n,
             vlen,
+            num_mp,
             bseqlen)) {
         best_config = &deepseek_v4_fp8_moe_config;
     } else if (ParseForcedBlockConfig(&forced_config)) {

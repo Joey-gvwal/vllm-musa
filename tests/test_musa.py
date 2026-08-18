@@ -729,6 +729,10 @@ class TestNativeGemvSource:
         split_pos = source.index("if (ShouldUseDeepSeekV4Fp8MoeSplitTile(")
         forced_pos = source.index("} else if (ParseForcedBlockConfig(&forced_config))")
         assert split_pos < forced_pos
+        assert "num_mp == 60 && w1" in source
+        assert "bseqlen >= 2 && bseqlen <= 12" in source
+        assert "num_mp == 60 && w2" in source
+        assert "bseqlen <= 72 && bseqlen % 6 == 0" in source
         assert "VLLM_MUSA_DEEPSEEK_FP8_W1_32X4" not in source
 
     def test_gemv_block_override_validates_env_config(self):
