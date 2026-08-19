@@ -1,5 +1,5 @@
-From 09f5760b80967055540cd5231b8bfd850e01e394 Mon Sep 17 00:00:00 2001
-From: Joey-gvwal <joey_gvwal@yeah.net>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Wed, 19 Aug 2026 19:25:22 +0800
 Subject: [PATCH] MUSA: hash fused MoE on Triton 3.2
 
@@ -47,6 +47,3 @@ index 5f7a38bc6e..a3396c2775 100644
              base=b_ptr + off_experts * stride_be,
              shape=(N, K),
              strides=(stride_bn, stride_bk),
--- 
-2.25.1
-

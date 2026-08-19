@@ -1,5 +1,5 @@
-From a90ab4a7721f93bb31b5f2bb54579a76daa998b2 Mon Sep 17 00:00:00 2001
-From: Joey-gvwal <joey_gvwal@yeah.net>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Wed, 19 Aug 2026 19:31:16 +0800
 Subject: [PATCH] MUSA: skip CUDA-only FA4 warmup
 
@@ -23,6 +23,3 @@ index cd16c63b58..2e76db3dc8 100644
          sparse_mla_triton_warmup(worker)
  
      if current_platform.has_device_capability(90):
--- 
-2.25.1
-

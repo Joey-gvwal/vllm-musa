@@ -1,5 +1,5 @@
-From b0c74251fd0cde464e5bf1086c1ef7abb82286bf Mon Sep 17 00:00:00 2001
-From: Joey-gvwal <joey_gvwal@yeah.net>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Wed, 19 Aug 2026 19:11:40 +0800
 Subject: [PATCH] MUSA: adapt Qwen decode selector to v0.28 inputs
 
@@ -21,5 +21,4 @@ index d0e4376969..79953a7558 100644
 +                batch_req_state.is_prefilling_np,
                  total_num_draft_tokens,
                  total_num_logits,
--- 
-2.25.1
+                 num_tokens,
