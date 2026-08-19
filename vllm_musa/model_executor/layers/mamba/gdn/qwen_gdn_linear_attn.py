@@ -277,7 +277,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         ):
             return False
 
-        from vllm.model_executor.layers.fla.ops import (
+        from vllm.third_party.flash_linear_attention.ops import (
             fused_sigmoid_gating_delta_rule_update,
         )
         from vllm.model_executor.layers.mamba.mamba_utils import (
@@ -530,7 +530,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         core_attn_out: torch.Tensor,
         attn_metadata,
     ) -> None:
-        from vllm.model_executor.layers.fla.ops import (
+        from vllm.third_party.flash_linear_attention.ops import (
             fused_sigmoid_gating_delta_rule_update,
         )
         from vllm.model_executor.layers.mamba.mamba_utils import (

@@ -149,6 +149,8 @@ def test_musa_qwen_gdn_forwards_v028_reduce_results() -> None:
 
     assert "reduce_results: bool = True," in source
     assert "reduce_results=reduce_results," in source
+    assert source.count("vllm.third_party.flash_linear_attention.ops") == 2
+    assert "vllm.model_executor.layers.fla.ops" not in source
 
 
 def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
