@@ -101,3 +101,18 @@ def test_fused_moe_tensor_descriptor_is_hashable_on_musa_triton_32() -> None:
     assert 'hasattr(tl, "_experimental_make_tensor_descriptor")' in source
     assert "def make_tensor_descriptor(" in source
     assert "tl.make_tensor_descriptor(" not in source
+
+
+def test_musa_mla_prefill_backend_uses_v028_clone_contract() -> None:
+    source = (
+        ROOT
+        / "vllm_musa"
+        / "v1"
+        / "attention"
+        / "backends"
+        / "mla"
+        / "common.py"
+    ).read_text()
+
+    assert "class MUSAMLAPrefillBackend(MLAPrefillBackend):" in source
+    assert "super().__init__(" in source
