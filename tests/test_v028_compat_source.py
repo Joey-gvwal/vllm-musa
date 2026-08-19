@@ -116,3 +116,18 @@ def test_musa_mla_prefill_backend_uses_v028_clone_contract() -> None:
 
     assert "class MUSAMLAPrefillBackend(MLAPrefillBackend):" in source
     assert "super().__init__(" in source
+
+
+def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
+    source = (
+        ROOT
+        / "third_party"
+        / "vllm"
+        / "vllm"
+        / "model_executor"
+        / "warmup"
+        / "kernel_warmup.py"
+    ).read_text()
+
+    assert "if not current_platform.is_musa():" in source
+    assert 'Skipping CUDA-only FA4 CuTeDSL warmup on MUSA.' in source
