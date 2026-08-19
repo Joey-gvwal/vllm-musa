@@ -9,13 +9,13 @@ Subject: [PATCH] MUSA:
  1 file changed, 23 insertions(+)
 
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py b/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
-index b667b8767..8b5e230bd 100644
+index aa8750580d..f09055e1ff 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
 @@ -14,6 +14,14 @@ from vllm.triton_utils import tl, triton
  from vllm.utils.torch_utils import direct_register_custom_op
- 
- 
+
+
 +def _musa_deepseek_v4_is_musa_tensor(tensor: torch.Tensor) -> bool:
 +    return (
 +        current_platform.is_musa()
@@ -47,5 +47,5 @@ index b667b8767..8b5e230bd 100644
 +        )
 +
      from vllm.utils.deep_gemm import get_tma_aligned_size
- 
+
      num_tokens, num_heads, head_dim = o.shape

@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: vllm.v1.spec_decode.dflash
  1 file changed, 34 insertions(+), 9 deletions(-)
 
 diff --git a/vllm/v1/spec_decode/dflash.py b/vllm/v1/spec_decode/dflash.py
-index f76305d08..b497b77c4 100644
+index e773ecf305..1620d5db79 100644
 --- a/vllm/v1/spec_decode/dflash.py
 +++ b/vllm/v1/spec_decode/dflash.py
-@@ -201,6 +201,7 @@ class DFlashProposer(SpecDecodeBaseProposer):
+@@ -226,6 +226,7 @@ class DFlashProposer(SpecDecodeBaseProposer):
      def dummy_run(
          self,
          num_tokens: int,
@@ -19,7 +19,7 @@ index f76305d08..b497b77c4 100644
          use_cudagraphs: bool = True,
          is_graph_capturing: bool = False,
          slot_mappings: dict[str, torch.Tensor] | None = None,
-@@ -213,11 +214,28 @@ class DFlashProposer(SpecDecodeBaseProposer):
+@@ -238,11 +239,28 @@ class DFlashProposer(SpecDecodeBaseProposer):
          - max_query_tokens is quite small, DFlash only sees spec tokens as queries
          - Multimodal inputs are not currently supported
          """
@@ -50,12 +50,12 @@ index f76305d08..b497b77c4 100644
 +            use_cudagraphs=use_cudagraphs,
 +            uniform_decode_query_len=uniform_decode_query_len,
          )
- 
+
          # Slot mapping sized to num_input_tokens (query only), matching
-@@ -232,21 +250,28 @@ class DFlashProposer(SpecDecodeBaseProposer):
+@@ -257,21 +275,28 @@ class DFlashProposer(SpecDecodeBaseProposer):
          else:
              slot_mapping_dict = slot_mappings or {}
- 
+
 +        # build dflash's non-causal per-layer attn metadata for the
 +        # captured forward so the FA kernel captures at the right shape and the
 +        # FULL graph registers under the inference batch_descriptor.
@@ -72,7 +72,7 @@ index f76305d08..b497b77c4 100644
 -        # going through the buffer, since no CUDA graph is used for the precomputation.
 -        # For the dummy run, we use the dummy buffer.
          context_states = self.hidden_states[:num_tokens]
- 
+
 -        # Run the KV projection (GEMM + norms + RoPE) for memory profiling,
          self.model.precompute_and_store_context_kv(context_states, context_positions)
          with set_forward_context(

@@ -424,7 +424,7 @@ class _CustomBuildExt(BuildExtension):
         # .git, so vLLM's setuptools-scm cannot derive a version. vLLM's setup.py
         # consumes VLLM_VERSION_OVERRIDE and forwards it to setuptools-scm.
         if not (source_dir / ".git").exists():
-            env.setdefault("VLLM_VERSION_OVERRIDE", "0.24.0")
+            env.setdefault("VLLM_VERSION_OVERRIDE", "0.28.0")
 
         # always editable; compat (path-based .pth) -- the default PEP 660 finder
         # mis-resolves vLLM's submodules and loses to a system vLLM.

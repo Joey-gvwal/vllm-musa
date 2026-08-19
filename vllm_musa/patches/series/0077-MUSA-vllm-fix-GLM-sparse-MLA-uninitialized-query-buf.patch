@@ -13,10 +13,10 @@ NaNs cannot leak into the TileLang sparse attention kernel.
  1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-index 19381efd7..cf3a9304f 100644
+index e8be7ad5bb..e62e02779c 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-@@ -838,7 +838,7 @@ class FlashMLASparseImpl(SparseMLAAttentionImpl[FlashMLASparseMetadata]):
+@@ -819,7 +819,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
                  f"Padding num_heads from {self.num_heads} to "
                  f"{self.prefill_padding} for BF16 sparse prefill kernel"
              )
@@ -24,8 +24,8 @@ index 19381efd7..cf3a9304f 100644
 +            q_padded = q.new_zeros((q.shape[0], self.prefill_padding, q.shape[2]))
              q_padded[:, : self.num_heads, :] = q
              q = q_padded
- 
-@@ -867,8 +867,9 @@ class FlashMLASparseImpl(SparseMLAAttentionImpl[FlashMLASparseMetadata]):
+
+@@ -848,8 +848,9 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
          # Concatenate q if it's a tuple (ql_nope, q_pe)
          if isinstance(q, tuple):
              ql_nope, q_pe = q
@@ -34,6 +34,6 @@ index 19381efd7..cf3a9304f 100644
 +            # MUSA: concat_mla_q leaves the reused q_concat_buffer partially written
 +            # (stale NaN/garbage); use a fresh full-write cat instead.
 +            q = torch.cat([ql_nope, q_pe], dim=-1)
- 
+
          num_actual_toks = q.shape[0]
- 
+

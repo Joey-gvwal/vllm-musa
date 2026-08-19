@@ -4,17 +4,17 @@ Date: Thu, 4 Jun 2026 02:46:37 +0000
 Subject: [PATCH] MUSA(csrc): csrc/type_convert.cuh
 
 ---
- csrc/type_convert.cuh | 8 ++++----
+ csrc/libtorch_stable/type_convert.cuh | 8 ++++----
  1 file changed, 4 insertions(+), 4 deletions(-)
 
-diff --git a/csrc/type_convert.cuh b/csrc/type_convert.cuh
-index 8093c4bc8..2526fa637 100644
---- a/csrc/type_convert.cuh
-+++ b/csrc/type_convert.cuh
+diff --git a/csrc/libtorch_stable/type_convert.cuh b/csrc/libtorch_stable/type_convert.cuh
+index 8093c4bc87..2526fa6372 100644
+--- a/csrc/libtorch_stable/type_convert.cuh
++++ b/csrc/libtorch_stable/type_convert.cuh
 @@ -47,7 +47,7 @@ struct _typeConvert<float> {
    }
  };
- 
+
 -#if defined(USE_ROCM) || (defined(CUDA_VERSION) && (CUDA_VERSION >= 12000))
 +#if defined(USE_MUSA) || (defined(CUDA_VERSION) && (CUDA_VERSION >= 12000))
  // CUDA < 12.0 runs into issues with packed type conversion
@@ -23,7 +23,7 @@ index 8093c4bc8..2526fa637 100644
 @@ -69,7 +69,7 @@ struct _typeConvert<torch::headeronly::Half> {
    }
  };
- 
+
 -  #if (defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800) || defined(USE_ROCM)
 +  #if (defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800) || defined(USE_MUSA)
  // CUDA_ARCH < 800 does not have BF16 support
@@ -38,5 +38,5 @@ index 8093c4bc8..2526fa637 100644
 +          // defined(USE_MUSA)
 +#endif    // defined(USE_MUSA) || (defined(CUDA_VERSION) && (CUDA_VERSION >=
            // 12000))
- 
+
  /* Vector POD struct to generate vectorized and packed FP16/BF16 ops

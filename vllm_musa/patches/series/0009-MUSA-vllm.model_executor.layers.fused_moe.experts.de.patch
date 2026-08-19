@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA:
  1 file changed, 8 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
-index 160cff1ee..c9c36b2f4 100644
+index 211364d24b..f0179e4a0d 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 @@ -355,9 +355,12 @@ class DeepGemmExperts(mk.FusedMoEExpertsModular):
@@ -28,7 +28,7 @@ index 160cff1ee..c9c36b2f4 100644
                  **gemm_kwargs,
 @@ -372,9 +375,12 @@ class DeepGemmExperts(mk.FusedMoEExpertsModular):
              )
- 
+
              mm2_out = _resize_cache(workspace2, (M_sum, K))
 +            # MUSA mate ragged_moe_gemm_8bit asserts scale tensors are contiguous.
 +            a2q_scale = a2q_scale.contiguous()

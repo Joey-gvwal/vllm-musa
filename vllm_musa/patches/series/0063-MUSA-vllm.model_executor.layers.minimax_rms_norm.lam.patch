@@ -9,7 +9,7 @@ Subject: [PATCH] MUSA:
  1 file changed, 14 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py b/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
-index afae19c75..37dd63eca 100644
+index afae19c75f..37dd63eca7 100644
 --- a/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
 +++ b/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
 @@ -13,7 +13,15 @@ import torch
@@ -26,12 +26,12 @@ index afae19c75..37dd63eca 100644
 +        # None so allocation raises and callers fall back to the standard
 +        # all-reduce + RMSNorm path.
 +        cudart = None
- 
+
  _ALIGN = 1 << 21  # 2 MiB — CUDA IPC allocation alignment
- 
+
 @@ -173,6 +181,11 @@ class LamportWorkspace:
      """
- 
+
      def __init__(self, rank: int, world_size: int, comm_size: int, process_group=None):
 +        if cudart is None:
 +            raise RuntimeError(
@@ -40,4 +40,4 @@ index afae19c75..37dd63eca 100644
 +            )
          assert world_size >= 2, "Lamport workspace requires at least 2 ranks"
          assert comm_size > 0, "comm_size must be positive"
- 
+

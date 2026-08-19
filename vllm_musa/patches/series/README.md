@@ -12,9 +12,9 @@ is pre-patched.
   (`git format-patch --no-signature --no-numbered --zero-commit`, keeping `index`
   blob lines so `git am -3` 3-way works across version bumps). Regeneration stages
   a complete replacement so patches removed from the commit stack cannot leave
-  stale files. Historical duplicate numeric prefixes remain until the next full
-  regeneration; count the `.patch` files rather than inferring the count from
-  the highest prefix. Author headers are normalized to the synthetic
+  stale files. Numeric prefixes are regenerated as one contiguous sequence;
+  count the `.patch` files rather than relying on historical patch numbers.
+  Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
 Currently **115 patches**. This branch includes the Qwen3.6 patches for common
@@ -27,7 +27,7 @@ vision-block graph capture. It also serializes DeepSeek-V4 long-prefill
 attention branches on MUSA while preserving decode/MTP auxiliary-stream
 overlap. The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
-in `third_party/PINS` (release label `v0.24.0`), applied at build. Runtime
+in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept
 separately in `vllm_musa/patches/`, not in this build-time series. Run
 `python3 tools/musa_sync.py verify` to replay and verify the complete manifest
