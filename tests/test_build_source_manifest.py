@@ -41,6 +41,18 @@ def test_cuda_utils_kernel_is_linked_into_stable_extension() -> None:
     assert cuda_utils_source in stable_sources
     assert "get_device_attribute" in stable_bindings
 
+    preprocessor_guards: list[str] = []
+    for line in stable_bindings.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("#if ", "#ifdef ", "#ifndef ")):
+            preprocessor_guards.append(stripped)
+        elif stripped.startswith("#endif"):
+            preprocessor_guards.pop()
+        elif stripped.startswith(
+            "STABLE_TORCH_LIBRARY_FRAGMENT(_C_cuda_utils"
+        ):
+            assert "#if !defined(USE_MUSA)" not in preprocessor_guards
+
 
 def test_regular_moe_sources_use_resolvable_stable_helper_includes() -> None:
     moe_dir = ROOT / "third_party" / "vllm" / "csrc" / "libtorch_stable" / "moe"
