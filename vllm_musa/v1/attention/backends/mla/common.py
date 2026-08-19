@@ -280,7 +280,10 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             self._pad_v &= not current_platform.is_musa()
             # ========================== END ==========================
 
-        self.dcp_world_size: int = -1
+        parallel_config = get_current_vllm_config().parallel_config
+        # Avoid requiring an initialized DCP group in tests and match the
+        # vLLM v0.28 MLA initialization contract.
+        self.dcp_world_size: int = parallel_config.decode_context_parallel_size
 
         self.chunked_prefill_workspace_size = (
             MLACommonMetadataBuilder.determine_chunked_prefill_workspace_size(
@@ -288,7 +291,7 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
             )
         )
         self.cp_kv_cache_interleave_size: int = (
-            get_current_vllm_config().parallel_config.cp_kv_cache_interleave_size
+            parallel_config.cp_kv_cache_interleave_size
         )
 
     def _flash_attn_varlen_diff_headdims(

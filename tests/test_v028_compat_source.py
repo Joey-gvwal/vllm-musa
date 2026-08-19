@@ -118,6 +118,24 @@ def test_musa_mla_prefill_backend_uses_v028_clone_contract() -> None:
     assert "super().__init__(" in source
 
 
+def test_musa_mla_uses_v028_decode_context_parallel_size() -> None:
+    source = (
+        ROOT
+        / "vllm_musa"
+        / "v1"
+        / "attention"
+        / "backends"
+        / "mla"
+        / "common.py"
+    ).read_text()
+
+    assert (
+        "self.dcp_world_size: int = "
+        "parallel_config.decode_context_parallel_size"
+    ) in source
+    assert "self.dcp_world_size: int = -1" not in source
+
+
 def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
     source = (
         ROOT
