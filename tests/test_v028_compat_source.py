@@ -83,3 +83,21 @@ def test_qwen_uniform_decode_selector_uses_v028_scheduled_tokens_array() -> None
     assert "num_scheduled_tokens_np,\n                batch_req_state.is_prefilling_np," in (
         source
     )
+
+
+def test_fused_moe_tensor_descriptor_is_hashable_on_musa_triton_32() -> None:
+    source = (
+        ROOT
+        / "third_party"
+        / "vllm"
+        / "vllm"
+        / "model_executor"
+        / "layers"
+        / "fused_moe"
+        / "fused_moe.py"
+    ).read_text()
+
+    assert 'hasattr(tl, "make_tensor_descriptor")' in source
+    assert 'hasattr(tl, "_experimental_make_tensor_descriptor")' in source
+    assert "def make_tensor_descriptor(" in source
+    assert "tl.make_tensor_descriptor(" not in source
