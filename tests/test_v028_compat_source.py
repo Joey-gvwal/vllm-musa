@@ -35,3 +35,32 @@ def test_triton_gluon_is_optional_for_musa_triton_32() -> None:
 
     assert len(gluon_import_guards) == 1
     assert source.count("aggregate = TritonLanguagePlaceholder()") == 2
+
+
+def test_moe_overrides_use_v028_routed_experts_api() -> None:
+    fp8_source = (
+        ROOT
+        / "vllm_musa"
+        / "model_executor"
+        / "layers"
+        / "quantization"
+        / "fp8.py"
+    ).read_text()
+    unquantized_source = (
+        ROOT
+        / "vllm_musa"
+        / "model_executor"
+        / "layers"
+        / "fused_moe"
+        / "unquantized_fused_moe_method.py"
+    ).read_text()
+
+    assert "from vllm.model_executor.layers.fused_moe import RoutedExperts" in (
+        fp8_source
+    )
+    assert "layer: FusedMoE" not in fp8_source
+    for source in (fp8_source, unquantized_source):
+        assert (
+            "from vllm.model_executor.layers.fused_moe.fused_moe import "
+            "fused_experts"
+        ) in source
