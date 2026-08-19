@@ -21,6 +21,12 @@ def test_triton_gluon_is_optional_for_musa_triton_32() -> None:
             for child in node.body
         )
         and any(
+            isinstance(child, ast.ImportFrom)
+            and child.module == "triton.language.core"
+            and any(alias.name == "_aggregate" for alias in child.names)
+            for child in node.body
+        )
+        and any(
             isinstance(handler.type, ast.Name)
             and handler.type.id == "ImportError"
             for handler in node.handlers
@@ -28,4 +34,4 @@ def test_triton_gluon_is_optional_for_musa_triton_32() -> None:
     ]
 
     assert len(gluon_import_guards) == 1
-    assert "TritonLanguagePlaceholder()" in source
+    assert source.count("aggregate = TritonLanguagePlaceholder()") == 2
