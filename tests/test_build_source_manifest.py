@@ -17,6 +17,31 @@ def test_regular_cuda_view_source_is_present_for_musa_binding() -> None:
     assert "get_cuda_view_from_cpu_tensor" in bindings
 
 
+def test_cuda_utils_kernel_is_linked_into_stable_extension() -> None:
+    setup_source = (ROOT / "setup.py").read_text()
+    regular_sources = setup_source.split("VLLM_CSRC_SOURCES = [", 1)[1].split(
+        "VLLM_STABLE_CSRC_SOURCES = [", 1
+    )[0]
+    stable_sources = setup_source.split("VLLM_STABLE_CSRC_SOURCES = [", 1)[
+        1
+    ].split("VLLM_MUSA_CSRC_SOURCES = [", 1)[0]
+    cuda_utils_source = (
+        '"csrc/libtorch_stable/cuda_utils_kernels.cu"'
+    )
+    stable_bindings = (
+        ROOT
+        / "third_party"
+        / "vllm"
+        / "csrc"
+        / "libtorch_stable"
+        / "torch_bindings.cpp"
+    ).read_text()
+
+    assert cuda_utils_source not in regular_sources
+    assert cuda_utils_source in stable_sources
+    assert "get_device_attribute" in stable_bindings
+
+
 def test_regular_moe_sources_use_resolvable_stable_helper_includes() -> None:
     moe_dir = ROOT / "third_party" / "vllm" / "csrc" / "libtorch_stable" / "moe"
     for source_name in (
