@@ -26,3 +26,11 @@ def test_regular_moe_sources_use_resolvable_stable_helper_includes() -> None:
         source = (moe_dir / source_name).read_text()
         assert '#include "../cub_helpers.h"' in source
         assert '#include "../torch_utils.h"' in source
+
+
+def test_vllm_editable_install_uses_pinned_release_version() -> None:
+    setup_source = (ROOT / "setup.py").read_text()
+    override = 'env.setdefault("VLLM_VERSION_OVERRIDE", "0.28.0")'
+
+    assert override in setup_source
+    assert setup_source.index(override) < setup_source.index("vllm_install_cmd = [")

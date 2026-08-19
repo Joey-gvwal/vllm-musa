@@ -420,11 +420,11 @@ class _CustomBuildExt(BuildExtension):
         env = os.environ.copy()
         env["VLLM_TARGET_DEVICE"] = "empty"
 
-        # When third_party/vllm is synced via `git archive | tar` it carries no
-        # .git, so vLLM's setuptools-scm cannot derive a version. vLLM's setup.py
-        # consumes VLLM_VERSION_OVERRIDE and forwards it to setuptools-scm.
-        if not (source_dir / ".git").exists():
-            env.setdefault("VLLM_VERSION_OVERRIDE", "0.28.0")
+        # The exact upstream release commit is pinned in third_party/PINS, but
+        # its local Git object set may not contain the corresponding tag.
+        # Always provide the pinned release version so setuptools-scm does not
+        # derive a stale development version from the nearest available tag.
+        env.setdefault("VLLM_VERSION_OVERRIDE", "0.28.0")
 
         # always editable; compat (path-based .pth) -- the default PEP 660 finder
         # mis-resolves vLLM's submodules and loses to a system vLLM.
