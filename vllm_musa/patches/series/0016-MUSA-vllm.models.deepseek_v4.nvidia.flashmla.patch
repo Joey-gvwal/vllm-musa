@@ -23,7 +23,7 @@ index a6a24ae0cc..c84070f4f2 100644
 @@ -207,8 +207,18 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
                  topk_indices = attn_metadata.c128a_global_decode_topk_indices
                  topk_lens = attn_metadata.c128a_decode_topk_lens
-
+ 
 +        active_decode_tokens = q.shape[0]
 +        if topk_indices is not None:
 +            topk_indices = topk_indices[:active_decode_tokens]
@@ -36,6 +36,6 @@ index a6a24ae0cc..c84070f4f2 100644
 +            swa_indices = swa_indices[:active_decode_tokens]
 +        if swa_lens is not None:
 +            swa_lens = swa_lens[:active_decode_tokens]
-
+ 
          # We treat queries in the same seq as different queries
          # and later we only attend by generated indices.

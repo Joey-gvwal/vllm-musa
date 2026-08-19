@@ -21,9 +21,9 @@ index 8fbf5b41f7..841cfd3372 100644
  from functools import partial
  from typing import Any
 @@ -340,10 +340,17 @@ class CompilerManager:
-
+ 
              from unittest.mock import patch
-
+ 
 +            functorch_cache_key_ctx = (
 +                torch._functorch.config.patch(autograd_cache_normalize_inputs=True)
 +                if hasattr(
@@ -41,7 +41,7 @@ index 8fbf5b41f7..841cfd3372 100644
                      autograd_cache_key,
 @@ -1017,7 +1024,7 @@ class VllmBackend:
          )
-
+ 
      @dynamo_timed("vllm_backend")
 -    def __call__(self, graph: fx.GraphModule, example_inputs: Sequence[Any]) -> Any:
 +    def __call__(self, graph: fx.GraphModule, example_inputs: Sequence[Any], **kwargs: Any) -> Any:

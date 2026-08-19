@@ -340,21 +340,21 @@ index 82c852183a..a4e5b2ca4e 100644
 @@ -21,116 +21,36 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
    // vLLM custom ops
    //
-
+ 
 -  ops.def(
 -      "persistent_masked_m_silu_mul_quant(Tensor input, Tensor counts, Tensor! "
 -      "y_q, Tensor! y_s,"
 -      "bool use_ue8m0) -> ()");
 -  ops.impl("persistent_masked_m_silu_mul_quant", torch::kCUDA,
 -           &persistent_masked_m_silu_mul_quant);
-
+ 
 -  ops.def("weak_ref_tensor(Tensor input) -> Tensor");
 -  ops.impl("weak_ref_tensor", torch::kCUDA, &weak_ref_tensor);
-
+ 
 -  ops.def("get_cuda_view_from_cpu_tensor(Tensor cpu_tensor) -> Tensor");
 -  ops.impl("get_cuda_view_from_cpu_tensor", torch::kCPU,
 -           &get_cuda_view_from_cpu_tensor);
-
+ 
    // Attention ops
    // Compute the attention between an input query and the cached
    // keys/values using PagedAttention.
@@ -369,7 +369,7 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "    int blocksparse_vert_stride, int blocksparse_block_size,"
 -      "    int blocksparse_head_sliding_step) -> ()");
    // paged_attention_v1 impl stripped (kernel not built on MUSA)
-
+ 
    // PagedAttention V2.
 -  ops.def(
 -      "paged_attention_v2("
@@ -383,7 +383,7 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "    int blocksparse_vert_stride, int blocksparse_block_size,"
 -      "    int blocksparse_head_sliding_step) -> ()");
    // paged_attention_v2 impl stripped (kernel not built on MUSA)
-
+ 
    // Merge attn states
    // Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
    // can be used to combine partial attention results (in the split-KV case)
@@ -398,12 +398,12 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "    int!? prefill_tokens_with_context,"
 -      "    Tensor? output_scale=None) -> ()");
 -  ops.impl("merge_attn_states", torch::kCUDA, &merge_attn_states);
-
+ 
    // Activation ops (quantized only — basic ops moved to _C_stable_libtorch)
 -  ops.def(
 -      "silu_and_mul_quant(Tensor! result, Tensor input, Tensor scale) -> ()");
 -  ops.impl("silu_and_mul_quant", torch::kCUDA, &silu_and_mul_quant);
-
+ 
    // Fused SiLU+Mul + per-block quantization
 -  ops.def(
 -      "silu_and_mul_per_block_quant("
@@ -415,7 +415,7 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "bool is_scale_transposed=False) -> ()");
 -  ops.impl("silu_and_mul_per_block_quant", torch::kCUDA,
 -           &silu_and_mul_per_block_quant);
-
+ 
    // Horizontally-fused DeepseekV4-MLA: per-head RMSNorm + GPT-J RoPE for Q, and
    // GPT-J RoPE + UE8M0 FP8 quant + paged cache insert for KV, all in one
    // kernel launch.
@@ -426,37 +426,37 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "int q_head_padded, float eps, int cache_block_size) -> Tensor");
    // MUSA: fused DeepSeek-V4 qnorm/rope/cache impl stripped;
    // vllm_musa redirects this path to native/JIT MUSA implementations.
-
+ 
    // Apply repetition penalties to logits in-place
 -  ops.def(
 -      "apply_repetition_penalties_(Tensor! logits, Tensor prompt_mask, "
 -      "Tensor output_mask, Tensor repetition_penalties) -> ()");
 -  ops.impl("apply_repetition_penalties_", torch::kCUDA,
 -           &apply_repetition_penalties_);
-
+ 
    // Optimized top-k per row operation
 -  ops.def(
 -      "top_k_per_row_prefill(Tensor logits, Tensor rowStarts, Tensor rowEnds, "
 -      "Tensor! indices, int numRows, int stride0, "
 -      "int stride1, int topK) -> ()");
 -  ops.impl("top_k_per_row_prefill", torch::kCUDA, &top_k_per_row_prefill);
-
+ 
 -  ops.def(
 -      "top_k_per_row_decode(Tensor logits, int next_n, "
 -      "Tensor seq_lens, Tensor! indices, "
 -      "int numRows, int stride0, int stride1, int topK) -> ()");
 -  ops.impl("top_k_per_row_decode", torch::kCUDA, &top_k_per_row_decode);
-
+ 
 -  ops.def(
 -      "persistent_topk(Tensor logits, Tensor lengths, Tensor! output, "
 -      "Tensor workspace, int k, int max_seq_len) -> ()");
 -  ops.impl("persistent_topk", torch::kCUDA, &persistent_topk);
-
+ 
    // Quantization ops
  #ifndef USE_MUSA
 @@ -150,65 +70,18 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
    // https://docs.google.com/document/d/18fBMPuOJ0fY5ZQ6YyrHUppw9FA332CpNtgB6SOIgyuA
-
+ 
    // Machete (Dense) Optimized Mixed Precision GEMM for Hopper.
 -  ops.def(
 -      "machete_supported_schedules("
@@ -489,7 +489,7 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "   ScalarType? group_scales_type"
 -      ") -> Tensor");
    // conditionally compiled so impl registration is in source file
-
+ 
    // Marlin Optimized Quantized GEMM (supports GPTQ, AWQ, FP8, NVFP4, MXFP4).
 -  ops.def(
 -      "marlin_gemm(Tensor a, Tensor? c_or_none, Tensor b_q_weight, "
@@ -500,29 +500,29 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "SymInt size_m, SymInt size_n, SymInt size_k, bool is_k_full, "
 -      "bool use_atomic_add, bool use_fp32_reduce, bool is_zp_float) -> Tensor");
    // conditionally compiled so impl registration is in source file
-
+ 
    // gptq_marlin repack from GPTQ.
 -  ops.def(
 -      "gptq_marlin_repack(Tensor b_q_weight, Tensor perm, "
 -      "SymInt size_k, SymInt size_n, int num_bits, bool is_a_8bit) -> Tensor");
    // conditionally compiled so impl registrations are in source file
-
+ 
    // awq_marlin repack from AWQ.
 -  ops.def(
 -      "awq_marlin_repack(Tensor b_q_weight, SymInt size_k, "
 -      "SymInt size_n, int num_bits, bool is_a_8bit) -> Tensor");
    // conditionally compiled so impl registrations are in source file
-
+ 
    // preprocess W-int4A-fp8 weight for marlin kernel
 -  ops.def(
 -      "marlin_int4_fp8_preprocess(Tensor qweight, "
 -      "Tensor? qzeros_or_none, bool inplace) -> Tensor");
    // conditionally compiled so impl registrations are in source file
-
+ 
  #endif
 @@ -233,197 +106,27 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
  #endif
-
+ 
    // Mamba selective scan kernel
 -  ops.def(
 -      "selective_scan_fwd(Tensor! u, Tensor! delta,"
@@ -541,7 +541,7 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "Tensor? cu_chunk_seqlen,"
 -      "Tensor? last_chunk_indices) -> ()");
 -  ops.impl("selective_scan_fwd", torch::kCUDA, &selective_scan_fwd);
-
+ 
  #ifndef USE_MUSA
 -  ops.def(
 -      "minimax_allreduce_rms("
@@ -564,11 +564,11 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "int nranks,"
 -      "float eps) -> (Tensor, Tensor)");
 -  ops.impl("minimax_allreduce_rms_qk", torch::kCUDA, &minimax_allreduce_rms_qk);
-
+ 
    //  conditionally compiled so impl in source file
  #endif
  }
-
+ 
 -TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
 -  // Cache ops
 -  // Swap in (out) the cache blocks from src to dst.
@@ -679,18 +679,18 @@ index 82c852183a..a4e5b2ca4e 100644
 -
  TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cuda_utils), cuda_utils) {
    // Cuda utils
-
+ 
    // Gets the specified device attribute.
 -  cuda_utils.def("get_device_attribute(int attribute, int device_id) -> int");
 -  cuda_utils.impl("get_device_attribute", &get_device_attribute);
-
+ 
    // Gets the maximum shared memory per block device attribute.
 -  cuda_utils.def(
 -      "get_max_shared_memory_per_block_device_attribute(int device_id) -> int");
 -  cuda_utils.impl("get_max_shared_memory_per_block_device_attribute",
 -                  &get_max_shared_memory_per_block_device_attribute);
  }
-
+ 
  TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
    // Custom all-reduce kernels
 -  custom_ar.def(
@@ -701,19 +701,19 @@ index 82c852183a..a4e5b2ca4e 100644
 -      "all_reduce(int fa, Tensor inp, Tensor! out, int reg_buffer, "
 -      "int reg_buffer_sz_bytes) -> ()");
 -  custom_ar.impl("all_reduce", torch::kCUDA, &all_reduce);
-
+ 
 -  custom_ar.def("dispose", &dispose);
 -  custom_ar.def("meta_size", &meta_size);
-
+ 
 -  custom_ar.def("register_buffer", &register_buffer);
 -  custom_ar.def("get_graph_buffer_ipc_meta", &get_graph_buffer_ipc_meta);
 -  custom_ar.def("register_graph_buffers", &register_graph_buffers);
-
+ 
 -  custom_ar.def("allocate_shared_buffer_and_handle",
 -                &allocate_shared_buffer_and_handle);
 -  custom_ar.def("open_mem_handle(Tensor mem_handle) -> int", &open_mem_handle);
 -  custom_ar.impl("open_mem_handle", torch::kCPU, &open_mem_handle);
-
+ 
 -  custom_ar.def("free_shared_buffer", &free_shared_buffer);
  #ifdef USE_ROCM
    // Quick Reduce all-reduce kernels
@@ -721,7 +721,7 @@ index 82c852183a..a4e5b2ca4e 100644
 @@ -444,4 +147,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _custom_ar), custom_ar) {
  #endif
  }
-
+ 
 +torch::Tensor get_cuda_view_from_cpu_tensor(torch::Tensor& cpu_tensor);
 +// MUSA: get_cuda_view_from_cpu_tensor's kernel lives in cuda_view.cu (a
 +// regular _C source) and the stable bindings exclude its impl on MUSA, so

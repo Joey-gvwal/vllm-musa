@@ -14,7 +14,7 @@ index 5c595bfaf4..c403805a60 100644
 +++ b/csrc/libtorch_stable/ops.h
 @@ -11,8 +11,14 @@
  #include <torch/csrc/stable/ops.h>
-
+ 
  inline torch::stable::Tensor weak_ref_tensor(torch::stable::Tensor& tensor) {
 +#if defined(USE_MUSA)
 +  // Ensure tensor is on MUSA
@@ -24,7 +24,7 @@ index 5c595bfaf4..c403805a60 100644
    // Ensure tensor is on CUDA
    STD_TORCH_CHECK(tensor.device().is_cuda(), "Tensor must be on CUDA device");
 +#endif
-
+ 
    // Get the raw data pointer
    void* data_ptr = tensor.mutable_data_ptr();
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
@@ -34,7 +34,7 @@ index 28090ce5dc..d0ab455224 100644
 @@ -704,6 +704,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "Tensor(h!) n_gram_ids) -> ()");
  }
-
+ 
 +#if !defined(USE_MUSA)
  STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
    // LongCat n-gram embedding index kernel.
@@ -44,7 +44,7 @@ index 28090ce5dc..d0ab455224 100644
        "get_max_shared_memory_per_block_device_attribute(int device_id) -> int");
  }
 +#endif
-
+ 
  STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
                            cuda_utils) {
 @@ -884,6 +886,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
@@ -60,7 +60,7 @@ index 28090ce5dc..d0ab455224 100644
             TORCH_BOX(&cp_gather_indexer_k_quant_cache));
  }
 +#endif
-
+ 
 +#if defined(USE_MUSA)
 +// MUSA: the CUDA / CompositeExplicitAutograd impl blocks above are excluded
 +// because they reference stable kernels not yet ported to MUSA. The

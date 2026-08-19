@@ -21,8 +21,8 @@ index 128debf70c..680dbe091a 100644
      execute_in_parallel,
 @@ -88,6 +89,62 @@ def _fill_short_context_topk_indices(
      )
-
-
+ 
+ 
 +# MUSA: the DeepSeek-V4 attention helpers below branch on the active platform.
 +def _musa_deepseek_v4_linear_out_dtype(
 +    a: torch.Tensor,
@@ -84,7 +84,7 @@ index 128debf70c..680dbe091a 100644
      kv_cache_dtype: str,
 @@ -536,10 +593,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              compressor = self.compressor
-
+ 
              def compressor_kv_score() -> torch.Tensor:
 -                return torch.mm(
 +                return _musa_deepseek_v4_linear_out_dtype(
@@ -94,11 +94,11 @@ index 128debf70c..680dbe091a 100644
 +                    compressor.fused_wkv_wgate.weight,
 +                    torch.float32,
                  )
-
+ 
              aux_fns[0] = compressor_kv_score
 @@ -553,10 +610,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                  return weights
-
+ 
              def indexer_compressor_kv_score() -> torch.Tensor:
 -                return torch.mm(
 +                return _musa_deepseek_v4_linear_out_dtype(
@@ -108,12 +108,12 @@ index 128debf70c..680dbe091a 100644
 +                    indexer.compressor.fused_wkv_wgate.weight,
 +                    torch.float32,
                  )
-
+ 
              aux_fns[1] = indexer_weights_proj
 @@ -633,6 +690,19 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          cos_sin_cache = self.rotary_emb.cos_sin_cache
          cache_dtype = swa_kv_cache.dtype
-
+ 
 +        if _musa_deepseek_v4_is_musa_tensor(q):
 +            return _musa_deepseek_v4_qnorm_rope_kv_insert(
 +                q,
@@ -136,5 +136,5 @@ index 128debf70c..680dbe091a 100644
              use_fp4_cache=self.use_fp4_kv,
 +            use_musa_native_indexer=True,
          )
-
+ 
          # None on ROCm — maybe_execute_in_parallel falls back to sequential.

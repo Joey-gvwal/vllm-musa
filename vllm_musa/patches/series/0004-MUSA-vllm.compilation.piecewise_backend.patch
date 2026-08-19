@@ -18,9 +18,9 @@ index b647e0d858..d89472d135 100644
 +from contextlib import nullcontext
  from pickle import Pickler
  from typing import Any
-
+ 
 @@ -220,7 +221,12 @@ class PiecewiseBackend:
-
+ 
          def serialize(fn: Callable[..., Any]) -> bytes:
              assert hasattr(fn, "serialize"), "fn must have serialize method"
 -            with torch._functorch.config.patch("bundled_autograd_cache", True):
@@ -31,5 +31,5 @@ index b647e0d858..d89472d135 100644
 +            )
 +            with functorch_cache_ctx:
                  entry = fn.serialize()
-
+ 
                  f = io.BytesIO()

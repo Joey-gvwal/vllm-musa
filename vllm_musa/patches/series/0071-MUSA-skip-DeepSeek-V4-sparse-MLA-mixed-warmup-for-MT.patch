@@ -14,7 +14,7 @@ index 80dfd51996..0db34c1191 100644
 @@ -225,6 +225,17 @@ def deepseek_v4_sparse_mla_attention_warmup(worker: "Worker") -> None:
      if runner.is_pooling_model or not _has_deepseek_v4_sparse_mla_backend(runner):
          return
-
+ 
 +    speculative_config = getattr(worker.vllm_config, "speculative_config", None)
 +    if (
 +        current_platform.is_musa()

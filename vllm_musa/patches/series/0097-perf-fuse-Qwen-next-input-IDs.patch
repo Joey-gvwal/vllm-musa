@@ -27,7 +27,7 @@ index 9a574a4faa..bbb3344677 100644
          tl.store(total_len_ptr + req_state_idx, total_len + num_sampled)
 +        if WRITE_NEXT_INPUT_IDS:
 +            tl.store(next_input_ids_ptr + req_id, token_id)
-
+ 
      for i in range(num_sampled):
          token_id = tl.load(sampled_tokens_ptr + req_id * sampled_tokens_stride + i)
 @@ -622,6 +626,7 @@ def post_update(
@@ -46,13 +46,13 @@ index 9a574a4faa..bbb3344677 100644
 +        WRITE_NEXT_INPUT_IDS=next_input_ids is not None,
          num_warps=1,
      )
-
+ 
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
 index c52c07f6bb..d0e4376969 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -1236,18 +1236,35 @@ class GPUModelRunner(LoRAModelRunnerMixin):
-
+ 
          # Some input token ids are directly read from the last sampled tokens
          # and draft tokens. Also, get the logits indices to sample tokens from.
 -        logits_indices = combine_sampled_and_draft_tokens(
@@ -96,7 +96,7 @@ index c52c07f6bb..d0e4376969 100644
 +            input_ids = self.input_buffers.input_ids[:num_tokens_after_padding]
 +        else:
 +            input_ids, logits_indices = model_inputs
-
+ 
          # CPU upper bound on seq_lens; padded entries left at zero.
          num_computed_tokens_np = self.req_states.num_computed_tokens_np[idx_mapping_np]
 @@ -1293,7 +1310,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -123,5 +123,5 @@ index c52c07f6bb..d0e4376969 100644
              self.req_states.total_len.gpu,
 +            next_input_ids=next_input_ids,
          )
-
+ 
          self.model_state.postprocess_state(

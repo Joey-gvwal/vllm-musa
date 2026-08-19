@@ -14,12 +14,12 @@ index 4a65376ca0..abeaaf4c20 100644
 @@ -48,10 +48,15 @@ if current_platform.is_cuda_alike():
      from .fusion.rope_kvcache_fusion import RopeKVCacheFusionPass
      from .utility.scatter_split_replace import ScatterSplitReplacementPass
-
+ 
 -if current_platform.is_cuda():
 +if current_platform.is_cuda() or current_platform.is_musa():
      from .fusion.allreduce_rms_fusion import AllReduceFusionPass
      from .fusion.collective_fusion import AsyncTPPass
-
+ 
 +if current_platform.is_musa():
 +    from vllm_musa._inductor.musa_allreduce_rms_fusion import (
 +        MusaAllReduceRMSNormFusionPass,
@@ -31,7 +31,7 @@ index 4a65376ca0..abeaaf4c20 100644
 @@ -173,6 +178,9 @@ class PostGradPassManager(CustomGraphPass):  # type: ignore[misc]
                  # AR+RMS, since both consume fused_add_rms_norm.
                  self.passes += [RocmAiterTritonAddRMSNormPadFusionPass(config)]
-
+ 
 +            if current_platform.is_musa() and self.pass_config.fuse_allreduce_rms:
 +                self.passes += [MusaAllReduceRMSNormFusionPass(config)]
 +

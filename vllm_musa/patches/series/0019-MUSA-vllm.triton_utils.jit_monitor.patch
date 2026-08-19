@@ -21,7 +21,7 @@ index bb0bb8df9a..05809581dc 100644
 +    except ImportError:
 +        logger.debug("Triton knobs API is unavailable; skipping JIT monitor setup.")
 +        return
-
+ 
      user_val = os.environ.get("TRITON_PRINT_AUTOTUNING")
      if user_val == "0":
 @@ -240,7 +244,11 @@ def _setup_triton_jit_hook() -> None:
@@ -35,5 +35,5 @@ index bb0bb8df9a..05809581dc 100644
 +        logger.debug("Triton knobs API is unavailable; skipping JIT monitor setup.")
 +        return
      from triton.runtime import jit as _triton_jit
-
+ 
      # kernels pass non-JSON-serializable constexprs

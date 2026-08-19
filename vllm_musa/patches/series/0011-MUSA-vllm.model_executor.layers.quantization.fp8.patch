@@ -12,11 +12,11 @@ index 9c69ff93d3..6396a3bf77 100644
 --- a/vllm/model_executor/layers/quantization/fp8.py
 +++ b/vllm/model_executor/layers/quantization/fp8.py
 @@ -142,7 +142,7 @@ class Fp8Config(QuantizationConfig):
-
+ 
      @classmethod
      def get_min_capability(cls) -> int:
 -        return 75
 +        return 31
-
+ 
      @classmethod
      def get_config_filenames(cls) -> list[str]:

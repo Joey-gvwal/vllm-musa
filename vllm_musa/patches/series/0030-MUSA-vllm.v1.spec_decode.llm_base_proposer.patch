@@ -16,10 +16,10 @@ index 29a95caa88..d88cea23da 100644
      replace,
  )
 +from vllm.compilation.cuda_graph import CUDAGraphWrapper
-
+ 
  if TYPE_CHECKING:
      from vllm.v1.spec_decode.vocab_mapping import VocabMapping
-
+ 
  from vllm.distributed.eplb.eplb_state import EplbState
  from vllm.distributed.parallel_state import get_pp_group
 -from vllm.forward_context import set_forward_context
@@ -38,11 +38,11 @@ index 29a95caa88..d88cea23da 100644
 +        self.cudagraph_dispatcher = CudagraphDispatcher(
 +            self.vllm_config, for_draft_model=True
 +        )
-
+ 
          # persistent buffers for cuda graph
          self.input_ids = torch.zeros(
 @@ -533,7 +539,7 @@ class SpecDecodeBaseProposer:
-
+ 
          if self.method in ("eagle3", "dflash"):
              model = self.model
 -            if isinstance(model, BreakableCUDAGraphWrapper):
@@ -53,7 +53,7 @@ index 29a95caa88..d88cea23da 100644
 @@ -566,8 +572,12 @@ class SpecDecodeBaseProposer:
              self.build_per_group_and_layer_attn_metadata(common_attn_metadata)
          )
-
+ 
 -        cudagraph_runtime_mode, num_input_tokens, num_tokens_across_dp = (
 -            self._determine_batch_execution_and_padding(num_tokens)
 +        # / PR #34880: derive uniform_decode locally (PR #34880 plumbs
@@ -63,7 +63,7 @@ index 29a95caa88..d88cea23da 100644
 +        cudagraph_runtime_mode, batch_desc, num_input_tokens, num_tokens_across_dp = (
 +            self._determine_batch_execution_and_padding(num_tokens, uniform_decode)
          )
-
+ 
          model_kwargs, slot_mapping_size = self.build_model_inputs_first_pass(
 @@ -591,6 +601,7 @@ class SpecDecodeBaseProposer:
              num_tokens=num_input_tokens,
@@ -76,7 +76,7 @@ index 29a95caa88..d88cea23da 100644
 @@ -664,14 +675,25 @@ class SpecDecodeBaseProposer:
          # Generate the remaining draft tokens.
          draft_token_ids_list = [draft_token_ids]
-
+ 
 -        cudagraph_runtime_mode, input_batch_size, batch_size_across_dp = (
 -            self._determine_batch_execution_and_padding(batch_size)
 +        # / PR #34880: subsequent decode passes dispatch with
@@ -87,7 +87,7 @@ index 29a95caa88..d88cea23da 100644
 +                batch_size, uniform_decode=True, uniform_decode_query_len=1
 +            )
          )
-
+ 
          common_attn_metadata.num_actual_tokens = batch_size
          common_attn_metadata.max_query_len = 1
 -        common_attn_metadata.query_start_loc = self.arange[: batch_size + 1]
@@ -102,7 +102,7 @@ index 29a95caa88..d88cea23da 100644
 +        common_attn_metadata.query_start_loc_cpu[: batch_size + 1] = torch.from_numpy(
              self.token_arange_np[: batch_size + 1]
          ).clone()
-
+ 
 @@ -750,6 +772,7 @@ class SpecDecodeBaseProposer:
                  num_tokens=input_batch_size,
                  num_tokens_across_dp=batch_size_across_dp,
@@ -113,7 +113,7 @@ index 29a95caa88..d88cea23da 100644
                  ret_hidden_states = self.model(**model_kwargs)
 @@ -1344,6 +1367,29 @@ class SpecDecodeBaseProposer:
          )
-
+ 
          self.model = self._get_model()
 +        # / PR #34880: wrap the draft model with FULL-mode
 +        # CUDAGraphWrapper when target uses FULL captures. CUDAGraphWrapper
@@ -138,7 +138,7 @@ index 29a95caa88..d88cea23da 100644
 +            self.model = CUDAGraphWrapper(
 +                self.model, self.vllm_config, runtime_mode=CUDAGraphMode.FULL
 +            )
-
+ 
          # Find draft layers (attention layers added by draft model)
          all_attn_layers = get_layers_from_vllm_config(
 @@ -1634,22 +1680,63 @@ class SpecDecodeBaseProposer:
@@ -213,13 +213,13 @@ index 29a95caa88..d88cea23da 100644
 +                use_cudagraphs=use_cudagraphs,
 +                uniform_decode_query_len=uniform_decode_query_len,
 +            )
-
+ 
              # Make sure to use EAGLE's own buffer during cudagraph capture.
              if (
 @@ -1661,12 +1733,30 @@ class SpecDecodeBaseProposer:
              else:
                  slot_mapping_dict = slot_mappings or {}
-
+ 
 +            # / PR #34880: build per-layer attn metadata for the
 +            # captured forward so attention backends see the right shape
 +            # at capture time.
@@ -264,13 +264,13 @@ index 29a95caa88..d88cea23da 100644
 +            uniform_decode_query_len=uniform_decode_query_len,
          )
          num_tokens_padded = batch_desc.num_tokens
-
+ 
 @@ -1842,7 +1936,7 @@ class SpecDecodeBaseProposer:
                  assert batch_desc.num_tokens == num_tokens_padded
                  num_tokens_across_dp[dp_rank] = num_tokens_padded
-
+ 
 -        return cudagraph_mode, num_tokens_padded, num_tokens_across_dp
 +        return cudagraph_mode, batch_desc, num_tokens_padded, num_tokens_across_dp
-
-
+ 
+ 
  # NOTE(woosuk): Currently, the below code is not used and we always use argmax

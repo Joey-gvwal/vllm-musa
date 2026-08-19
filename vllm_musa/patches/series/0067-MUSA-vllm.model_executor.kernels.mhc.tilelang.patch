@@ -54,7 +54,7 @@ index c3c773d07f..57f852c60d 100644
 @@ -462,6 +488,29 @@ def mhc_fused_post_pre_tilelang(
          layer_input_cur: shape (..., hidden_size)
      """
-
+ 
 +    # MUSA: same deep_gemm tf32_hc_prenorm_gemm gap as mhc_pre_tilelang. Run the
 +    # post+pre pair through the MUSA MHC provider.
 +    if residual.device.type == "musa":

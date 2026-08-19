@@ -18,8 +18,8 @@ index ca38b437e5..1a46ebe4be 100644
 +++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
 @@ -531,6 +531,19 @@ def _per_token_group_quant_fp8_colmajor(
      tl.store(y_s_ptr, y_s)
-
-
+ 
+ 
 +_MUSA_VEC_QUANT = None
 +
 +
@@ -37,7 +37,7 @@ index ca38b437e5..1a46ebe4be 100644
      x: torch.Tensor,
      group_size: int,
 @@ -599,6 +612,20 @@ def per_token_group_quant_fp8(
-
+ 
      # prefer CUDA/XPU kernel if available
      # TODO(bnell): this causes some fp8 moe test to fail.
 +    # MUSA: register-resident vec kernel for group-128 bf16/fp16 activation quant.

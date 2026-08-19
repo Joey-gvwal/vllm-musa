@@ -14,7 +14,7 @@ index 3413d4a69f..01298768cf 100644
 @@ -643,7 +643,34 @@ def choose_scaled_mm_linear_kernel(
              scope="global",
          )
-
+ 
 -    platform_kernels = possible_kernels.get(current_platform._enum, [])
 +    platform_kernels = possible_kernels.get(current_platform._enum)
 +    if platform_kernels is None and current_platform.is_musa():
@@ -44,6 +44,6 @@ index 3413d4a69f..01298768cf 100644
 +            "ScaledMM linear layer. No kernels are registered for "
 +            f"platform {current_platform._enum.name}."
 +        )
-
+ 
      # Apply --linear-backend filtering when set.
      platform_kernels = _resolve_backend_kernels(platform_kernels, "scaled-mm")

@@ -23,4 +23,4 @@ index 528b623db4..450f23f287 100644
 +            routed._musa_shared_router = self.experts.router
              routed._musa_shared_gate = self.shared_expert_gate
              self.experts.router._musa_num_fused_shared_experts = 1
-
+ 

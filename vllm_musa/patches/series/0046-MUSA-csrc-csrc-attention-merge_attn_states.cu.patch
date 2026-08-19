@@ -18,7 +18,7 @@ index cc89397f68..067acb4dd7 100644
 +#include <c10/cuda/CUDAGuard.h>
  #include <algorithm>
  #include <limits>
-
+ 
 -#include "../torch_utils.h"
 -#include "../dispatch_utils.h"
 -#include <torch/headeronly/core/ScalarType.h>
@@ -28,9 +28,9 @@ index cc89397f68..067acb4dd7 100644
 -#include "../../quantization/w8a8/fp8/common.cuh"
 +#include "quantization/w8a8/fp8/common.cuh"
 +#include "../../dispatch_utils.h"
-
+ 
  namespace vllm {
-
+ 
 @@ -205,17 +205,17 @@ __global__ void merge_attn_states_kernel(
  // The following macro is used to dispatch the conversion function based on
  // the output data type. The FN is a macro that calls a function with
@@ -58,7 +58,7 @@ index cc89397f68..067acb4dd7 100644
 +      TORCH_CHECK(false, "Unsupported data type of O: ", scalar_dtype); \
 +    }                                                                   \
    }
-
+ 
  #define LAUNCH_MERGE_ATTN_STATES(scalar_t, output_t, NUM_THREADS,           \
 @@ -257,14 +257,11 @@ __global__ void merge_attn_states_kernel(
   */
@@ -87,7 +87,7 @@ index cc89397f68..067acb4dd7 100644
 -                  "headsize must be multiple of pack_size:", pack_size);
 +  TORCH_CHECK(head_size % pack_size == 0,
 +              "headsize must be multiple of pack_size:", pack_size);
-
+ 
    const uint prefix_num_tokens =
        prefill_tokens_with_context.has_value()
            ? static_cast<uint>(prefill_tokens_with_context.value())
@@ -96,7 +96,7 @@ index cc89397f68..067acb4dd7 100644
 -                  "prefix_num_tokens must be <= num_tokens");
 +  TORCH_CHECK(prefix_num_tokens <= num_tokens,
 +              "prefix_num_tokens must be <= num_tokens");
-
+ 
    float* output_lse_ptr = nullptr;
    if (output_lse.has_value()) {
 -    output_lse_ptr = output_lse.value().mutable_data_ptr<float>();
@@ -112,13 +112,13 @@ index cc89397f68..067acb4dd7 100644
 @@ -312,15 +309,14 @@ void merge_attn_states_launcher(
    dim3 block(NUM_THREADS);
    dim3 grid((total_threads + NUM_THREADS - 1) / NUM_THREADS);
-
+ 
 -  const torch::stable::accelerator::DeviceGuard device_guard(
 -      prefix_output.get_device_index());
 -  auto stream = get_current_cuda_stream();
 +  const c10::cuda::OptionalCUDAGuard device_guard(prefix_output.device());
 +  auto stream = at::cuda::getCurrentCUDAStream();
-
+ 
    if (output_scale.has_value()) {
      // FP8 output path - dispatch on output FP8 type
 -    VLLM_STABLE_DISPATCH_FP8_TYPES(
@@ -133,7 +133,7 @@ index cc89397f68..067acb4dd7 100644
 @@ -334,29 +330,26 @@ void merge_attn_states_launcher(
          suffix_lse, prefill_tokens_with_context, output_scale);       \
    }
-
+ 
 -void merge_attn_states(
 -    torch::stable::Tensor& output,
 -    std::optional<torch::stable::Tensor> output_lse,

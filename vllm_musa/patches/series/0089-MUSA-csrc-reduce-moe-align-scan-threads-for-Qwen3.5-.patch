@@ -18,7 +18,7 @@ index 70410120f4..4e9819d657 100644
 @@ -94,7 +94,7 @@ __device__ __forceinline__ int get_local_expert_id(
    return expert_id;
  }
-
+ 
 -template <typename scalar_t>
 +template <typename scalar_t, int32_t block_threads = 1024>
  __device__ void _moe_align_block_size(
@@ -26,17 +26,17 @@ index 70410120f4..4e9819d657 100644
      int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
 @@ -152,7 +152,7 @@ __device__ void _moe_align_block_size(
    __syncthreads();
-
+ 
    // Compute prefix sum over token counts per expert
 -  using BlockScan = cub::BlockScan<int32_t, 1024>;
 +  using BlockScan = cub::BlockScan<int32_t, block_threads>;
    __shared__ typename BlockScan::TempStorage temp_storage;
-
+ 
    int expert_count = 0;
 @@ -319,7 +319,7 @@ __device__ void _count_and_sort_expert_tokens(
    }
  }
-
+ 
 -template <typename scalar_t>
 +template <typename scalar_t, int32_t block_threads = 1024>
  __global__ void moe_align_block_size_kernel(
@@ -61,7 +61,7 @@ index 70410120f4..4e9819d657 100644
 +  // e256 needs one lane beyond the last expert to materialize the final
 +  // prefix sum. 288 is the smallest warp-aligned block that provides it.
 +  constexpr int32_t small_batch_e256_threads = 288;
-
+ 
    // BlockScan uses 1024 threads and assigns one thread per expert.
    TORCH_CHECK(padded_num_experts < 1024,
 @@ -678,7 +680,12 @@ void moe_align_block_size(
@@ -75,7 +75,7 @@ index 70410120f4..4e9819d657 100644
 +          const int32_t threads = small_batch_e256_mode
 +                                      ? small_batch_e256_threads
 +                                      : default_threads;
-
+ 
            size_t num_warps = CEILDIV(padded_num_experts, experts_per_warp);
            size_t shared_mem_size =
 @@ -687,15 +694,34 @@ void moe_align_block_size(
@@ -119,6 +119,6 @@ index 70410120f4..4e9819d657 100644
 +                topk_ids.numel(), cumsum_buffer.data_ptr<int32_t>(),
 +                sorted_token_ids.size(0), topk_ids.size(1), has_expert_map);
 +          }
-
+ 
            const int block_threads = std::min(256, (int)threads);
            const int num_blocks =

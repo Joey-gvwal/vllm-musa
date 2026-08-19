@@ -16,7 +16,7 @@ index de341d302a..b58406c7af 100644
 @@ -24,6 +24,7 @@
  # limitations under the License.
  """Inference-only Qwen3VL model compatible with HuggingFace weights."""
-
+ 
 +import os
  from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
  from functools import lru_cache, partial
@@ -24,15 +24,15 @@ index de341d302a..b58406c7af 100644
 @@ -48,6 +49,7 @@ from transformers.models.qwen3_vl.video_processing_qwen3_vl import (
  )
  from transformers.video_utils import VideoMetadata
-
+ 
 +from vllm.compilation import monitor as compilation_monitor
  from vllm.compilation.decorators import (
      should_torch_compile_mm_encoder,
      support_torch_compile,
 @@ -499,6 +501,218 @@ class Qwen3_VisionBlock(nn.Module):
          return x
-
-
+ 
+ 
 +class _Qwen3VisionBlockGraphRunner:
 +    """Capture stable Qwen3 ViT blocks and mergers for MUSA replay."""
 +
@@ -253,11 +253,11 @@ index de341d302a..b58406c7af 100644
              ]
          )
 +        self._musa_vision_graph_runner: _Qwen3VisionBlockGraphRunner | None = None
-
+ 
      @property
      def dtype(self) -> torch.dtype:
 @@ -859,6 +1074,16 @@ class Qwen3_VisionTransformer(nn.Module):
-
+ 
          pos_embeds = encoder_metadata["pos_embeds"]
          hidden_states = hidden_states + pos_embeds
 +
@@ -271,5 +271,5 @@ index de341d302a..b58406c7af 100644
 +                return graph_output
 +
          hidden_states = hidden_states.unsqueeze(1)
-
+ 
          deepstack_feature_lists = []

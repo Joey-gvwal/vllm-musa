@@ -12,7 +12,7 @@ index fbe839cd42..1e497ddb75 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
 @@ -141,6 +141,13 @@ class DeepseekV4MLP(nn.Module):
-
+ 
      def forward(self, x):
          gate_up, _ = self.gate_up_proj(x)
 +        if isinstance(self.act_fn, SiluAndMulWithClamp):

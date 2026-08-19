@@ -16,7 +16,7 @@ index b924899c31..98d034242f 100644
 @@ -2120,6 +2120,48 @@ class SparseAttnIndexer(CustomOp):
                  "CUDA, ROCm and XPU platforms."
              )
-
+ 
 +    def uses_musa_recent_indices(self) -> bool:
 +        """Whether this capture uses the MUSA recent-window approximation."""
 +        return (
@@ -67,7 +67,7 @@ index b217132b23..38eba76ae4 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -470,8 +470,15 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
-
+ 
          # Keep the attention input preparation in the captured graph. Only the
          # sparse indexer and MLA attention run in the eager break below.
 +        use_musa_recent_indexer = (
@@ -90,7 +90,7 @@ index b217132b23..38eba76ae4 100644
 +            use_musa_recent_indexer,
          )
          o = o_padded[:, : self.n_local_heads, :]
-
+ 
 @@ -505,9 +513,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          kv: torch.Tensor,
          kv_score: torch.Tensor,
@@ -102,14 +102,14 @@ index b217132b23..38eba76ae4 100644
 +        use_musa_recent_indexer: bool,
      ) -> None:
          """Wide eager region: the whole of ``_prepare_and_attn`` runs eagerly.
-
+ 
 @@ -523,6 +532,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              indexer_weights,
              positions,
              o_padded,
 +            use_musa_recent_indexer,
          )
-
+ 
      def _prepare_and_attn(
 @@ -532,9 +542,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          kv: torch.Tensor,
@@ -122,7 +122,7 @@ index b217132b23..38eba76ae4 100644
 +        use_musa_recent_indexer: bool,
      ) -> None:
          """Attention input preparation followed by the sparse indexer and MLA.
-
+ 
 @@ -558,25 +569,49 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          # indexer. ROCm runs the same work sequentially without aux streams.
          if indexer is not None:
@@ -194,7 +194,7 @@ index b217132b23..38eba76ae4 100644
              q, _ = maybe_execute_in_parallel(
 @@ -608,7 +643,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          return qr_kv
-
+ 
      def _run_parallel_input_projections(
 -        self, hidden_states: torch.Tensor
 +        self,
@@ -207,16 +207,16 @@ index b217132b23..38eba76ae4 100644
 @@ -654,7 +692,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                      torch.float32,
                  )
-
+ 
 -            aux_fns[1] = indexer_weights_proj
 +            aux_fns[1] = None if skip_indexer_weights else indexer_weights_proj
              aux_fns[2] = indexer_compressor_kv_score
-
+ 
          qr_kv, (kv_score, indexer_weights, indexer_kv_score) = execute_in_parallel(
 @@ -1001,6 +1039,20 @@ class DeepseekV4Indexer(nn.Module):
              torch.cuda.Event(),
          ]
-
+ 
 +    def forward_musa_recent(
 +        self,
 +        hidden_states: torch.Tensor,
@@ -243,19 +243,19 @@ index 480e71fe20..9b5bd73118 100644
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 +import os
  from dataclasses import dataclass
-
+ 
  import torch
 @@ -470,6 +471,8 @@ class DeepseekV32IndexerMetadata:
-
+ 
      decode: DeepSeekV32IndexerDecodeMetadata | None = None
      prefill: DeepseekV32IndexerPrefillMetadata | None = None
 +    recent_indices: torch.Tensor | None = None
 +    recent_indices_ready: bool = False
-
-
+ 
+ 
  def get_max_prefill_buffer_size(vllm_config: VllmConfig):
 @@ -525,6 +528,7 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
-
+ 
      def __init__(self, *args, block_table_width: int, **kwargs) -> None:
          super().__init__(*args, **kwargs)
 +        self.model_config = self.vllm_config.model_config
@@ -282,7 +282,7 @@ index 480e71fe20..9b5bd73118 100644
 @@ -1071,6 +1085,16 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
                  global_seq_lens=global_seq_lens_for_decode,
              )
-
+ 
 +        recent_indices = None
 +        if self.recent_indices_buffer is not None:
 +            recent_indices = self._build_recent_indices(
@@ -303,9 +303,9 @@ index 480e71fe20..9b5bd73118 100644
 +            recent_indices=recent_indices,
 +            recent_indices_ready=False,
          )
-
+ 
          return attn_metadata
-
+ 
 +    def _build_recent_indices(
 +        self,
 +        num_tokens: int,
@@ -359,6 +359,6 @@ index 480e71fe20..9b5bd73118 100644
 +                )
 +        return out
 +
-
+ 
  def build_prefill_chunk_metadata(
      start_idx: int,

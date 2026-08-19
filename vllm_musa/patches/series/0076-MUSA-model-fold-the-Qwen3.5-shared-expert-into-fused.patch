@@ -25,8 +25,8 @@ index b241baca6c..13316eff78 100644
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -110,6 +110,39 @@ def _is_shared_expert_fse_compatible(quant_config) -> bool:
      return not any("shared_expert." in str(e) for e in exclude)
-
-
+ 
+ 
 +def _musa_linear_is_block_fp8(linear: nn.Module) -> bool:
 +    method = getattr(linear, "quant_method", None)
 +    if method is None or not getattr(method, "block_quant", False):
@@ -66,7 +66,7 @@ index b241baca6c..13316eff78 100644
 @@ -179,8 +212,31 @@ class Qwen3NextSparseMoeBlock(nn.Module):
                  prefix=f"{prefix}.shared_expert",
              )
-
+ 
 +        # MUSA: fold the shared expert into the routed grouped GEMM as one extra
 +        # always-selected slot instead of running it as a separate serial MLP.
 +        # Needs matching shared/routed intermediate sizes and a shared expert whose
@@ -104,7 +104,7 @@ index b241baca6c..13316eff78 100644
 +            if self.shared_expert is None or self._musa_shared_fold
              else None,
          )
-
+ 
 +        if self._musa_shared_fold:
 +            routed = getattr(self.experts, "routed_experts", self.experts)
 +            routed._musa_shared_mlp = self.shared_expert

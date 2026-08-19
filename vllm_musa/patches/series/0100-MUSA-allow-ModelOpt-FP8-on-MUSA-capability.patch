@@ -12,11 +12,11 @@ index e24c5656ad..8b29a1d0e1 100644
 --- a/vllm/model_executor/layers/quantization/modelopt.py
 +++ b/vllm/model_executor/layers/quantization/modelopt.py
 @@ -403,7 +403,7 @@ class ModelOptFp8Config(ModelOptQuantConfigBase):
-
+ 
      @classmethod
      def get_min_capability(cls) -> int:
 -        return 80
 +        return 31
-
+ 
      @classmethod
      def override_quantization_method(

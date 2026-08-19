@@ -22,6 +22,6 @@ index 5f9e763af0..3a1d202b2a 100644
 +        return ir.ops.fused_add_rms_norm.maybe_inplace(
 +            x, residual, weight, self.variance_epsilon
 +        )
-
+ 
      def forward_cuda(
          self,

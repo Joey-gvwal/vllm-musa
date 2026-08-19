@@ -14,7 +14,7 @@ index ce4a85cfef..b8f7564fe2 100644
 @@ -34,6 +34,21 @@ logger = init_logger(__name__)
  is_batch_invariant = envs.VLLM_BATCH_INVARIANT
  float8_info = torch.finfo(current_platform.fp8_dtype())
-
+ 
 +# Resolve the in-kernel tensor-descriptor builtin once at import. The TD load
 +# helpers reference this module-level name (not ``tl.make_tensor_descriptor``
 +# directly) so the Triton JIT cache-key AST walk resolves a real symbol even on
@@ -30,7 +30,7 @@ index ce4a85cfef..b8f7564fe2 100644
 +    def make_tensor_descriptor(base, shape, strides, block_shape, _builder=None):
 +        return None
 +
-
+ 
  @triton.jit
  def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
 @@ -98,7 +113,7 @@ def _load_q_td(

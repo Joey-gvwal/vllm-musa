@@ -18,7 +18,7 @@ index a78d1369d8..4946c25470 100644
          expanded_local_pos = input_batch.expanded_local_pos
 -        pos = input_batch.positions[input_batch.logits_indices]
 -        input_ids = input_batch.input_ids[input_batch.logits_indices]
-
+ 
          # NOTE(woosuk): We intentionally compute num_nans before sampling to make clear
          # that num_nans is computed before applying penalties and temperature.
 @@ -116,6 +114,23 @@ class Sampler:
@@ -42,6 +42,6 @@ index a78d1369d8..4946c25470 100644
 +            input_ids = input_batch.input_ids[input_batch.logits_indices]
 +        else:
 +            pos, input_ids = sample_inputs
-
+ 
          sampled, processed_logits = self.sample(
              logits,

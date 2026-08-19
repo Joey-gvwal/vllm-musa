@@ -36,7 +36,7 @@ index 0a930b8183..0ba54d6815 100644
      expanded_idx_mapping_ptr,
 @@ -139,10 +140,10 @@ def gumbel_block_argmax(
          gumbel_seed = tl.randint(seed, pos)
-
+ 
          if USE_FP64:
 -            u = tl_rand64(gumbel_seed, block, includes_zero=False)
 +            u = tl_rand64(gumbel_seed, rng_block, includes_zero=False)
@@ -79,7 +79,7 @@ index 0a930b8183..0ba54d6815 100644
 +    token_id = vocab_start_index + block_idx * BLOCK_SIZE + idx
      tl.store(local_argmax_ptr + token_idx * local_argmax_stride + block_idx, token_id)
      tl.store(local_max_ptr + token_idx * local_max_stride + block_idx, value)
-
+ 
 @@ -222,7 +226,9 @@ def gumbel_sample(
      logits_cache: torch.Tensor | None = None,  # [max_num_reqs, num_cols, vocab_size]
      logits_cache_col: torch.Tensor | None = None,  # scalar or [num_tokens]
@@ -165,6 +165,6 @@ index abaa843373..dbd2724864 100644
 +                    else:
 +                        self.sampler._musa_qwen_sharded_logits = False
 +                        logits = self.model.compute_logits(sample_hidden_states)
-
+ 
                  model_output_broadcast_data: dict[str, Any] = {}
                  if logits is not None:

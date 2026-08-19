@@ -25,9 +25,9 @@ index aa2c1b6b92..941b14d6ec 100644
              input.const_data_ptr<scalar_t>(), d, LIMIT, ALPHA, BETA);          \
        });                                                                      \
 @@ -332,6 +333,7 @@ void gelu_tanh_and_mul(torch::stable::Tensor& out,    // [..., d]
-
+ 
  namespace vllm {
-
+ 
 +#ifndef USE_MUSA  // fatrelu/swigluoai kernels crash mcc
  template <typename T>
  __device__ __forceinline__ T fatrelu_kernel(const T& x, const float threshold) {
@@ -37,13 +37,13 @@ index aa2c1b6b92..941b14d6ec 100644
    }
  }
 +#endif  // !USE_MUSA
-
+ 
  // SITU (Kimi SituGLU) gated activation. Non-interleaved layout:
  // input = [gate(d), up(d)] per token.
 @@ -528,6 +531,7 @@ __global__ void masked_situ_and_mul_kernel(
-
+ 
  }  // namespace vllm
-
+ 
 +#ifndef USE_MUSA  // fatrelu/swigluoai kernels crash mcc
  #define LAUNCH_ACTIVATION_GATE_KERNEL_WITH_PARAM(KERNEL, PACKED_KERNEL, PARAM) \
    auto dtype = input.scalar_type();                                            \
@@ -53,7 +53,7 @@ index aa2c1b6b92..941b14d6ec 100644
    LAUNCH_SIGLUOAI_AND_MUL(vllm::swigluoai_and_mul, alpha, limit);
  }
 +#endif  // !USE_MUSA
-
+ 
  // Kimi SITU gated activation. `linear_beta <= 0` means "unset" (up passed
  // through), matching SituAndMul(linear_beta=None) on the Python side.
 @@ -737,7 +742,8 @@ __global__ void activation_kernel(
@@ -73,7 +73,7 @@ index a140a043c2..2afdd15fb6 100644
 @@ -304,10 +304,10 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
    int* s_expert_offsets =
        reinterpret_cast<int*>(smem_128 + (SMEM_SIZE_BYTES_Y / 16));
-
+ 
 -  static constexpr __nv_bfloat16 fp8_min = get_fp8_min<fp8_type>();
 -  static constexpr __nv_bfloat16 fp8_max = get_fp8_max<fp8_type>();
 -  // We assign EPS with it's 16-bit unsigned counterpart to allow constexpr.
@@ -91,7 +91,7 @@ index d0ab455224..1ec9d8af90 100644
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
 @@ -184,10 +184,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "bool");
-
+ 
    // CUTLASS nvfp4 block scaled GEMM
 +#ifndef USE_MUSA
    ops.def(
@@ -99,12 +99,12 @@ index d0ab455224..1ec9d8af90 100644
        "                      Tensor block_scale_a, Tensor block_scale_b,"
        "                      Tensor alpha) -> ()");
 +#endif
-
+ 
    // cutlass nvfp4 block scaled group GEMM
    ops.def(
 @@ -202,10 +204,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        " Tensor problem_sizes, Tensor expert_offsets, Tensor sf_offsets) -> ()");
-
+ 
    // Compute NVFP4 block quantized tensor.
 +#ifndef USE_MUSA
    ops.def(
@@ -112,7 +112,7 @@ index d0ab455224..1ec9d8af90 100644
        "                 Tensor input_scale, bool "
        "is_sf_swizzled_layout) -> (Tensor, Tensor)");
 +#endif
-
+ 
    // Out variant
    // TODO: Add out_variant tag once PyTorch supports it (added in 2.11)
 @@ -215,24 +219,30 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
@@ -126,7 +126,7 @@ index d0ab455224..1ec9d8af90 100644
        "is_sf_swizzled_layout, *, Tensor(a!) output, Tensor(b!) output_scale) "
        "-> ()");
 +#endif
-
+ 
    // Compute NVFP4 experts quantization.
 +#ifndef USE_MUSA
    ops.def(
@@ -134,7 +134,7 @@ index d0ab455224..1ec9d8af90 100644
        "Tensor input, Tensor input_global_scale, Tensor input_offset_by_experts,"
        "Tensor output_scale_offset_by_experts) -> ()");
 +#endif
-
+ 
    // Fused SiLU+Mul+NVFP4 experts quantization.
 +#ifndef USE_MUSA
    ops.def(
@@ -143,24 +143,24 @@ index d0ab455224..1ec9d8af90 100644
        "Tensor input, Tensor input_global_scale, Tensor input_offset_by_experts,"
        "Tensor output_scale_offset_by_experts) -> ()");
 +#endif
-
+ 
    // Compute MXFP4 experts quantization (32-element blocks, E8M0 SFs).
    ops.def(
 @@ -248,9 +258,11 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
        "Tensor output_scale_offset_by_experts, int n_experts) -> ()");
-
+ 
    // Fused SiLU+Mul+NVFP4 quantization.
 +#ifndef USE_MUSA
    ops.def(
        "silu_and_mul_nvfp4_quant(Tensor! result, Tensor! result_block_scale, "
        "Tensor input, Tensor input_global_scale) -> ()");
 +#endif
-
+ 
    // Check if cutlass_scaled_mm_fp4 is supported for CUDA devices
    // of the given capability
 @@ -511,6 +523,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
  #endif
-
+ 
    // Horizontally-fused MiniMax-M3 QK-norm + partial NeoX RoPE + KV-insert.
 +#ifndef USE_MUSA
    ops.def(
@@ -171,22 +171,22 @@ index d0ab455224..1ec9d8af90 100644
        "str kv_cache_dtype, bool skip_index_branch=False, "
        "Tensor!? q_fp8_out=None, float q_fp8_scale=1.0) -> ()");
 +#endif
-
+ 
  #ifdef VLLM_ENABLE_FUSED_KDA_DECODE
    ops.def(
 @@ -606,12 +620,14 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
    ops.def("gelu_tanh_and_mul(Tensor! out, Tensor input) -> ()");
-
+ 
    // FATReLU implementation.
 +#ifndef USE_MUSA
    ops.def("fatrelu_and_mul(Tensor! out, Tensor input, float threshold) -> ()");
-
+ 
    ops.def(
        "swigluoai_and_mul(Tensor! out, Tensor input, float alpha=1.702, float "
        "limit=7.0) "
        "-> ()");
 +#endif
-
+ 
    // SituGLU implementation used in Kimi models.
    ops.def(
 @@ -1071,18 +1087,37 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {

@@ -13,7 +13,7 @@ index 296978f384..f28775521a 100644
 +++ b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 @@ -1,7 +1,6 @@
  #pragma once
-
+ 
  #include "../../../../attention/attention_dtypes.h"
 -#include <torch/headeronly/core/ScalarType.h>
  #include <assert.h>
@@ -71,5 +71,5 @@ index 296978f384..f28775521a 100644
 -      STD_TORCH_CHECK(false, "Unsupported data type of kv cache: ", KV_DTYPE); \
 +      TORCH_CHECK(false, "Unsupported data type of kv cache: ", KV_DTYPE);     \
      }
-
+ 
  }  // namespace fp8

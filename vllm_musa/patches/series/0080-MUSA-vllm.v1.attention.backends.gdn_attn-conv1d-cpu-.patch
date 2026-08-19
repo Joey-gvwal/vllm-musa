@@ -21,7 +21,7 @@ index e0319acdcb..4e38d3ffcc 100644
 +    # MUSA: CPU copy of non_spec_query_start_loc so the tilelang conv1d wrapper
 +    # derives seq_lens without a per-call device->host sync.
 +    non_spec_query_start_loc_cpu: torch.Tensor | None = None
-
+ 
      spec_state_indices_tensor: torch.Tensor | None = None  # shape: [batch, num_spec]
      non_spec_state_indices_tensor: torch.Tensor | None = (
 @@ -516,6 +519,7 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]

@@ -13,8 +13,8 @@ index 2f56d0fc7c..9b8f448315 100644
 +++ b/vllm/profiler/wrapper.py
 @@ -162,11 +162,12 @@ class WorkerProfiler(ABC):
          return nullcontext()
-
-
+ 
+ 
 -TorchProfilerActivity = Literal["CPU", "CUDA", "PrivateUse1", "XPU"]
 +TorchProfilerActivity = Literal["CPU", "CUDA", "PrivateUse1", "MUSA", "XPU"]
  TorchProfilerActivityMap = {
@@ -24,4 +24,4 @@ index 2f56d0fc7c..9b8f448315 100644
 +    "MUSA": torch.profiler.ProfilerActivity.MUSA,
      "XPU": torch.profiler.ProfilerActivity.XPU,
  }
-
+ 

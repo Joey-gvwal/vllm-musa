@@ -13,7 +13,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
 +++ b/csrc/custom_all_reduce.cuh
 @@ -1,25 +1,292 @@
  #pragma once
-
+ 
 -#include "custom_collective_common.cuh"
 +#include <cuda.h>
 +#include <cuda_bf16.h>
@@ -26,9 +26,9 @@ index 385a0e0ae7..1cf56b6ad5 100644
 +#include <map>
 +#include <unordered_map>
 +#include <vector>
-
+ 
  namespace vllm {
-
+ 
 +constexpr int kMaxCustomCollectiveRanks = 8;
 +
 +#define CHECK_CUDA_SUCCESS(cmd)                                     \
@@ -310,12 +310,12 @@ index 385a0e0ae7..1cf56b6ad5 100644
 -  barrier_at_end<ngpus, true>(sg, self_sg, rank);
 +  multi_gpu_barrier<ngpus, false>(sg, self_sg, rank);
  }
-
+ 
  template <typename P>
 @@ -27,10 +294,132 @@ DINLINE P* get_tmp_buf(Signal* sg) {
    return (P*)(((Signal*)sg) + 1);
  }
-
+ 
 +template <typename T, int32_t nranks, int32_t vlen = 8>
 +DINLINE void shfl_reduce(float *res) {
 +  if constexpr (nranks >= 4) {
@@ -461,7 +461,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
    }
 -  barrier_at_end<ngpus>(sg, self_sg, rank);
 +  multi_gpu_barrier<ngpus, false, true>(sg, self_sg, rank);
-
+ 
    // stage 2: allgather. Note: it's important to match the tid between
    // the two stages, because visibility across devices is only guaranteed
    // between threads that have the same tid. If thread i computes the sum of
@@ -480,14 +480,14 @@ index 385a0e0ae7..1cf56b6ad5 100644
 -  // Full NVLink or xGMI connection between GPUs.
 -  bool fully_connected_;
 +  bool full_nvlink_;
-
+ 
    RankSignals sg_;
 -  // Stores a map from a pointer to its peer pointers from all ranks.
 +  // Stores an map from a pointer to its peer pointters from all ranks.
    std::unordered_map<void*, RankData*> buffers_;
    Signal* self_sg_;
 +  FlagType round;
-
+ 
    // Stores rank data from all ranks. This is mainly for cuda graph purposes.
    // For cuda graph to work, all kernel arguments must be fixed during graph
 -  // capture time. However, the peer pointers are not known during graph
@@ -535,7 +535,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
        sg_.signals[i] = signals[i];
      }
    }
-
+ 
    char* open_ipc_handle(const void* ipc_handle) {
 -    auto [it, new_handle] =
 -        ipc_handles_.insert({*((IPC_KEY*)ipc_handle), nullptr});
@@ -572,7 +572,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
 -          std::to_string(d_rank_data_base_ + num - d_rank_data_end_));
 +          "Rank data buffer is overflowed by " + std::to_string(d_rank_data_base_ + num - d_rank_data_end_));
    }
-
+ 
    /**
 @@ -185,21 +567,19 @@ class CustomAllreduce {
        data.ptrs[i] = ptrs[i];
@@ -583,7 +583,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
 +    CHECK_CUDA_SUCCESS(cudaMemcpy(d_data, &data, sizeof(RankData), cudaMemcpyHostToDevice));
      buffers_[ptrs[rank_]] = d_data;
    }
-
+ 
    // Note: when registering graph buffers, we intentionally choose to not
    // deduplicate the addresses. That means if the allocator reuses some
 -  // addresses, they will be registered again. This is to account for the
@@ -657,7 +657,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
 -                               std::to_string(block_limit));
 +      throw std::runtime_error(
 +          "max supported block limit is " + std::to_string(kMaxBlocks) + ". Got " + std::to_string(block_limit));
-
+ 
      RankData* ptrs;
      cudaStreamCaptureStatus status;
 -    CUDACHECK(cudaStreamIsCapturing(stream, &status));
@@ -675,7 +675,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
 +            "buffer address " + std::to_string(reinterpret_cast<uint64_t>(input)) + " is not registered!");
        ptrs = it->second;
      }
-
+ 
      size /= d;
      auto bytes = size * sizeof(typename packed_t<T>::P);
      int blocks = std::min(block_limit, (size + threads - 1) / threads);
@@ -763,7 +763,7 @@ index 385a0e0ae7..1cf56b6ad5 100644
              std::to_string(world_size_));
      }
 @@ -342,7 +700,7 @@ class CustomAllreduce {
-
+ 
    ~CustomAllreduce() {
      for (auto [_, ptr] : ipc_handles_) {
 -      CUDACHECK(cudaIpcCloseMemHandle(ptr));

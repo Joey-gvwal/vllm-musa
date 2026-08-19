@@ -14,20 +14,20 @@ index d94b377dbe..b924899c31 100644
 @@ -2,9 +2,12 @@
  # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
  """Custom Sparse Attention Indexer layers."""
-
+ 
 +import os
 +
  import torch
-
+ 
  import vllm.envs as envs
 +from vllm_musa import _custom_ops as _musa_custom_ops
  from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
 @@ -39,6 +42,1291 @@ from vllm.v1.worker.workspace import current_workspace_manager
-
+ 
  logger = init_logger(__name__)
-
+ 
 +
 +def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
 +    for module_name in ("musa", "cuda"):
@@ -1314,7 +1314,7 @@ index d94b377dbe..b924899c31 100644
 +    return topk_indices_buffer
 +
  RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
-
+ 
  # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
 @@ -750,6 +2038,7 @@ class SparseAttnIndexer(CustomOp):
          topk_indices_buffer: torch.Tensor,

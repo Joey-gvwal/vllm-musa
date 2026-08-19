@@ -47,7 +47,7 @@ index 98d034242f..5f41c86307 100644
 +        allow_deepseek_v4_materialized,
      ):
          return True
-
+ 
 @@ -1212,6 +1217,7 @@ def _musa_fill_exact_sparse_indexer_indices(
      max_model_len: int,
      topk_indices_buffer: torch.Tensor,
@@ -124,7 +124,7 @@ index 38eba76ae4..0b80883196 100644
 @@ -1018,6 +1018,22 @@ class DeepseekV4Indexer(nn.Module):
              eager_scratch_pool=eager_scratch_pool,
          )
-
+ 
 +        use_musa_native_indexer = False
 +        use_musa_materialized_prefill = False
 +        if current_platform.is_musa():
@@ -152,7 +152,7 @@ index 38eba76ae4..0b80883196 100644
 +            use_musa_native_indexer=use_musa_native_indexer,
 +            use_musa_materialized_prefill=use_musa_materialized_prefill,
          )
-
+ 
          # None on ROCm — maybe_execute_in_parallel falls back to sequential.
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
 index 1e497ddb75..0e9571b805 100644

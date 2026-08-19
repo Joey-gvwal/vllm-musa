@@ -14,7 +14,7 @@ index be4930052a..181e3bb1f6 100644
 @@ -1845,9 +1845,9 @@ def fused_experts_impl(
          B_bias=w2_bias,
      )
-
+ 
 -    ops.moe_sum(
 -        intermediate_cache3.view(*intermediate_cache3.size()),
 -        out_hidden_states,
@@ -23,5 +23,5 @@ index be4930052a..181e3bb1f6 100644
 +    from vllm_musa.jit_kernel.csrc.moe import maybe_fast_moe_sum
 +    if not maybe_fast_moe_sum(_ic3, out_hidden_states):
 +        ops.moe_sum(_ic3, out_hidden_states)
-
+ 
      return out_hidden_states

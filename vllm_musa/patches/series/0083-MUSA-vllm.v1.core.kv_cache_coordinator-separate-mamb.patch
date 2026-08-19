@@ -27,7 +27,7 @@ index 8efaf9252e..bf9c8d5ac5 100644
 @@ -102,6 +104,21 @@ class KVCacheCoordinator(ABC):
              metrics_collector=metrics_collector,
          )
-
+ 
 +        # Dedicated non-caching pools keep Mamba block IDs within the smaller
 +        # state allocations recorded by the MUSA KV-cache config.
 +        self.musa_mamba_block_pools: dict[int, BlockPool] = {}
@@ -67,7 +67,7 @@ index 8efaf9252e..bf9c8d5ac5 100644
                  # For cross-attention, we issue a single static allocation
                  # of blocks based on the number of encoder input tokens.
 @@ -666,7 +687,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
-
+ 
              # Try to find an existing group with the same spec
              for idx, group in enumerate(self.attention_groups):
 -                if group.spec == spec:
@@ -88,7 +88,7 @@ index 8efaf9252e..bf9c8d5ac5 100644
                      alignment_tokens=self._cache_hit_alignment_tokens,
 @@ -896,11 +919,12 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
          hit_lengths: list[int] = [0] * num_groups
-
+ 
          for spec, group_ids, manager_cls, use_eagle in self.attention_groups:
 +            first_group_id = group_ids[0]
              blocks, group_hit = manager_cls.find_longest_cache_hit(
@@ -105,8 +105,8 @@ index 8a3e5fe548..85c54aa5a0 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1395,9 +1395,13 @@ _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
-
-
+ 
+ 
  def musa_mamba_separate_pool_enabled() -> bool:
 -    """MUSA: give mamba state its own contiguous BlockPool so mate's GDN
 -    decode runs in place (no gather/scatter)."""
@@ -118,13 +118,13 @@ index 8a3e5fe548..85c54aa5a0 100644
 +        return False
 +    is_musa = getattr(current_platform, "is_musa", None)
 +    return callable(is_musa) and is_musa()
-
-
+ 
+ 
  def _musa_has_mamba_and_attention(kv_cache_groups) -> bool:
 @@ -1406,13 +1410,22 @@ def _musa_has_mamba_and_attention(kv_cache_groups) -> bool:
      return has_mamba and has_attn
-
-
+ 
+ 
 +def _musa_separate_pool_eligible(vllm_config, kv_cache_groups) -> bool:
 +    # KV connectors can defer frees through the coordinator's shared-pool API;
 +    # keep the upstream shared-pool layout until that API carries pool ownership.
@@ -137,7 +137,7 @@ index 8a3e5fe548..85c54aa5a0 100644
 +
  def _musa_separated_mamba_attn_tensors(vllm_config, kv_cache_groups, available_memory):
      """Split KV memory into a small contiguous mamba pool and the attention pool.
-
+ 
 -    Mamba groups get one dedicated tensor per layer (segregated-contiguous,
 -    indexed by their own block-id space); the mamba pool is sized from the
 -    MambaSpec admission bound so it never binds (attention admission caps
@@ -160,7 +160,7 @@ index 8a3e5fe548..85c54aa5a0 100644
          kv_cache_tensors, num_blocks, musa_mamba_num_blocks = (
              _musa_separated_mamba_attn_tensors(
 @@ -1944,6 +1955,7 @@ def get_kv_cache_groups(
-
+ 
      if (
          musa_mamba_separate_pool_enabled()
 +        and vllm_config.kv_transfer_config is None

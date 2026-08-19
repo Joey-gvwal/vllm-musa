@@ -19,4 +19,4 @@ index c84a495859..bbba514ada 100644
 +    if current_platform.get_device_capability()[0] != 3:
          return False, "FlashMLA Dense is only supported on Hopper devices."
      return True, None
-
+ 

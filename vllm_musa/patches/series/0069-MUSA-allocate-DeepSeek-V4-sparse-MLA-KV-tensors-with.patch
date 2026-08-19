@@ -14,8 +14,8 @@ index ad51e4b2b3..e8abd1e9b3 100644
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1271,6 +1271,27 @@ def _get_packed_kv_cache_layout(
      return block_stride, layers_by_offset
-
-
+ 
+ 
 +def _bucket_layers_by_page_size(
 +    kv_cache_groups: list[KVCacheGroupSpec],
 +) -> dict[int, list[list[str]]]:
@@ -61,18 +61,18 @@ index ad51e4b2b3..e8abd1e9b3 100644
 +            for page_size, slots in buckets.items()
 +            for slot in slots
 +        ]
-
+ 
 +    block_stride, layers_by_offset = _get_packed_kv_cache_layout(kv_cache_groups)
      num_blocks = available_memory // block_stride
      num_blocks = may_override_num_blocks(vllm_config, num_blocks)
 -
      total_size = block_stride * num_blocks
-
+ 
      kv_cache_tensors: list[KVCacheTensor] = []
 @@ -1324,6 +1360,40 @@ def _get_kv_cache_config_packed(
      return num_blocks, kv_cache_tensors
-
-
+ 
+ 
 +def _use_musa_deepseek_v4_zero_offset_kv_tensors(
 +    kv_cache_groups: list[KVCacheGroupSpec],
 +) -> bool:

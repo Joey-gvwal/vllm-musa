@@ -12,7 +12,7 @@ index a3b00aaad2..cbc689c572 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
 @@ -313,7 +313,7 @@ class Worker(WorkerBase):
-
+ 
      @instrument(span_name="Init device")
      def init_device(self):
 -        if self.device_config.device_type == "cuda":

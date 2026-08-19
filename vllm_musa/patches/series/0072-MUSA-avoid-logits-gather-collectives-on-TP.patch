@@ -12,7 +12,7 @@ index 31298a66be..c1738e7dda 100644
 --- a/vllm/model_executor/layers/logits_processor.py
 +++ b/vllm/model_executor/layers/logits_processor.py
 @@ -7,7 +7,10 @@ import torch.nn.functional as F
-
+ 
  from vllm.config import get_current_vllm_config
  from vllm.distributed import (
 +    get_tensor_model_parallel_rank,
@@ -25,7 +25,7 @@ index 31298a66be..c1738e7dda 100644
 @@ -81,7 +84,57 @@ class LogitsProcessor(PluggableLayer):
                  logits *= self.scale
          return logits
-
+ 
 -    def _gather_logits(self, logits: torch.Tensor) -> torch.Tensor:
 +    def _use_musa_logits_all_reduce(self) -> bool:
 +        is_musa = getattr(current_platform, "is_musa", None)
@@ -96,18 +96,18 @@ index 31298a66be..c1738e7dda 100644
              # None may be returned for rank > 0
              logits = tensor_model_parallel_gather(logits)
 @@ -145,7 +203,7 @@ class LogitsProcessor(PluggableLayer):
-
+ 
          # Gather logits for TP
          if lm_head.tp_size > 1:
 -            logits = self._gather_logits(logits)
 +            logits = self._gather_logits(logits, lm_head)
-
+ 
          # Remove paddings in vocab (if any).
          if logits is not None:
 @@ -177,6 +235,14 @@ class LogitsProcessor(PluggableLayer):
          if self.scale != 1.0:
              logits = logits * self.scale
-
+ 
 +        if self._use_musa_logits_all_reduce() and tp_size > 1:
 +            # MTP proposer top-token selection only needs the global argmax.
 +            # Reconstructing logits through all-reduce avoids all_gather of

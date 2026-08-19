@@ -19,11 +19,11 @@ index 1177d8b27a..480e71fe20 100644
 +    schedule_metadata: torch.Tensor | None
      global_seq_lens: torch.Tensor | None = None
      indices: torch.Tensor | None = None
-
+ 
 @@ -1024,9 +1024,34 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
              if seq_lens.dim() == 1:
                  seq_lens = seq_lens.unsqueeze(-1)
-
+ 
 -            # DeepGEMM is required for the paged MQA logits on CUDA devices
 -            schedule_metadata = self.scheduler_metadata_buffer
 -            if current_platform.is_cuda() and has_deep_gemm():

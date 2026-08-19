@@ -65,7 +65,7 @@ index 450f23f287..5f8f249887 100644
 +                    "qwen3_qk_rope_kvcache_supported",
 +                    lambda: False,
 +                )()
-
+ 
      def _project_qkv_gate(
          self,
          qkv: torch.Tensor,
@@ -80,7 +80,7 @@ index 450f23f287..5f8f249887 100644
 +        torch.Tensor | None,
 +    ]:
 +        """Return post-norm Q/K/V, gate, and an optional KV-cache dependency.
-
+ 
          Dispatches between the fused Triton kernel and the eager
          split + QK-RMSNorm + RoPE path. ``gate`` is ``None`` when output
 @@ -474,11 +486,9 @@ class Qwen3NextAttention(nn.Module):
@@ -89,7 +89,7 @@ index 450f23f287..5f8f249887 100644
              )
 -            return q, k, v, gate
 +            return q, k, v, gate, None
-
+ 
          if self._musa_fused_qk_mrope and positions.ndim == 2:
 -            from vllm_musa.jit_kernel.csrc.norm import fused_qk_rmsnorm_mrope
 -
@@ -170,7 +170,7 @@ index 450f23f287..5f8f249887 100644
                  gate,
 +                kv_cache_dummy_dep,
              )
-
+ 
          if self.use_gated_qkv_rms_norm_rope:
 @@ -532,7 +576,7 @@ class Qwen3NextAttention(nn.Module):
                  self.rotary_emb.is_neox_style,
@@ -178,7 +178,7 @@ index 450f23f287..5f8f249887 100644
              )
 -            return q, k, v, gate.reshape(*orig_shape, -1)
 +            return q, k, v, gate.reshape(*orig_shape, -1), None
-
+ 
          if self.attn_output_gate:
              q_gate, k, v = qkv.split(
 @@ -554,7 +598,7 @@ class Qwen3NextAttention(nn.Module):
@@ -187,7 +187,7 @@ index 450f23f287..5f8f249887 100644
          q, k = self.rotary_emb(positions, q, k)
 -        return q, k, v, gate
 +        return q, k, v, gate, None
-
+ 
      def forward(
          self,
 @@ -562,8 +606,10 @@ class Qwen3NextAttention(nn.Module):

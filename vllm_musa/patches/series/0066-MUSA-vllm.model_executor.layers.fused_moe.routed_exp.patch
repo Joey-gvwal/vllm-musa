@@ -14,7 +14,7 @@ index 87fc3b1c36..6eb3291c02 100644
 @@ -473,6 +473,39 @@ class RoutedExperts(PluggableLayer):
                      expert_data = expert_data.narrow(dim, 0, loaded_weight.shape[dim])
          return expert_data
-
+ 
 +    def _tp_shard_indices(
 +        self,
 +        shard_size: int,

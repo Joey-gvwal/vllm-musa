@@ -24,7 +24,7 @@ index e8be7ad5bb..e62e02779c 100644
 +            q_padded = q.new_zeros((q.shape[0], self.prefill_padding, q.shape[2]))
              q_padded[:, : self.num_heads, :] = q
              q = q_padded
-
+ 
 @@ -848,8 +848,9 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
          # Concatenate q if it's a tuple (ql_nope, q_pe)
          if isinstance(q, tuple):
@@ -34,6 +34,6 @@ index e8be7ad5bb..e62e02779c 100644
 +            # MUSA: concat_mla_q leaves the reused q_concat_buffer partially written
 +            # (stale NaN/garbage); use a fresh full-write cat instead.
 +            q = torch.cat([ql_nope, q_pe], dim=-1)
-
+ 
          num_actual_toks = q.shape[0]
-
+ 

@@ -19,12 +19,12 @@ index dbd2724864..3cb9345cbf 100644
 +        # Populated together with ``attn_groups`` after backends are resolved.
 +        self._slot_mapping_kv_cache_gids: tuple[int, ...] = ()
          # self.kv_cache_config: KVCacheConfig
-
+ 
          # mm_hash ->  encoder_output
 @@ -2307,11 +2310,28 @@ class GPUModelRunner(
          )
          self.seq_lens[num_reqs:].fill_(0)
-
+ 
 -        self.input_batch.block_table.compute_slot_mapping(
 -            num_reqs,
 -            self.query_start_loc.gpu[: num_reqs + 1],
@@ -52,13 +52,13 @@ index dbd2724864..3cb9345cbf 100644
 +                self.query_start_loc.gpu[: num_reqs + 1],
 +                self.positions[:total_num_scheduled_tokens],
 +            )
-
+ 
          # Copy the tensors to the GPU.
          self._prepare_input_ids(
 @@ -7423,6 +7443,12 @@ class GPUModelRunner(
          for i, attn_backend_map in enumerate(attention_backend_maps):
              self.attn_groups.append(create_attn_groups(attn_backend_map, i))
-
+ 
 +        self._slot_mapping_kv_cache_gids = tuple(
 +            kv_cache_gid
 +            for kv_cache_gid, attn_groups in enumerate(self.attn_groups)

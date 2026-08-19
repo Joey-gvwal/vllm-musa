@@ -14,7 +14,7 @@ index 0b805fca76..69a507f734 100644
 @@ -315,6 +315,8 @@ class InputBatch:
          self.sampled_token_ids_cpu: torch.Tensor | None = None
          self.async_copy_ready_event: torch.Event | None = None
-
+ 
 +        self._num_reqs_padded: int | None = None
 +
      @property
@@ -26,12 +26,12 @@ index 0b805fca76..69a507f734 100644
              self.spec_token_ids.clear()
 +            self._num_reqs_padded = None
              return
-
+ 
          # NOTE(woosuk): This function assumes that the empty_req_indices
 @@ -840,6 +843,8 @@ class InputBatch:
      def refresh_metadata(self):
          """Apply any batch updates to sampling metadata."""
-
+ 
 +        self._num_reqs_padded = None
 +
          if self.is_pooling_model:
@@ -40,7 +40,7 @@ index 0b805fca76..69a507f734 100644
 @@ -1115,6 +1120,16 @@ class InputBatch:
      def num_reqs(self) -> int:
          return len(self.req_id_to_index)
-
+ 
 +    @property
 +    def num_reqs_padded(self) -> int:
 +        if self._num_reqs_padded is None:

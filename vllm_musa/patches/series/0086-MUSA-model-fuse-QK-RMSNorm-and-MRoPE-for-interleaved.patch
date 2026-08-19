@@ -20,8 +20,8 @@ index 793276ff1a..f6f9fa33c7 100644
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -287,6 +287,23 @@ class Qwen3NextSparseMoeBlock(nn.Module):
          return final_hidden_states.view(orig_shape)
-
-
+ 
+ 
 +_MUSA_MROPE_COS_SIN_CACHE: dict[tuple[int, torch.dtype], torch.Tensor] = {}
 +
 +
@@ -72,13 +72,13 @@ index 793276ff1a..f6f9fa33c7 100644
 +                    self.rotary_emb.cos_sin_cache, dtype
 +                )
 +                self._musa_mrope_section = tuple(int(x) for x in self.mrope_section)
-
+ 
      def _project_qkv_gate(
          self,
 @@ -432,6 +475,39 @@ class Qwen3NextAttention(nn.Module):
              )
              return q, k, v, gate
-
+ 
 +        if self._musa_fused_qk_mrope and positions.ndim == 2:
 +            from vllm_musa.jit_kernel.csrc.norm import fused_qk_rmsnorm_mrope
 +

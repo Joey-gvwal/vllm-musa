@@ -28,7 +28,7 @@ index 211364d24b..f0179e4a0d 100644
                  **gemm_kwargs,
 @@ -372,9 +375,12 @@ class DeepGemmExperts(mk.FusedMoEExpertsModular):
              )
-
+ 
              mm2_out = _resize_cache(workspace2, (M_sum, K))
 +            # MUSA mate ragged_moe_gemm_8bit asserts scale tensors are contiguous.
 +            a2q_scale = a2q_scale.contiguous()

@@ -13,9 +13,9 @@ index c84070f4f2..4f9f7d1225 100644
 --- a/vllm/models/deepseek_v4/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v4/nvidia/flashmla.py
 @@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
-
+ 
  import torch
-
+ 
 +from vllm.config import VllmConfig, get_current_vllm_config_or_none
  from vllm.forward_context import get_forward_context
  from vllm.models.deepseek_v4.attention import DeepseekV4Attention
@@ -31,7 +31,7 @@ index c84070f4f2..4f9f7d1225 100644
 @@ -54,9 +56,17 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
      backend_cls = DeepseekV4FlashMLABackend
      swa_backend_cls = DeepseekSparseSWAFlashMLABackend
-
+ 
 -    def __init__(self, *args, **kwargs) -> None:
 -        super().__init__(*args, **kwargs)
 +    def __init__(self, vllm_config: VllmConfig, *args, **kwargs) -> None:
@@ -45,7 +45,7 @@ index c84070f4f2..4f9f7d1225 100644
 +            and spec_config.num_speculative_tokens > 0
 +            and parallel_config.tensor_parallel_size == 8
 +        )
-
+ 
      def _o_proj(self, o: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
          return deep_gemm_fp8_o_proj(
 @@ -391,4 +401,8 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
@@ -63,8 +63,8 @@ index cbc689c572..a2ff198437 100644
 +++ b/vllm/v1/worker/gpu_worker.py
 @@ -92,6 +92,53 @@ from .utils import request_memory
  logger = init_logger(__name__)
-
-
+ 
+ 
 +def _musa_deepseek_v4_mtp_sparse_prefill_reserve_bytes(
 +    vllm_config: VllmConfig,
 +) -> int:
@@ -132,6 +132,6 @@ index cbc689c572..a2ff198437 100644
 +                "scratch headroom.",
 +                format_gib(sparse_prefill_reserve),
 +            )
-
+ 
          unrequested_memory = self.init_snapshot.free_memory - self.requested_memory
          logger.debug(

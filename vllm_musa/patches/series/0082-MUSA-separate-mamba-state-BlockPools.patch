@@ -19,8 +19,8 @@ index e8abd1e9b3..8a3e5fe548 100644
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1394,6 +1394,74 @@ def _use_musa_deepseek_v4_zero_offset_kv_tensors(
  _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
-
-
+ 
+ 
 +def musa_mamba_separate_pool_enabled() -> bool:
 +    """MUSA: give mamba state its own contiguous BlockPool so mate's GDN
 +    decode runs in place (no gather/scatter)."""
@@ -117,7 +117,7 @@ index e8abd1e9b3..8a3e5fe548 100644
 @@ -1859,16 +1942,29 @@ def get_kv_cache_groups(
          if not isinstance(v, HiddenStateCacheSpec)
      }
-
+ 
 -    # Prefer preserving each layer's cache semantics. If physical pages cannot
 -    # be unified, try a supported allocation-only fallback before failing.
 -    try:
@@ -151,11 +151,11 @@ index e8abd1e9b3..8a3e5fe548 100644
 +                raise
 +            return fallback_groups
 +        groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
-
+ 
      # Add hidden-state layers back with page aligned to the common page.
      if hidden_specs:
 @@ -2292,6 +2388,10 @@ def get_kv_cache_configs(
-
+ 
          # Shrink tensor size proportionally
          for tensor in kv_cache_config.kv_cache_tensors:
 +            if getattr(tensor, "musa_mamba_pool", False):
@@ -164,4 +164,4 @@ index e8abd1e9b3..8a3e5fe548 100644
 +                continue
              assert tensor.size % num_blocks_old == 0
              tensor.size = tensor.size // num_blocks_old * min_num_blocks
-
+ 

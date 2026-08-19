@@ -13,7 +13,7 @@ index 822a41969e..a140a043c2 100644
 +++ b/csrc/libtorch_stable/quantization/activation_kernels.cu
 @@ -117,15 +117,18 @@ __device__ __forceinline__ float2 silu2(float2 x) {
  }
-
+ 
  __device__ __forceinline__ __nv_bfloat162 silu2_v2(float2 x) {
 -#ifndef USE_ROCM
 +// ==================== MUSA ADAPTATION ====================
@@ -35,14 +35,14 @@ index 822a41969e..a140a043c2 100644
    for (int offset = 1; offset < WARP_SIZE; offset *= 2) {
 @@ -184,7 +187,10 @@ __device__ __forceinline__ void cp_async_wait<0>() {
  }
-
+ 
  __device__ __forceinline__ float clip(float v, float mmin, float mmax) {
 +#if __CUDACC_VER_MAJOR__ >= 11 && __CUDA_ARCH__ >= 800
    return fminf(mmax, fmaxf(v, mmin));
 +#else
 +#endif
  }
-
+ 
  __device__ __forceinline__ __nv_bfloat16 clip(__nv_bfloat16 v,
 @@ -282,7 +288,9 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
      Idx_t stride_i_e, Idx_t stride_i_t, Idx_t stride_i_h, Idx_t stride_yq_e,
@@ -53,7 +53,7 @@ index 822a41969e..a140a043c2 100644
 +#ifndef USE_MUSA
 +// ========================== END ==========================
    static constexpr int NUM_WARPS = THREADS / WARP_SIZE;
-
+ 
    static constexpr int LOAD_STAGE_SIZE = 2 * GROUP_SIZE / 8;
 @@ -534,7 +542,7 @@ __global__ void silu_mul_fp8_quant_deep_gemm_kernel(
        if (!lane_id) {
@@ -62,7 +62,7 @@ index 822a41969e..a140a043c2 100644
 -          // Packed UE8M0 format. Remove Mantissa.
 +          // Packed UE8MO format. Remove Mantissa.
            *y_s_ptr = reinterpret_cast<int16_t&>(y_s) >> 7;
-
+ 
            bool const jump_pack = (current_group_id + 1) % 4 == 0;
 @@ -601,8 +609,9 @@ void persistent_masked_m_silu_mul_quant(
      torch::stable::Tensor& y_q,                      // (E, T, H) [OUT]

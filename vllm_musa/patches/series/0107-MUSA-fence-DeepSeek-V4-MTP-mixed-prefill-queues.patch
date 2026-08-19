@@ -14,7 +14,7 @@ index 3cb9345cbf..18c07a6153 100644
 @@ -4806,11 +4806,37 @@ class GPUModelRunner(
          )
          self.kv_connector_output = kv_connector_output
-
+ 
 +        # A DSV4 MTP prefill step can enqueue work on several MUSA task queues.
 +        # Fence those queues before async scheduling reuses the next step's
 +        # graph inputs and metadata.
@@ -22,7 +22,7 @@ index 3cb9345cbf..18c07a6153 100644
          # previous model forward without breaking async scheduling.
          if deferred_state_corrections_fn:
              deferred_state_corrections_fn()
-
+ 
 +        queue_fence = getattr(
 +            self, "_musa_dsv4_mtp_prefill_queue_fence", None
 +        )
@@ -47,5 +47,5 @@ index 3cb9345cbf..18c07a6153 100644
 +        ):
 +            torch.musa.synchronize()
          return None
-
+ 
      def _input_fits_in_drafter(
