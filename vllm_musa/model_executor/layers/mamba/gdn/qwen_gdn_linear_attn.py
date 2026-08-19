@@ -111,8 +111,15 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         vllm_config,
         prefix: str = "",
         gqa_interleaved_layout: bool = False,
+        reduce_results: bool = True,
     ) -> None:
-        super().__init__(config, vllm_config, prefix, gqa_interleaved_layout)
+        super().__init__(
+            config,
+            vllm_config,
+            prefix,
+            gqa_interleaved_layout,
+            reduce_results=reduce_results,
+        )
         self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
         compilation_config = vllm_config.compilation_config
         self._gdn_cudagraph_capture_sizes = tuple(

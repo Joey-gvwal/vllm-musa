@@ -136,6 +136,21 @@ def test_musa_mla_uses_v028_decode_context_parallel_size() -> None:
     assert "self.dcp_world_size: int = -1" not in source
 
 
+def test_musa_qwen_gdn_forwards_v028_reduce_results() -> None:
+    source = (
+        ROOT
+        / "vllm_musa"
+        / "model_executor"
+        / "layers"
+        / "mamba"
+        / "gdn"
+        / "qwen_gdn_linear_attn.py"
+    ).read_text()
+
+    assert "reduce_results: bool = True," in source
+    assert "reduce_results=reduce_results," in source
+
+
 def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
     source = (
         ROOT
