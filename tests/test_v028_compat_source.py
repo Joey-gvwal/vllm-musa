@@ -181,3 +181,19 @@ def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
 
     assert "if not current_platform.is_musa():" in source
     assert 'Skipping CUDA-only FA4 CuTeDSL warmup on MUSA.' in source
+
+
+def test_musa_mamba_pools_accept_v028_graph_profiling_override() -> None:
+    source = (
+        ROOT
+        / "third_party"
+        / "vllm"
+        / "vllm"
+        / "v1"
+        / "core"
+        / "kv_cache_utils.py"
+    ).read_text()
+
+    assert "profiling_num_blocks = (" in source
+    assert "if available_memory == 0" in source
+    assert "attn_num_blocks = profiling_num_blocks" in source
