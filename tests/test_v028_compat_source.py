@@ -152,6 +152,21 @@ def test_musa_qwen_gdn_forwards_v028_reduce_results() -> None:
     assert source.count("vllm.third_party.flash_linear_attention.ops") == 2
     assert "vllm.model_executor.layers.fla.ops" not in source
 
+    tree = ast.parse(source)
+    musa_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "MusaQwenGatedDeltaNetAttention"
+    )
+    forward_cuda = next(
+        node
+        for node in musa_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "forward_cuda"
+    )
+    assert [arg.arg for arg in forward_cuda.args.args] == ["self", "hidden_states"]
+    assert "return self._output_projection(core_attn_out, z)" in source
+
 
 def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
     source = (
