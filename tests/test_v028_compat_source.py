@@ -64,3 +64,22 @@ def test_moe_overrides_use_v028_routed_experts_api() -> None:
             "from vllm.model_executor.layers.fused_moe.fused_moe import "
             "fused_experts"
         ) in source
+
+
+def test_qwen_uniform_decode_selector_uses_v028_scheduled_tokens_array() -> None:
+    source = (
+        ROOT
+        / "third_party"
+        / "vllm"
+        / "vllm"
+        / "v1"
+        / "worker"
+        / "gpu"
+        / "model_runner.py"
+    ).read_text()
+
+    assert "req_ids,\n                num_scheduled_tokens_np," in source
+    assert "req_ids,\n                num_scheduled_tokens," not in source
+    assert "num_scheduled_tokens_np,\n                batch_req_state.is_prefilling_np," in (
+        source
+    )
