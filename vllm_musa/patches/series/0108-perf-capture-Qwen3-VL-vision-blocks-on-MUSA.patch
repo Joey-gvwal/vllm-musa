@@ -10,7 +10,7 @@ block stack.
  1 file changed, 225 insertions(+)
 
 diff --git a/vllm/model_executor/models/qwen3_vl.py b/vllm/model_executor/models/qwen3_vl.py
-index de341d302a..b58406c7af 100644
+index 3f383b9bd8..aaaea38b04 100644
 --- a/vllm/model_executor/models/qwen3_vl.py
 +++ b/vllm/model_executor/models/qwen3_vl.py
 @@ -24,6 +24,7 @@

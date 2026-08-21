@@ -140,7 +140,7 @@ index 69a507f734..738a3e8eae 100644
  
      def get_pooling_params(self) -> list[PoolingParams]:
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 040214d6eb..abaa843373 100644
+index 682227ecee..3a040031b3 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -790,6 +790,32 @@ class GPUModelRunner(
