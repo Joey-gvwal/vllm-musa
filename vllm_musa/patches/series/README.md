@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **124 patches**. This branch includes the Qwen3.6 patches for common
+Currently **129 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -25,11 +25,12 @@ adds Qwen3.5-122B/Qwen3-VL MM encoder FlashAttention routing, TP-only shared
 expert folding and shared-gate binding, QK/mRoPE cache-out fusion, and opt-in
 vision-block graph capture. It also serializes DeepSeek-V4 long-prefill
 attention branches on MUSA while preserving decode/MTP auxiliary-stream
-overlap. The series contains
-vision-block graph capture. It also serializes DeepSeek-V4 long-prefill
-attention branches on MUSA while preserving decode/MTP auxiliary-stream
 overlap, restores MUSA component-based memory profiling, and routes the v0.28
-DeepSeek-V4 MHC paths through MUSA providers. The series contains
+DeepSeek-V4 MHC paths through MUSA providers. The final five patches adapt the
+v0.28 Model Runner V2 rejection kernels to MUSA Triton scalar-predicate and
+Gumbel-helper contracts without changing the upstream acceptance or resampling
+algorithm.
+The series contains
 MUSA source edits against the immutable vLLM commit recorded as `VLLM_COMMIT`
 in `third_party/PINS` (release label `v0.28.0`), applied at build. Runtime
 object/registration patches (which patch live objects at import) are kept
