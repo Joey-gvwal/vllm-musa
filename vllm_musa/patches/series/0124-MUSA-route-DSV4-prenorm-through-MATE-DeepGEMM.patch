@@ -61,10 +61,10 @@ index 57f852c60d..7749a7dee1 100644
      out = torch.empty(
          num_tokens, hidden_size, dtype=torch.bfloat16, device=hs_flat.device
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 0b80883196..cea3ebd47e 100644
+index 0c7dd09282..09f2eedd5d 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -122,9 +122,9 @@ def _musa_deepseek_v4_linear_out_dtype(
+@@ -126,9 +126,9 @@ def _musa_deepseek_v4_linear_out_dtype(
  ) -> torch.Tensor:
      if _musa_deepseek_v4_use_score_fp32_deepgemm(a, weight, out_dtype):
          try:
