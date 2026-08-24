@@ -10,7 +10,7 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0129-MUSA-vllm-v1-contiguous-mamba-cache-layout.patch"
+    / "0129-MUSA-restore-contiguous-segregated-Mamba-cache-pools.patch"
 )
 
 

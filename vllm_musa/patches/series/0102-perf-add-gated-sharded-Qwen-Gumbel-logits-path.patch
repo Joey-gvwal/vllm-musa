@@ -5,15 +5,15 @@ Subject: [PATCH] perf: add gated sharded Qwen Gumbel logits path
 
 ---
  .../model_executor/layers/logits_processor.py |  2 ++
- vllm/v1/worker/gpu/sample/gumbel.py           | 20 ++++++++---
+ vllm/v1/worker/gpu/sample/gumbel.py           | 18 +++++++---
  vllm/v1/worker/gpu_model_runner.py            | 35 +++++++++++++++++--
- 3 files changed, 50 insertions(+), 7 deletions(-)
+ 3 files changed, 49 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
-index 771e2f9419..c57388234f 100644
+index ab8d1d4102..efeb62095e 100644
 --- a/vllm/model_executor/layers/logits_processor.py
 +++ b/vllm/model_executor/layers/logits_processor.py
-@@ -139,6 +139,8 @@ class LogitsProcessor(PluggableLayer):
+@@ -173,6 +173,8 @@ class LogitsProcessor(PluggableLayer):
          lm_head: VocabParallelEmbedding,
      ) -> torch.Tensor:
          """gather/all-gather the logits tensor across model parallel group."""
@@ -23,10 +23,10 @@ index 771e2f9419..c57388234f 100644
              # Gather is not supported for some devices such as TPUs.
              # Use all-gather instead.
 diff --git a/vllm/v1/worker/gpu/sample/gumbel.py b/vllm/v1/worker/gpu/sample/gumbel.py
-index 0a930b8183..0ba54d6815 100644
+index 28c6e0f402..e261180a25 100644
 --- a/vllm/v1/worker/gpu/sample/gumbel.py
 +++ b/vllm/v1/worker/gpu/sample/gumbel.py
-@@ -85,6 +85,7 @@ def tl_rand32(seed, offset, includes_zero: tl.constexpr):
+@@ -125,6 +125,7 @@ def gumbel_noised_argmax(
  def gumbel_block_argmax(
      logits,
      block,
@@ -34,20 +34,16 @@ index 0a930b8183..0ba54d6815 100644
      mask,
      token_idx,
      expanded_idx_mapping_ptr,
-@@ -139,10 +140,10 @@ def gumbel_block_argmax(
-         gumbel_seed = tl.randint(seed, pos)
- 
-         if USE_FP64:
--            u = tl_rand64(gumbel_seed, block, includes_zero=False)
-+            u = tl_rand64(gumbel_seed, rng_block, includes_zero=False)
-             gumbel_noise = -tl.log(-tl.log(u))
-         else:
--            u = tl_rand32(gumbel_seed, block, includes_zero=False)
-+            u = tl_rand32(gumbel_seed, rng_block, includes_zero=False)
-             # Draw the large-noise tail (which decides the argmax winner) from u -> 0,
-             # where fp32 has fine resolution, instead of u -> 1, where fp32 spacing is
-             # ~2**-24. The naive `-log(-log(u))` puts the winning tail at u -> 1,
-@@ -174,6 +175,7 @@ def _gumbel_sample_kernel(
+@@ -166,7 +167,7 @@ def gumbel_block_argmax(
+     pos = tl.load(pos_ptr + token_idx)
+     return gumbel_noised_argmax(
+         logits,
+-        block,
++        rng_block,
+         mask,
+         seed,
+         pos,
+@@ -192,6 +193,7 @@ def _gumbel_sample_kernel(
      pos_ptr,
      temp_ptr,
      vocab_size,
@@ -55,7 +51,7 @@ index 0a930b8183..0ba54d6815 100644
      BLOCK_SIZE: tl.constexpr,
      APPLY_TEMPERATURE: tl.constexpr,
      USE_FP64: tl.constexpr,
-@@ -182,6 +184,7 @@ def _gumbel_sample_kernel(
+@@ -200,6 +202,7 @@ def _gumbel_sample_kernel(
      token_idx = tl.program_id(0).to(tl.int64)
      block_idx = tl.program_id(1)
      block = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -63,7 +59,7 @@ index 0a930b8183..0ba54d6815 100644
      mask = block < vocab_size
      logits = tl.load(
          logits_ptr + token_idx * logits_stride + block,
-@@ -193,6 +196,7 @@ def _gumbel_sample_kernel(
+@@ -211,6 +214,7 @@ def _gumbel_sample_kernel(
      value, idx = gumbel_block_argmax(
          logits,
          block,
@@ -71,7 +67,7 @@ index 0a930b8183..0ba54d6815 100644
          mask,
          token_idx,
          expanded_idx_mapping_ptr,
-@@ -207,7 +211,7 @@ def _gumbel_sample_kernel(
+@@ -225,7 +229,7 @@ def _gumbel_sample_kernel(
          USE_FP64=USE_FP64,
          PER_TOKEN_COL=PER_TOKEN_COL,
      )
@@ -80,7 +76,7 @@ index 0a930b8183..0ba54d6815 100644
      tl.store(local_argmax_ptr + token_idx * local_argmax_stride + block_idx, token_id)
      tl.store(local_max_ptr + token_idx * local_max_stride + block_idx, value)
  
-@@ -222,7 +226,9 @@ def gumbel_sample(
+@@ -240,7 +244,9 @@ def gumbel_sample(
      logits_cache: torch.Tensor | None = None,  # [max_num_reqs, num_cols, vocab_size]
      logits_cache_col: torch.Tensor | None = None,  # scalar or [num_tokens]
      use_fp64: bool = False,
@@ -91,7 +87,7 @@ index 0a930b8183..0ba54d6815 100644
      # Enforce contiguity on non-strided input tensors
      expanded_idx_mapping = expanded_idx_mapping.contiguous()
      pos = pos.contiguous()
-@@ -250,6 +256,7 @@ def gumbel_sample(
+@@ -268,6 +274,7 @@ def gumbel_sample(
          pos,
          temperature,
          vocab_size,
@@ -99,7 +95,7 @@ index 0a930b8183..0ba54d6815 100644
          BLOCK_SIZE=BLOCK_SIZE,
          APPLY_TEMPERATURE=apply_temperature,
          USE_FP64=use_fp64,
-@@ -258,4 +265,7 @@ def gumbel_sample(
+@@ -276,4 +283,7 @@ def gumbel_sample(
      # NOTE(woosuk): Use int64 for later indexing.
      max_block_idx = local_max.argmax(dim=-1, keepdim=True)
      sampled = local_argmax.gather(dim=-1, index=max_block_idx).view(-1)

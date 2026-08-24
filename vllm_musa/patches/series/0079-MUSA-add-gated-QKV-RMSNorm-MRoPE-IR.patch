@@ -183,10 +183,10 @@ index 0000000000..96919a35b5
 +    with pytest.raises(ValueError, match="packed_qkv last dimension"):
 +        native(*args)
 diff --git a/tests/test_config.py b/tests/test_config.py
-index 70c8728d25..9e45b06159 100644
+index c43f88d4a2..9881000a77 100644
 --- a/tests/test_config.py
 +++ b/tests/test_config.py
-@@ -1775,6 +1775,7 @@ def test_ir_op_priority_default():
+@@ -1798,6 +1798,7 @@ def test_ir_op_priority_default():
      priority_config = IrOpPriorityConfig.with_default(["vllm_c", "native"])
      assert priority_config.rms_norm == ["vllm_c", "native"]
      assert priority_config.fused_add_rms_norm == ["vllm_c", "native"]
@@ -194,7 +194,7 @@ index 70c8728d25..9e45b06159 100644
  
      # Assert single ops override the default
      priority_config = IrOpPriorityConfig.with_default(
-@@ -1782,6 +1783,7 @@ def test_ir_op_priority_default():
+@@ -1805,6 +1806,7 @@ def test_ir_op_priority_default():
      )
      assert priority_config.rms_norm == ["oink", "native"]
      assert priority_config.fused_add_rms_norm == ["native"]

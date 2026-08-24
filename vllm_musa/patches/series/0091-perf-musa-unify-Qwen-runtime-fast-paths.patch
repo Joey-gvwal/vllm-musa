@@ -13,10 +13,10 @@ Subject: [PATCH] perf(musa): unify Qwen runtime fast paths
  6 files changed, 100 insertions(+), 8 deletions(-)
 
 diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
-index c1738e7dda..771e2f9419 100644
+index e86328c702..ab8d1d4102 100644
 --- a/vllm/model_executor/layers/logits_processor.py
 +++ b/vllm/model_executor/layers/logits_processor.py
-@@ -92,11 +92,14 @@ class LogitsProcessor(PluggableLayer):
+@@ -126,11 +126,14 @@ class LogitsProcessor(PluggableLayer):
          self,
          logits: torch.Tensor,
          lm_head: VocabParallelEmbedding,
@@ -31,7 +31,7 @@ index c1738e7dda..771e2f9419 100644
  
          use_ipc_gather = (
              self.org_vocab_size in (151936, 248320)
-@@ -115,7 +118,7 @@ class LogitsProcessor(PluggableLayer):
+@@ -149,7 +152,7 @@ class LogitsProcessor(PluggableLayer):
              )
  
              gathered = musa_jit_ar.maybe_musa_jit_logits_all_gather(
@@ -40,7 +40,7 @@ index c1738e7dda..771e2f9419 100644
              )
              if gathered is not None:
                  return gathered
-@@ -145,7 +148,14 @@ class LogitsProcessor(PluggableLayer):
+@@ -179,7 +182,14 @@ class LogitsProcessor(PluggableLayer):
              if self._use_musa_logits_all_reduce():
                  # Preserve the all-gather layout while avoiding MCCL
                  # gather/all_gather paths that are not reliable on MUSA.

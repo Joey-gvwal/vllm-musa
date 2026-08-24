@@ -11,7 +11,7 @@ so return before probing CUDA-only extensions.
  1 file changed, 4 insertions(+)
 
 diff --git a/vllm/v1/attention/backends/fa_utils.py b/vllm/v1/attention/backends/fa_utils.py
-index 907881e187..3e8e83204a 100644
+index 4ebb1d05b9..72195add0e 100644
 --- a/vllm/v1/attention/backends/fa_utils.py
 +++ b/vllm/v1/attention/backends/fa_utils.py
 @@ -73,6 +73,10 @@ def get_flash_attn_version(

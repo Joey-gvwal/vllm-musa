@@ -9,10 +9,10 @@ Subject: [PATCH] MUSA: fuse Qwen3.5 QK mRoPE cache update
  2 files changed, 73 insertions(+), 25 deletions(-)
 
 diff --git a/vllm/model_executor/layers/attention/attention.py b/vllm/model_executor/layers/attention/attention.py
-index 66f4532279..270a09e585 100644
+index 3031ba9525..b7f4d13e4e 100644
 --- a/vllm/model_executor/layers/attention/attention.py
 +++ b/vllm/model_executor/layers/attention/attention.py
-@@ -489,6 +489,7 @@ class Attention(nn.Module, AttentionLayerBase):
+@@ -485,6 +485,7 @@ class Attention(nn.Module, AttentionLayerBase):
          # definition specify the output tensor shape.
          output_shape: torch.Size | None = None,
          output_dtype: torch.dtype | None = None,
@@ -20,7 +20,7 @@ index 66f4532279..270a09e585 100644
      ) -> torch.Tensor:
          """
          The KV cache is stored inside this class and is accessed via
-@@ -531,7 +532,6 @@ class Attention(nn.Module, AttentionLayerBase):
+@@ -527,7 +528,6 @@ class Attention(nn.Module, AttentionLayerBase):
              key = key.view(-1, self.num_kv_heads, self.head_size)
          if value is not None:
              value = value.view(-1, self.num_kv_heads, self.head_size_v)
@@ -28,7 +28,7 @@ index 66f4532279..270a09e585 100644
          if self.use_direct_call:
              # Skip this if sharing KV cache with an earlier attention layer.
              if (
-@@ -539,6 +539,7 @@ class Attention(nn.Module, AttentionLayerBase):
+@@ -535,6 +535,7 @@ class Attention(nn.Module, AttentionLayerBase):
                  and self.kv_sharing_target_layer_name is None
                  and key is not None
                  and value is not None
@@ -36,7 +36,7 @@ index 66f4532279..270a09e585 100644
              ):
                  kv_cache_dummy_dep = unified_kv_cache_update(
                      key, value, self.layer_name
-@@ -559,6 +560,7 @@ class Attention(nn.Module, AttentionLayerBase):
+@@ -555,6 +556,7 @@ class Attention(nn.Module, AttentionLayerBase):
                  and self.kv_sharing_target_layer_name is None
                  and key is not None
                  and value is not None
