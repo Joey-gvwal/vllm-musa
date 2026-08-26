@@ -1,0 +1,165 @@
+From 08619ad45f5c39cb7d3631875cd50b68c9a99e30 Mon Sep 17 00:00:00 2001
+From: Joey-gvwal <joey_gvwal@yeah.net>
+Date: Wed, 26 Aug 2026 20:58:34 +0800
+Subject: [PATCH] perf(musa): accelerate DSV4 MTP learned indexer
+
+---
+ .../layers/sparse_attn_indexer.py             | 135 +++++++++++++++++-
+ 1 file changed, 134 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 11b8fc8781..15007b169f 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -915,6 +915,129 @@ def _musa_indexer_cache_rows(kv_cache: torch.Tensor) -> torch.Tensor:
+     )
+ 
+ 
++def _musa_try_fill_mtp_topk_bf16(
++    q_quant: torch.Tensor,
++    kv_cache: torch.Tensor,
++    weights: torch.Tensor,
++    decode_metadata,
++    topk_indices: torch.Tensor,
++    topk_tokens: int,
++    max_model_len: int,
++) -> bool:
++    """Run the learned MTP indexer with a graph-safe BF16 GEMM path.
++
++    The native decode kernel is intentionally not used for MTP verification:
++    its fixed-width path does not represent the request-to-token expansion.
++    This implementation follows sglang's paged formulation while preserving
++    vLLM's storage-stride view of the FP8 cache.  In particular, selecting a
++    complete physical page from ``_musa_indexer_cache_rows`` keeps the K bytes
++    and their page-tail scales in their original layout.
++    """
++    if (
++        not _musa_sparse_indexer_mtp_requires_learned()
++        or q_quant.dtype != torch.float8_e4m3fn
++        or q_quant.ndim != 3
++        or q_quant.shape[1] != 64
++        or q_quant.shape[2] != 128
++        or kv_cache.dtype != torch.uint8
++    ):
++        return False
++
++    seq_lens = decode_metadata.seq_lens.reshape(-1)
++    rows = min(
++        int(q_quant.shape[0]),
++        int(seq_lens.numel()),
++        int(topk_indices.shape[0]),
++    )
++    if rows <= 0:
++        return False
++
++    block_table = _musa_decode_block_table_for_token_rows(
++        decode_metadata.block_table,
++        rows,
++    )
++    if block_table is None or block_table.shape[1] <= 0:
++        return False
++
++    page_size = int(kv_cache.shape[1])
++    max_pages = min(
++        int(block_table.shape[1]),
++        (int(max_model_len) + page_size - 1) // page_size,
++    )
++    if max_pages <= 0:
++        return False
++
++    cache_rows = _musa_indexer_cache_rows(kv_cache)
++    total_dim = int(cache_rows.shape[1])
++    k_bytes = page_size * 128
++    scale_bytes = page_size * 4
++    if total_dim < k_bytes + scale_bytes:
++        return False
++
++    page_ids = block_table[:, :max_pages].clamp(min=0).to(torch.long)
++    gathered = cache_rows.index_select(0, page_ids.reshape(-1)).view(
++        rows,
++        max_pages,
++        total_dim,
++    )
++
++    k = (
++        gathered[..., :k_bytes]
++        .contiguous()
++        .view(torch.float8_e4m3fn)
++        .to(torch.bfloat16)
++        .reshape(rows, max_pages * page_size, 128)
++    )
++    scales = (
++        gathered[..., k_bytes : k_bytes + scale_bytes]
++        .contiguous()
++        .view(torch.float32)
++        .to(torch.bfloat16)
++        .reshape(rows, max_pages * page_size)
++    )
++    k = k * scales.unsqueeze(-1)
++    q = q_quant[:rows].contiguous().view(torch.float8_e4m3fn).to(
++        torch.bfloat16
++    )
++    per_head = torch.bmm(q, k.transpose(1, 2))
++    per_head = torch.relu(per_head)
++    logits = torch.bmm(
++        weights[:rows].to(torch.bfloat16).contiguous().unsqueeze(1),
++        per_head,
++    ).squeeze(1)
++
++    positions = torch.arange(
++        max_pages * page_size,
++        device=q_quant.device,
++    )
++    logits = logits.masked_fill(
++        positions.unsqueeze(0) >= seq_lens[:rows].unsqueeze(-1),
++        float("-inf"),
++    )
++    if logits.shape[1] < max_model_len:
++        logits = torch.nn.functional.pad(
++            logits,
++            (0, max_model_len - logits.shape[1]),
++            value=float("-inf"),
++        )
++    else:
++        logits = logits[:, :max_model_len]
++
++    topk = min(int(topk_tokens), int(topk_indices.shape[1]))
++    if topk <= 0:
++        return True
++    indices = torch.topk(logits, topk, dim=-1, sorted=True).indices
++    valid_counts = seq_lens[:rows].clamp(min=0, max=topk).unsqueeze(-1)
++    rank = torch.arange(topk, device=q_quant.device).unsqueeze(0)
++    indices = torch.where(
++        rank < valid_counts,
++        indices,
++        torch.full_like(indices, -1),
++    )
++    topk_indices[:rows, :topk].copy_(indices.to(topk_indices.dtype))
++    return True
++
++
+ def _musa_dequant_indexer_fp8_cache_row(
+     kv_cache: torch.Tensor,
+     block_id: int,
+@@ -1195,7 +1318,17 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+     topk_indices_buffer[: hidden_states.shape[0]] = -1
+ 
+     if metadata.num_decodes > 0 and metadata.decode is not None:
+-        if not _musa_try_fill_decode_topk_from_indexer_cache_native(
++        if _musa_try_fill_mtp_topk_bf16(
++            q_quant[: metadata.num_decode_tokens],
++            kv_cache,
++            weights[: metadata.num_decode_tokens],
++            metadata.decode,
++            topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
++            topk_tokens,
++            max_model_len,
++        ):
++            pass
++        elif not _musa_try_fill_decode_topk_from_indexer_cache_native(
+             q_quant[: metadata.num_decode_tokens],
+             kv_cache,
+             weights[: metadata.num_decode_tokens],
+-- 
+2.25.1
+
