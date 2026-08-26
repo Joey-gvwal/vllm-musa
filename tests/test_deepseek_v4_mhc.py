@@ -174,9 +174,8 @@ def test_mhc_auto_paths_fall_back_when_tilelang_is_unavailable():
     assert "return _mhc_pre_native_provider(" in source
 
 
-def test_hc_head_musa_eager_path_preserves_token_dimensions():
+def test_hc_head_musa_fallback_preserves_token_dimensions():
     source = _read("vllm_musa/deepseek_v4_mhc.py")
-    tilelang = _read("third_party/vllm/vllm/model_executor/kernels/mhc/tilelang.py")
 
     assert "def _reshape_hc_head_input(" in source
     assert "def hc_head_musa(" in source
@@ -188,8 +187,18 @@ def test_hc_head_musa_eager_path_preserves_token_dimensions():
     assert "x @ hc_fn.to(torch.float32).t()" in source
     assert "torch.sum(pre.unsqueeze(-1) * grouped, dim=1)" in source
     assert "return y.reshape(*token_shape, hidden_size).to(dtype)" in source
-    assert 'hs_flat.device.type == "musa"' in tilelang
-    assert "return hc_head_musa(" in tilelang
+
+
+def test_hc_head_musa_uses_fused_tilelang_path():
+    tilelang = _read("third_party/vllm/vllm/model_executor/kernels/mhc/tilelang.py")
+    tilelang_utils = _read("third_party/vllm/vllm/tilelang_utils/__init__.py")
+    tilelang_tree = ast.parse(tilelang)
+    hc_head = _function_node(tilelang_tree, "hc_head_fused_kernel_tilelang")
+
+    assert "or current_platform.is_musa()" in tilelang_utils
+    assert 'hs_flat.device.type == "musa"' not in ast.unparse(hc_head)
+    assert not _calls(hc_head, "hc_head_musa")
+    assert _calls(hc_head, "hc_head_fuse_tilelang")
 
 
 def test_mhc_pre_decode_prenorm_uses_deepgemm_by_default():
