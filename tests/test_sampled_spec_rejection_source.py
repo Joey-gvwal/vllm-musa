@@ -54,9 +54,9 @@ def test_model_runner_does_not_skip_non_greedy_drafter() -> None:
 
 
 def test_mrv2_rejection_predicates_keep_musa_triton_rank_stable() -> None:
-    greedy = _series_patch(124)
-    block_verification = _series_patch(127)
-    stochastic = _series_patch(128)
+    greedy = _series_patch(125)
+    block_verification = _series_patch(128)
+    stochastic = _series_patch(129)
 
     for source in (greedy, block_verification, stochastic):
         assert "accepted |= tl.zeros((1,), tl.int1)" in source
@@ -64,13 +64,13 @@ def test_mrv2_rejection_predicates_keep_musa_triton_rank_stable() -> None:
 
 
 def test_mrv2_rejection_avoids_chained_runtime_predicates() -> None:
-    source = _series_patch(125)
+    source = _series_patch(126)
 
     assert "if USE_BLOCK_VERIFICATION and (" in source
     assert "(not is_greedy) & (accepted_length < num_draft_tokens)" in source
 
 
 def test_mrv2_rejection_resampler_uses_v028_gumbel_signature() -> None:
-    source = _series_patch(126)
+    source = _series_patch(127)
 
     assert "residual_logits,\n         block,\n+        block," in source
