@@ -1,0 +1,123 @@
+From ebb830d6a7936965ae1fabd512b85c608f1993c8 Mon Sep 17 00:00:00 2001
+From: codex-local <codex-local@invalid>
+Date: Mon, 31 Aug 2026 20:38:14 +0800
+Subject: [PATCH] MUSA: fix DeepSeek-OCR tokenizer and vision precision
+
+
+diff --git a/tests/tokenizers_/test_registry.py b/tests/tokenizers_/test_registry.py
+index 0a47426dc9..8a5851ab51 100644
+--- a/tests/tokenizers_/test_registry.py
++++ b/tests/tokenizers_/test_registry.py
+@@ -3,7 +3,7 @@
+ import json
+ from pathlib import Path
+ from types import SimpleNamespace
+-from unittest.mock import patch
++from unittest.mock import MagicMock, patch
+ 
+ import pytest
+ from transformers import AutoConfig
+@@ -141,3 +141,31 @@ def test_cached_tokenizer_from_config_registers_local_config(tmp_path: Path):
+         CONFIG_MAPPING._extra_content.pop("qwen3_5_moe", None)
+         if registered_config is not None:
+             CONFIG_MAPPING._extra_content["qwen3_5_moe"] = registered_config
++
++
++def test_deepseek_ocr_uses_generic_fast_tokenizer():
++    """DeepSeek-OCR must not fall back to slow LlamaTokenizer.
++
++    Its cached slow-tokenizer wrapper concatenates byte-level markers (``Ġ``
++    and ``Ċ``) instead of applying the tokenizer.json decoder.  The vLLM
++    config adapter exposes the model as ``deepseek_ocr`` even though the raw
++    checkpoint advertises ``deepseek_vl_v2``.
++    """
++    fake_tokenizer = MagicMock(is_fast=True)
++    with patch(
++        "vllm.tokenizers.registry.get_config",
++        return_value=SimpleNamespace(model_type="deepseek_ocr"),
++    ), patch.object(
++        TokenizerRegistry,
++        "load_tokenizer_cls",
++        return_value=SimpleNamespace,
++    ), patch(
++        "transformers.tokenization_utils_tokenizers.TokenizersBackend.from_pretrained",
++        return_value=fake_tokenizer,
++    ) as load_fast, patch(
++        "vllm.tokenizers.hf.get_cached_tokenizer", side_effect=lambda x: x
++    ):
++        tokenizer = get_tokenizer("dummy", tokenizer_mode="hf")
++
++    assert tokenizer is fake_tokenizer
++    load_fast.assert_called_once()
+diff --git a/vllm/model_executor/models/deepseek_ocr.py b/vllm/model_executor/models/deepseek_ocr.py
+index ead643a7f8..4c31f3ae78 100644
+--- a/vllm/model_executor/models/deepseek_ocr.py
++++ b/vllm/model_executor/models/deepseek_ocr.py
+@@ -78,6 +78,11 @@ from .deepseek_vl2 import MlpProjector
+ _IMAGE_TOKEN = "<image>"
+ 
+ 
++def _is_musa_runtime() -> bool:
++    """Return whether this process is running with the MUSA torch build."""
++    return getattr(torch.version, "musa", None) is not None
++
++
+ class DeepseekOCRImagePixelInputs(TensorSchema):
+     """
+     Dimensions:
+@@ -432,6 +437,18 @@ class DeepseekOCRForCausalLM(
+             self.tile_tag = config.tile_tag
+             self.global_view_pos = config.global_view_pos
+ 
++            # The DeepSeek-OCR reference implementation is numerically
++            # unstable in BF16 on MUSA in the vision tower (the same
++            # checkpoint produces correct OCR in FP32).  Keep the language
++            # model in its configured dtype, but run the SAM/CLIP/projector
++            # path in FP32 on MUSA.  The multimodal merge casts the resulting
++            # embeddings back to the language-model dtype.
++            self.vision_dtype = torch.float32 if _is_musa_runtime() else self.model_config.dtype
++            if self.vision_dtype == torch.float32:
++                self.sam_model.float()
++                self.vision_model.float()
++                self.projector.float()
++
+             # special token for image token sequence format
+             n_embed = self.projector_config.n_embed
+             embed_std = 1 / torch.sqrt(torch.tensor(n_embed, dtype=torch.float32))
+@@ -489,6 +506,7 @@ class DeepseekOCRForCausalLM(
+         )
+ 
+     def _encode_global_features(self, image_tensor: torch.Tensor) -> torch.Tensor:
++        image_tensor = image_tensor.to(dtype=self.vision_dtype)
+         global_features_1 = self.sam_model(image_tensor)
+         global_features_2 = self.vision_model(image_tensor, global_features_1)
+         features = torch.cat(
+@@ -514,6 +532,7 @@ class DeepseekOCRForCausalLM(
+         if torch.sum(patches).item() == 0:
+             return None
+ 
++        patches = patches.to(dtype=self.vision_dtype)
+         local_features_1 = self.sam_model(patches)
+         local_features_2 = self.vision_model(patches, local_features_1)
+         features = torch.cat(
+diff --git a/vllm/tokenizers/registry.py b/vllm/tokenizers/registry.py
+index 713c6228f9..95b9d4ea85 100644
+--- a/vllm/tokenizers/registry.py
++++ b/vllm/tokenizers/registry.py
+@@ -33,6 +33,16 @@ logger = init_logger(__name__)
+ # - Add model type to MODELS_WITH_INCORRECT_HUB_TOKENIZER_CLASS in transformers (better)
+ # - Fix tokenizer_class on the hub for the affected models (best)
+ _MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS: set[str] = {
++    # DeepSeek-OCR advertises a LlamaTokenizerFast in tokenizer_config.json,
++    # but the model config is deepseek_vl_v2.  Loading it through the regular
++    # HF class selects the slow LlamaTokenizer in vLLM's cached wrapper.  Its
++    # convert_tokens_to_string implementation concatenates byte-level token
++    # markers (``Ġ``/``Ċ``), producing malformed OCR/text responses.  Force
++    # the generic fast TokenizersBackend, which honors the tokenizer.json
++    # decoder and preserves the OCR control tokens.
++    # vLLM's config adapter normalizes the raw HF model_type
++    # ``deepseek_vl_v2`` to ``deepseek_ocr`` before this registry is called.
++    "deepseek_ocr",
+     "internlm2",
+     "step3_vl",
+     "step3p7",
