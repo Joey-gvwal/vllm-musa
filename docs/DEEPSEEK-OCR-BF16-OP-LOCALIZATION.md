@@ -8,9 +8,9 @@ current op-level granularity. It is not a tokenizer dtype conversion and it is
 not evidence that the full model must run in FP32.
 
 The production patch keeps SAM, CLIP, and projector weights/activations in the
-configured BF16 dtype. Only the SAM SDPA call converts `q`, `k`, `v`, and the
-relative-position attention bias to FP32 for the operation, then casts the
-result back to the original dtype. Non-MUSA execution is unchanged.
+configured BF16 dtype. Only the masked SAM SDPA call is scoped to
+`SDPBackend.MATH` on MUSA; q/k/v remain BF16 and the runtime handles stable
+accumulation. Non-MUSA execution is unchanged.
 
 ## Evidence
 
@@ -21,8 +21,8 @@ uniformly selected from a 32-page sample:
 | Mode | Non-empty pages | Tokens | Wall time | Match to all-vision FP32 |
 |---|---:|---:|---:|---:|
 | All vision BF16 | 1/8 | 193 | 46.529 s | failed baseline |
-| SAM SDPA FP32 only | 8/8 | 5682 | 29.037 s | 7/8 exact, mean sequence ratio 0.996701 |
-| Production targeted default | 8/8 | 5682 | 29.243 s | 7/8 exact, mean sequence ratio 0.996701 |
+| SAM SDPA FP32 only | 8/8 | 5682 | 29.037 s | superseded diagnostic |
+| SAM masked SDPA MATH + BF16 q/k/v | 8/8 | 5684 | 28.787 s | 7/8 exact, mean sequence ratio 0.999836 |
 | All vision FP32 | 8/8 | 5690 | 30.501 s | correctness reference |
 
 The targeted default and diagnostic selective mode produced identical files on
@@ -30,11 +30,12 @@ all 8 pages. The targeted path was about 4.1% faster than the all-vision FP32
 path for this matched-token run, while avoiding FP32 conversion of the rest of
 the vision stack.
 
-The MUSA runtime emits a warning at `deepencoder.py` for the targeted call:
-its SDPA dispatch advertises Half/BFloat16 inputs but receives Float. This is
-the current runtime-compatible fallback. The remaining performance work is to
-fix the MUSA/torch-musa BF16 SDPA kernel itself so it can use correct BF16
-inputs with FP32 accumulation; that kernel change is outside this vLLM patch.
+The MUSA default Flash SDPA dispatch produces a large error for the additive
+relative-position mask (cosine `0.683207` against an FP32 reference), while
+the MATH backend with BF16 q/k/v produces cosine `0.999989` in the isolated
+kernel test. This avoids the FP32 q/k/v conversion and is the current targeted
+vLLM fix. A native MUSA Flash SDPA BF16 kernel correction would still be a
+torch-musa/MUDNN change outside this vLLM patch.
 
 ## Reproduction
 

@@ -50,7 +50,7 @@ index 0a47426dc9..8a5851ab51 100644
 +    assert tokenizer is fake_tokenizer
 +    load_fast.assert_called_once()
 diff --git a/vllm/model_executor/models/deepseek_ocr.py b/vllm/model_executor/models/deepseek_ocr.py
-index ead643a7f8..790fc0221a 100644
+index ead643a7f8..f4c2e389cc 100644
 --- a/vllm/model_executor/models/deepseek_ocr.py
 +++ b/vllm/model_executor/models/deepseek_ocr.py
 @@ -78,6 +78,11 @@ from .deepseek_vl2 import MlpProjector
@@ -71,7 +71,7 @@ index ead643a7f8..790fc0221a 100644
              self.sam_model = build_sam_vit_b()
 +            if _is_musa_runtime():
 +                for block in self.sam_model.blocks:
-+                    block.attn.musa_fp32_sdpa = True
++                    block.attn.musa_masked_sdpa_math = True
              clip_vision_config = CLIPVisionConfig(
                  hidden_size=1024,
                  intermediate_size=4096,
@@ -105,42 +105,43 @@ index ead643a7f8..790fc0221a 100644
          local_features_2 = self.vision_model(patches, local_features_1)
          features = torch.cat(
 diff --git a/vllm/model_executor/models/deepencoder.py b/vllm/model_executor/models/deepencoder.py
-index 1c786ea85a4e..932899a6bc 100644
+index 1c786ea85a4e..cd925adc85 100644
 --- a/vllm/model_executor/models/deepencoder.py
 +++ b/vllm/model_executor/models/deepencoder.py
+@@ -15,3 +15,4 @@ import torch
+ import torch.nn as nn
+ import torch.nn.functional as F
++from torch.nn.attention import SDPBackend, sdpa_kernel
+ from transformers import CLIPVisionConfig
 @@ -290,6 +290,7 @@
                  positional parameter size.
          """  # noqa: E501
          super().__init__()
-+        self.musa_fp32_sdpa = False
++        self.musa_masked_sdpa_math = False
          self.num_heads = num_heads
          head_dim = dim // num_heads
          self.scale = head_dim**-0.5
-@@ -336,11 +337,23 @@
+@@ -336,11 +337,20 @@
              attn_bias = (rel_h + rel_w).view(
                  B, self.num_heads, rel_h.size(2), rel_h.size(3) * rel_w.size(4)
              )
 -            x = torch.nn.functional.scaled_dot_product_attention(
 -                q, k, v, attn_mask=attn_bias
 -            )
-+            if self.musa_fp32_sdpa and getattr(torch.version, "musa", None) is not None:
-+                q_dtype = q.dtype
-+                x = torch.nn.functional.scaled_dot_product_attention(
-+                    q.float(), k.float(), v.float(), attn_mask=attn_bias.float()
-+                ).to(dtype=q_dtype)
++            if self.musa_masked_sdpa_math and getattr(torch.version, "musa", None) is not None:
++                # MUSA's default Flash SDPA path mishandles additive
++                # relative-position masks for BF16 inputs. The MATH backend
++                # keeps q/k/v in BF16 while using the stable accumulation path.
++                with sdpa_kernel(SDPBackend.MATH):
++                    x = torch.nn.functional.scaled_dot_product_attention(
++                        q, k, v, attn_mask=attn_bias
++                    )
 +            else:
 +                x = torch.nn.functional.scaled_dot_product_attention(
 +                    q, k, v, attn_mask=attn_bias
 +                )
          else:
--            x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-+            if self.musa_fp32_sdpa and getattr(torch.version, "musa", None) is not None:
-+                q_dtype = q.dtype
-+                x = torch.nn.functional.scaled_dot_product_attention(
-+                    q.float(), k.float(), v.float()
-+                ).to(dtype=q_dtype)
-+            else:
-+                x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+             x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
  
          x = (
              x.view(B, self.num_heads, H, W, -1)
