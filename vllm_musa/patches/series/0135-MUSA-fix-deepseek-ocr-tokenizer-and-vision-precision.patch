@@ -50,7 +50,7 @@ index 0a47426dc9..8a5851ab51 100644
 +    assert tokenizer is fake_tokenizer
 +    load_fast.assert_called_once()
 diff --git a/vllm/model_executor/models/deepseek_ocr.py b/vllm/model_executor/models/deepseek_ocr.py
-index ead643a7f8..4c31f3ae78 100644
+index ead643a7f8..790fc0221a 100644
 --- a/vllm/model_executor/models/deepseek_ocr.py
 +++ b/vllm/model_executor/models/deepseek_ocr.py
 @@ -78,6 +78,11 @@ from .deepseek_vl2 import MlpProjector
@@ -65,6 +65,16 @@ index ead643a7f8..4c31f3ae78 100644
  class DeepseekOCRImagePixelInputs(TensorSchema):
      """
      Dimensions:
+@@ -412,6 +417,9 @@
+ 
+         with self._mark_tower_model(vllm_config, "image"):
+             self.sam_model = build_sam_vit_b()
++            if _is_musa_runtime():
++                for block in self.sam_model.blocks:
++                    block.attn.musa_fp32_sdpa = True
+             clip_vision_config = CLIPVisionConfig(
+                 hidden_size=1024,
+                 intermediate_size=4096,
 @@ -432,6 +437,12 @@ class DeepseekOCRForCausalLM(
              self.tile_tag = config.tile_tag
              self.global_view_pos = config.global_view_pos
@@ -95,17 +105,25 @@ index ead643a7f8..4c31f3ae78 100644
          local_features_2 = self.vision_model(patches, local_features_1)
          features = torch.cat(
 diff --git a/vllm/model_executor/models/deepencoder.py b/vllm/model_executor/models/deepencoder.py
-index 1c786ea85a4e..807b5e8878b3 100644
+index 1c786ea85a4e..932899a6bc 100644
 --- a/vllm/model_executor/models/deepencoder.py
 +++ b/vllm/model_executor/models/deepencoder.py
-@@ -336,11 +336,23 @@
+@@ -290,6 +290,7 @@
+                 positional parameter size.
+         """  # noqa: E501
+         super().__init__()
++        self.musa_fp32_sdpa = False
+         self.num_heads = num_heads
+         head_dim = dim // num_heads
+         self.scale = head_dim**-0.5
+@@ -336,11 +337,23 @@
              attn_bias = (rel_h + rel_w).view(
                  B, self.num_heads, rel_h.size(2), rel_h.size(3) * rel_w.size(4)
              )
 -            x = torch.nn.functional.scaled_dot_product_attention(
 -                q, k, v, attn_mask=attn_bias
 -            )
-+            if getattr(torch.version, "musa", None) is not None:
++            if self.musa_fp32_sdpa and getattr(torch.version, "musa", None) is not None:
 +                q_dtype = q.dtype
 +                x = torch.nn.functional.scaled_dot_product_attention(
 +                    q.float(), k.float(), v.float(), attn_mask=attn_bias.float()
@@ -116,7 +134,7 @@ index 1c786ea85a4e..807b5e8878b3 100644
 +                )
          else:
 -            x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-+            if getattr(torch.version, "musa", None) is not None:
++            if self.musa_fp32_sdpa and getattr(torch.version, "musa", None) is not None:
 +                q_dtype = q.dtype
 +                x = torch.nn.functional.scaled_dot_product_attention(
 +                    q.float(), k.float(), v.float()
