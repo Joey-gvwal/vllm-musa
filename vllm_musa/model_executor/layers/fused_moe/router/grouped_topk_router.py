@@ -254,7 +254,7 @@ def is_power_of_two(n):
     backend=current_platform.simple_compile_backend,
     options=maybe_disable_graph_partition(current_platform.simple_compile_backend),
 )
-def grouped_topk(
+def _grouped_topk_general(
     hidden_states: torch.Tensor,
     gating_output: torch.Tensor,
     topk: int,
@@ -355,6 +355,91 @@ def grouped_topk(
     if routed_scaling_factor != 1.0:
         topk_weights = topk_weights * routed_scaling_factor
     return topk_weights.to(torch.float32), topk_ids.to(torch.int32)
+
+
+def _can_use_musa_tilelang_grouped_topk(
+    hidden_states: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk: int,
+    num_expert_group: int,
+    topk_group: int,
+    scoring_func: str,
+    e_score_correction_bias: torch.Tensor | None,
+    num_fused_shared_experts: int,
+) -> bool:
+    return (
+        current_platform.is_musa()
+        and scoring_func == "softmax"
+        and e_score_correction_bias is None
+        and num_fused_shared_experts == 0
+        and gating_output.device.type == "musa"
+        and hidden_states.device == gating_output.device
+        and hidden_states.dim() == 2
+        and gating_output.dim() == 2
+        and hidden_states.shape[0] == gating_output.shape[0]
+        and gating_output.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and 0 < num_expert_group
+        and 0 < topk_group <= num_expert_group
+        and gating_output.shape[1] % num_expert_group == 0
+        and 0 < topk <= topk_group * (gating_output.shape[1] // num_expert_group)
+    )
+
+
+def grouped_topk(
+    hidden_states: torch.Tensor,
+    gating_output: torch.Tensor,
+    topk: int,
+    renormalize: bool,
+    num_expert_group: int = 0,
+    topk_group: int = 0,
+    scoring_func: str = "softmax",
+    routed_scaling_factor: float = 1.0,
+    e_score_correction_bias: torch.Tensor | None = None,
+    num_fused_shared_experts: int = 0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Dispatch MUSA grouped top-k before entering the compiled Torch fallback."""
+    if _can_use_musa_tilelang_grouped_topk(
+        hidden_states,
+        gating_output,
+        topk,
+        num_expert_group,
+        topk_group,
+        scoring_func,
+        e_score_correction_bias,
+        num_fused_shared_experts,
+    ):
+        from vllm_musa.jit_kernel.tilelang.grouped_topk import (
+            grouped_topk_softmax_tilelang,
+        )
+
+        try:
+            result = grouped_topk_softmax_tilelang(
+                gating_output=gating_output,
+                topk=topk,
+                num_expert_group=num_expert_group,
+                topk_group=topk_group,
+                renormalize=renormalize,
+                routed_scaling_factor=routed_scaling_factor,
+                apply_routed_scaling_factor_on_output=routed_scaling_factor != 1.0,
+            )
+            return result
+        # TileLang selects its serial kernel when this shape does not fit the
+        # parallel kernel's resource limits. Keep the compiled implementation
+        # as a fallback only for unavailable TileLang capabilities.
+        except NotImplementedError:
+            pass
+    return _grouped_topk_general(
+        hidden_states,
+        gating_output,
+        topk,
+        renormalize,
+        num_expert_group,
+        topk_group,
+        scoring_func,
+        routed_scaling_factor,
+        e_score_correction_bias,
+        num_fused_shared_experts,
+    )
 
 
 import vllm.model_executor.layers.fused_moe.router.grouped_topk_router
