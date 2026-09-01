@@ -248,11 +248,57 @@ or empty OCR and diagnostic NED mean `0.9573`. A post-fix `max_tokens=256`
 run measured NED mean `0.5845`; the `max_tokens=1024` run above is the more
 useful quality result for long document pages.
 
-The NED calculation is a local page-level diagnostic. The official
-OmniDocBench end2end/ocr scripts and their final Overall score were not run in
-this PR validation because the pre-fix output was not a valid prediction; the
-post-fix JSONL and source images are retained for a follow-up official score
-run.
+The NED calculation is a local page-level diagnostic. The full official
+OmniDocBench end-to-end evaluation below was subsequently run on all 1,651
+pages using the fixed predictions.
+
+## Full OmniDocBench evaluation with the fixed output
+
+The fixed model output contains 1,651 page Markdown files. The evaluator used
+the OmniDocBench main-branch end-to-end quick-match pipeline as fetched on
+2026-09-01. The README changelog identifies this checkout as v1.7, while the
+published DeepSeek-OCR 2 reference row is explicitly labelled `v1.6_full`;
+that version distinction is retained here because it affects strict
+apples-to-apples comparisons. The run used the
+dataset's 2,352 matched display-formula samples and 665 matched table samples.
+Text, formula edit distance, table metrics, and reading-order metrics were
+computed from four isolated quick-match shards and merged by the evaluator's
+sample denominators. Formula CDM was run with the evaluator's `call_CDM` on
+the same 2,352 matched formula records (four 588-sample shards, 32 workers per
+shard, zero exceptions).
+
+The container's TeX Live did not define the evaluator template's
+`\\mathcolor` macro. A standard three-argument definition was added to the
+temporary evaluator copy so that colored token boxes could be rendered; no
+vLLM or OmniDocBench scoring logic was changed. A one-sample probe confirmed
+non-empty token boxes before the full CDM run.
+
+Fixed-output results:
+
+| Metric | Fixed output | Official DeepSeek-OCR 2 | Delta (fixed - official) |
+|---|---:|---:|---:|
+| Overall | **84.062** | 90.25 | -6.188 points |
+| Text Edit | **0.104566** | 0.050 | +0.054566 |
+| Formula CDM | **84.572%** | 91.84% | -7.268 points |
+| Table TEDS | **78.069%** | 83.89% | -5.821 points |
+| Table TEDS-S | **81.389%** | 87.75% | -6.361 points |
+| Reading Order Edit | **0.178608** | 0.144 | +0.034608 |
+
+Overall is calculated with the official formula:
+
+```text
+((1 - Text Edit) * 100 + Formula CDM + Table TEDS) / 3 = 84.0615
+```
+
+Compared with the test team's prior result on the same 1,651-page dataset
+(Text Edit `0.3561`, Formula Edit `0.4929`, Table TEDS `78.38%`, Table
+Structure TEDS `91.16%`, Table Edit `0.2027`, Reading Order Edit `0.2170`),
+the fixed output improves Text Edit by `0.2516` absolute, Formula Edit by
+`0.2925`, Table Edit by `0.0051`, and Reading Order Edit by `0.0384`. Table
+TEDS changes by `-0.31` points. The team's Formula Edit is not the same
+metric as Formula CDM, and Table Structure TEDS versus TEDS-S should only be
+compared as a diagnostic because their evaluator/version configuration is not
+identical to the official leaderboard row.
 
 ## Validation status and trade-offs
 
@@ -264,7 +310,8 @@ run.
 - tokenizer regression test: `1 passed`
 - rebuilt editable install: pass
 - ccache gate: pass, 100% task hit rate
-- official OmniDocBench final score: not run; diagnostic NED retained
+- official OmniDocBench end-to-end score: pass, 1,651/1,651 pages; Overall 84.062
+- official Formula CDM: pass, 2,352/2,352 formula samples; 84.572%
 - performance optimization of FP32 vision: not yet done
 
 FP32 vision is intentionally a correctness-first fallback. It is slower than
@@ -286,3 +333,8 @@ Important files include `deepseek_ocr_pr_install_retry.log`,
 `vllm_bench_text_rebuilt_warm.log`,
 `omnidoc_predictions_rebuilt_1024.jsonl`, and
 `omnidoc_diagnostic_rebuilt_1024.json`.
+
+The full-evaluation summaries and shard metric JSONs are retained locally at
+`/tmp/deepseek_ocr_omnidocbench_fixed_20260901/` (the raw evaluator run was
+performed in the task container under `/tmp/odb_eval_runs/` and
+`/tmp/odb_cdm_part*/`).
