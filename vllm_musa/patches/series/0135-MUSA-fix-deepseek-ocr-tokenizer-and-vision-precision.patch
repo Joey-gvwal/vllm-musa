@@ -65,21 +65,15 @@ index ead643a7f8..4c31f3ae78 100644
  class DeepseekOCRImagePixelInputs(TensorSchema):
      """
      Dimensions:
-@@ -432,6 +437,18 @@ class DeepseekOCRForCausalLM(
+@@ -432,6 +437,12 @@ class DeepseekOCRForCausalLM(
              self.tile_tag = config.tile_tag
              self.global_view_pos = config.global_view_pos
  
-+            # The DeepSeek-OCR reference implementation is numerically
-+            # unstable in BF16 on MUSA in the vision tower (the same
-+            # checkpoint produces correct OCR in FP32).  Keep the language
-+            # model in its configured dtype, but run the SAM/CLIP/projector
-+            # path in FP32 on MUSA.  The multimodal merge casts the resulting
-+            # embeddings back to the language-model dtype.
-+            self.vision_dtype = torch.float32 if _is_musa_runtime() else self.model_config.dtype
-+            if self.vision_dtype == torch.float32:
-+                self.sam_model.float()
-+                self.vision_model.float()
-+                self.projector.float()
++            # Keep the vision weights in the model dtype. On MUSA, the
++            # precision-sensitive SAM SDPA operation applies a local FP32
++            # accumulation fallback (see deepencoder.py); the rest of the
++            # vision pipeline remains BF16.
++            self.vision_dtype = self.model_config.dtype
 +
              # special token for image token sequence format
              n_embed = self.projector_config.n_embed
@@ -100,6 +94,38 @@ index ead643a7f8..4c31f3ae78 100644
          local_features_1 = self.sam_model(patches)
          local_features_2 = self.vision_model(patches, local_features_1)
          features = torch.cat(
+diff --git a/vllm/model_executor/models/deepencoder.py b/vllm/model_executor/models/deepencoder.py
+index 1c786ea85a4e..807b5e8878b3 100644
+--- a/vllm/model_executor/models/deepencoder.py
++++ b/vllm/model_executor/models/deepencoder.py
+@@ -336,11 +336,23 @@
+             attn_bias = (rel_h + rel_w).view(
+                 B, self.num_heads, rel_h.size(2), rel_h.size(3) * rel_w.size(4)
+             )
+-            x = torch.nn.functional.scaled_dot_product_attention(
+-                q, k, v, attn_mask=attn_bias
+-            )
++            if getattr(torch.version, "musa", None) is not None:
++                q_dtype = q.dtype
++                x = torch.nn.functional.scaled_dot_product_attention(
++                    q.float(), k.float(), v.float(), attn_mask=attn_bias.float()
++                ).to(dtype=q_dtype)
++            else:
++                x = torch.nn.functional.scaled_dot_product_attention(
++                    q, k, v, attn_mask=attn_bias
++                )
+         else:
+-            x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
++            if getattr(torch.version, "musa", None) is not None:
++                q_dtype = q.dtype
++                x = torch.nn.functional.scaled_dot_product_attention(
++                    q.float(), k.float(), v.float()
++                ).to(dtype=q_dtype)
++            else:
++                x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+ 
+         x = (
+             x.view(B, self.num_heads, H, W, -1)
 diff --git a/vllm/tokenizers/registry.py b/vllm/tokenizers/registry.py
 index 713c6228f9..95b9d4ea85 100644
 --- a/vllm/tokenizers/registry.py
