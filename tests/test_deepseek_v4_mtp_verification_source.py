@@ -7,7 +7,7 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0110-MUSA-preserve-DeepSeek-V4-MTP-verification-semantics.patch"
+    / "0110-MUSA-adapt-DSV4-MTP-v028.patch"
 )
 
 
@@ -43,10 +43,8 @@ def test_multi_request_mtp_graph_serializes_both_aux_groups() -> None:
 
     assert "and batch_descriptor.num_reqs > 1" in text
     assert text.count("_musa_dsv4_mtp_multi_request_graph()") == 3
-    assert (
-        "_musa_dsv4_mtp_multi_request_graph()\n"
-        "+                or not _musa_deepseek_v4_aux_overlap_enabled"
-    ) in text
+    assert "_musa_dsv4_mtp_multi_request_graph()" in text
+    assert "if _musa_dsv4_mtp_multi_request_graph():" in text
 
 
 def test_patch_is_scoped_to_deepseek_v4_runtime() -> None:
