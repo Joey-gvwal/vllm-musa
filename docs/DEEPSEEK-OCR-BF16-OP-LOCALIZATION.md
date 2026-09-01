@@ -14,7 +14,7 @@ result back to the original dtype. Non-MUSA execution is unchanged.
 
 ## Evidence
 
-The run used commit `235fa5b2938a2ee69173498a87cf223f1751fbbe`, the same
+The run used the code represented by commit `652d2b5794b6aba2d5e3e781d0f6b19625ed65d0` (based on `v0.28.0-dev`), the same
 OmniDocBench prompt and post-processing as the archived benchmark, and 8 pages
 uniformly selected from a 32-page sample:
 
