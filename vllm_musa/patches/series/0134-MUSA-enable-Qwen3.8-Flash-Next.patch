@@ -12054,6 +12054,7 @@ index 0000000000..d16c4a95fd
 +    CACHE_HAS_ROPE_POS: tl.constexpr,
 +    MROPE_H: tl.constexpr,
 +    MROPE_W: tl.constexpr,
++    MAX_ROPE_POS: tl.constexpr,
 +):
 +    pid = tl.program_id(0)
 +    # K work occupies the first programs; the remaining programs tile Q. This
@@ -12237,6 +12238,17 @@ index 0000000000..d16c4a95fd
 +                pos_t = tl.where(first_in_chunk, first_pos_t.to(tl.int64), cached_pos_t)
 +                pos_h = tl.where(first_in_chunk, first_pos_h.to(tl.int64), cached_pos_h)
 +                pos_w = tl.where(first_in_chunk, first_pos_w.to(tl.int64), cached_pos_w)
++                # Recycled side-cache pages can carry stale MRoPE tails. Keep
++                # those values from becoming unchecked rotary-cache addresses.
++                pos_t = tl.where(
++                    (pos_t >= 0) & (pos_t < MAX_ROPE_POS), pos_t, first_position
++                )
++                pos_h = tl.where(
++                    (pos_h >= 0) & (pos_h < MAX_ROPE_POS), pos_h, first_position
++                )
++                pos_w = tl.where(
++                    (pos_w >= 0) & (pos_w < MAX_ROPE_POS), pos_w, first_position
++                )
 +            else:
 +                pos_t = first_position
 +                pos_h = first_position
@@ -12423,6 +12435,7 @@ index 0000000000..d16c4a95fd
 +        CACHE_HAS_ROPE_POS=cache_has_rope_pos,
 +        MROPE_H=section[1],
 +        MROPE_W=section[2],
++        MAX_ROPE_POS=cos_sin_cache.shape[0],
 +        num_warps=1,
 +    )
 +
