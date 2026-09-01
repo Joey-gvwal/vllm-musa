@@ -1,17 +1,24 @@
-From ee1c71ab0609b704f4941a18eaf7207f80e03e68 Mon Sep 17 00:00:00 2001
+From 018b6488a2fed52c336bf6b689d48df7f2a83853 Mon Sep 17 00:00:00 2001
 From: Joey-gvwal <joey_gvwal@yeah.net>
 Date: Mon, 31 Aug 2026 20:31:03 +0800
 Subject: [PATCH] MUSA: bound DSV4 long-prefill indexer logits
 
 ---
- .../layers/sparse_attn_indexer.py             | 227 +++++++++++++++---
- 1 file changed, 192 insertions(+), 35 deletions(-)
+ .../layers/sparse_attn_indexer.py             | 235 +++++++++++++++---
+ 1 file changed, 200 insertions(+), 35 deletions(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 1b1f8496cb..f8cf5b8b7d 100644
+index 1b1f8496cb..a583c0cbed 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -12,6 +12,7 @@ from vllm import _custom_ops as ops
+@@ -8,10 +8,14 @@ import torch
+ 
+ import vllm.envs as envs
+ from vllm_musa import _custom_ops as _musa_custom_ops
++from vllm_musa.optimization_contract import (
++    deepseek_v4_long_prefill_logits_budget_mb,
++)
+ from vllm import _custom_ops as ops
  from vllm._aiter_ops import rocm_aiter_ops
  from vllm.compilation.breakable_cudagraph import eager_break_during_capture
  from vllm.config import get_current_vllm_config
@@ -19,7 +26,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
  from vllm.forward_context import get_forward_context
  from vllm.logger import init_logger
  from vllm.model_executor.custom_op import CustomOp
-@@ -263,9 +264,17 @@ def _musa_sparse_indexer_materialized_prefill_overselect(
+@@ -263,9 +267,21 @@ def _musa_sparse_indexer_materialized_prefill_overselect(
      return max(0, min(width, int(total_seq_lens)))
  
  
@@ -27,19 +34,23 @@ index 1b1f8496cb..f8cf5b8b7d 100644
 +def _musa_sparse_indexer_materialized_prefill_chunk_rows(
 +    rows: int,
 +    total_seq_lens: int,
++    is_deepseek_v4: bool = False,
 +) -> int:
 +    """Bound each FP32 logits tile by the configured indexer budget."""
      chunk_rows = 512
 -    chunk_rows = max(1, min(chunk_rows, 1024))
-+    max_logits_elems = (
-+        max(1, int(envs.VLLM_SPARSE_INDEXER_MAX_LOGITS_MB)) * 1024 * 1024 // 4
++    logits_budget_mb = (
++        deepseek_v4_long_prefill_logits_budget_mb()
++        if is_deepseek_v4
++        else int(envs.VLLM_SPARSE_INDEXER_MAX_LOGITS_MB)
 +    )
++    max_logits_elems = max(1, logits_budget_mb) * 1024 * 1024 // 4
 +    rows_for_budget = max(1, max_logits_elems // max(1, int(total_seq_lens)))
 +    chunk_rows = min(chunk_rows, rows_for_budget)
      return max(1, min(chunk_rows, int(rows)))
  
  
-@@ -591,7 +600,6 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -591,7 +607,6 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
          or kv_cache.dtype != torch.uint8
          or weights.dtype != torch.float32
          or kv_cache.ndim != 3
@@ -47,7 +58,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
          or int(chunk.num_reqs) != 1
      ):
          return False
-@@ -612,6 +620,28 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -612,6 +627,28 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
      if block_size <= 0:
          return False
  
@@ -76,7 +87,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
      row_starts = chunk.cu_seqlen_ks[:rows].clamp(min=0, max=total_seq_lens)
      row_ends = chunk.cu_seqlen_ke[:rows].clamp(min=0, max=total_seq_lens)
      # Paged-MQA logits use absolute prefix coordinates; row_starts is applied
-@@ -620,13 +650,85 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -620,13 +657,86 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
      if context_lens.dtype != torch.int32:
          context_lens = context_lens.to(torch.int32)
  
@@ -154,6 +165,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
 -        rows
 +        work_rows,
 +        total_seq_lens,
++        is_deepseek_v4=is_deepseek_v4,
      )
 +    if is_deepseek_v4 and total_seq_lens > 4096:
 +        logger.info_once(
@@ -165,7 +177,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
      materialized_topk_sorted = _musa_sparse_indexer_materialized_prefill_topk_sorted()
      materialized_direct_topk = (
          _musa_sparse_indexer_materialized_prefill_direct_topk_enabled()
-@@ -642,18 +744,29 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -642,18 +752,29 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
              return False
  
          logits = logits[:chunk_rows, :total_seq_lens]
@@ -180,25 +192,25 @@ index 1b1f8496cb..f8cf5b8b7d 100644
                  ends,
 -                topk_indices[row_start:row_end, :topk],
 +                work_output[row_start:row_end, :topk],
-                 topk,
-             )
-             return True
- 
++                topk,
++            )
++            return True
++
 +        if use_bounded_long_prefill:
 +            _musa_custom_ops.sparse_indexer_topk(
 +                logits,
 +                starts.to(torch.int32).contiguous(),
 +                ends.to(torch.int32).contiguous(),
 +                work_output[row_start:row_end, :topk],
-+                topk,
-+            )
-+            return True
-+
+                 topk,
+             )
+             return True
+ 
 +        assert positions is not None
          valid_positions = (
              (positions.unsqueeze(0) >= starts.unsqueeze(1))
              & (positions.unsqueeze(0) < ends.unsqueeze(1))
-@@ -703,7 +816,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -703,7 +824,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
                  full_local,
                  direct_local,
              )
@@ -207,7 +219,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
                  direct_local.to(topk_indices.dtype)
              )
              return True
-@@ -715,40 +828,44 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -715,40 +836,44 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
              sorted=materialized_topk_sorted,
          ).indices.contiguous()
          _musa_custom_ops.deepseek_v4_indexer_rerank_prefill(
@@ -264,7 +276,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
                  schedule_meta,
                  total_seq_lens,
                  False,
-@@ -758,21 +875,21 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -758,21 +883,21 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
          return True
  
      def _musa_fill_with_vllm_deep_gemm(_vllm_deep_gemm) -> bool:
@@ -293,7 +305,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
                  schedule_metadata=schedule_meta,
                  max_model_len=total_seq_lens,
                  clean_logits=False,
-@@ -781,6 +898,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -781,6 +906,7 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
                  return False
          return True
  
@@ -301,7 +313,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
      for provider_name in ("mate.deep_gemm", "deep_gemm"):
          try:
              if provider_name == "mate.deep_gemm":
-@@ -789,16 +907,29 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+@@ -789,16 +915,29 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
                  import deep_gemm as _musa_deep_gemm
  
              if _musa_fill_with_deep_gemm_provider(_musa_deep_gemm):
@@ -337,7 +349,7 @@ index 1b1f8496cb..f8cf5b8b7d 100644
  
  
  def _musa_try_fill_prefill_topk_from_indexer_cache_native(
-@@ -826,6 +957,32 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
+@@ -826,6 +965,32 @@ def _musa_try_fill_prefill_topk_from_indexer_cache_native(
      ):
          return True
  

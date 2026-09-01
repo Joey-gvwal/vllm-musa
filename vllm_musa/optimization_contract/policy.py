@@ -18,6 +18,9 @@ from .types import OptimizationFeature
 _DEEPSEEK_V4_SPARSE_PADDED_HEADS = 64
 _DEEPSEEK_V4_SPARSE_HEAD_DIM = 512
 _DEEPSEEK_V4_SPARSE_DTYPE_BYTES = 2
+# Contract default for DSV4 long-prefill materialized indexer logits. The
+# generic environment knob remains available to non-DSV4 paths.
+_DEEPSEEK_V4_LONG_PREFILL_LOGITS_MB = 512
 _DEEPSEEK_V4_CUSTOM_AR_ALLOCATOR_MARGIN_BYTES = 512 * 1024 * 1024
 _DEEPSEEK_V4_MTP4_TOKENS_PER_REQUEST = 5
 # The exact MTP4 graph ladder is 5 * batch_size. The graph-local CAR contract
@@ -29,6 +32,11 @@ _DEEPSEEK_V4_MTP_CAR_GRAPH_REQUEST_SIZES = (1, 2, 4, 8, 16)
 _DEEPSEEK_V4_MTP_CAR_GRAPH_BUFFER_BYTES = 512 * 1024 * 1024
 _DEEPSEEK_V4_MTP_CAR_EAGER_ALIGNMENT_BYTES = 4 * 1024 * 1024
 _DEEPSEEK_V4_MTP_CAR_MAX_META_BYTES_PER_SLOT = 16 * 1024
+
+
+def deepseek_v4_long_prefill_logits_budget_mb() -> int:
+    """Return the validated DSV4 long-prefill logits budget in MiB."""
+    return _DEEPSEEK_V4_LONG_PREFILL_LOGITS_MB
 
 
 @dataclass(frozen=True, slots=True)
