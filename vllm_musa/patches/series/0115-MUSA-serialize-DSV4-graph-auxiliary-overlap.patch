@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: vllm-musa <noreply@mthreads.com>
+Date: Wed, 2 Sep 2026 21:45:00 +0800
+Subject: [PATCH] MUSA: serialize only DSV4 graph attention overlap
+
+---
+ vllm/models/deepseek_v4/attention.py | 34 ++++++++++++++++++++++++++++++--
+ 1 file changed, 31 insertions(+), 3 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 03fbc4c1a1..ed5708b28d 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -33,6 +33,7 @@ if TYPE_CHECKING:
+     )
+
+ from vllm.config import (
++    CUDAGraphMode,
+     CacheConfig,
+     VllmConfig,
+     get_current_vllm_config,
+@@ -81,6 +82,39 @@ def _musa_dsv4_mtp_multi_request_graph() -> bool:
+     )
+
+
++def _musa_dsv4_graph_requires_serialized_overlap() -> bool:
++    """Whether DSV4 graph execution must serialize auxiliary streams.
++
++    MUSA graph replay cannot safely preserve the cross-stream event and
++    buffer dependencies used by DSV4 auxiliary overlap.  Apply the same
++    serialization rule to no-MTP and multi-request MTP verification graphs;
++    eager execution and single-request speculative decoding retain overlap.
++    """
++    if not current_platform.is_musa():
++        return False
++    if get_forward_context().cudagraph_runtime_mode == CUDAGraphMode.NONE:
++        return False
++    if _musa_dsv4_mtp_multi_request_graph():
++        return True
++    try:
++        from vllm_musa.optimization_contract import (
++            OptimizationFeature,
++            resolve_optimization_contract,
++        )
++
++        contract = resolve_optimization_contract(get_current_vllm_config())
++        return contract.prefers(OptimizationFeature.DEEPSEEK_V4_GRAPH_AUX_SERIALIZATION)
++    except AssertionError:
++        # CUDA-graph warmup can run before the worker installs a current
++        # VllmConfig.  A one-token-per-request descriptor is the no-MTP
++        # capture shape; serialize it conservatively instead of querying a
++        # config that does not exist yet.
++        batch_descriptor = get_forward_context().batch_descriptor
++        if batch_descriptor is None or batch_descriptor.num_reqs is None:
++            return True
++        return batch_descriptor.num_tokens <= batch_descriptor.num_reqs
++
++
+ def _musa_deepseek_v4_aux_overlap_enabled(num_tokens: int) -> bool:
+     """Keep MUSA aux-stream overlap away from long-prefill kernels.
+
+@@ -592,7 +626,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         if self.indexer is not None:
+             aux_streams = self.aux_stream_list
+             if (
+-                _musa_dsv4_mtp_multi_request_graph()
++                _musa_dsv4_graph_requires_serialized_overlap()
+                 or not _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0])
+             ):
+                 aux_streams = None
+@@ -637,7 +671,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 self.ln_events[0],
+                 [self.ln_events[1], self.ln_events[2]],
+                 [aux_streams[0], aux_streams[1]] if aux_streams is not None else None,
+-                enable=aux_streams is not None,
++                enable=(
++                    aux_streams is not None
++                    and not _musa_dsv4_graph_requires_serialized_overlap()
++                ),
+             )
+         elif self.compressor is not None:
+             # wq_b + kv_insert on default, compressor on aux.
+@@ -646,6 +683,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             )
+             if not _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0]):
+                 aux_stream = None
++            if _musa_dsv4_graph_requires_serialized_overlap():
++                aux_stream = None
+             compressor = self.compressor
+
+             def wq_b_kv_insert() -> torch.Tensor:

@@ -73,6 +73,14 @@ index 77b78e6e25..11b8fc8781 100644
          projections while still running the compressor that maintains the
          indexer state and K cache for a later eager/exact fallback.
          """
++        # The recent table is metadata-only: it does not consume the learned
++        # indexer query or per-head weights and therefore is not semantically
++        # equivalent to the DSV4 learned indexer.  MTP already rejected this
++        # path via the batch descriptor; no-MTP must reject it as well.  The
++        # DSV4 optimization contract is currently the only caller that sets
++        # ``use_musa_native_indexer``.
++        if self.use_musa_native_indexer:
++            return False
 +        if _musa_sparse_indexer_mtp_requires_learned():
 +            return False
          return (
@@ -128,4 +136,3 @@ index 7d85116c2d..702d94032d 100644
              # Local ref so the closure keeps a non-None type for mypy.
 -- 
 2.25.1
-

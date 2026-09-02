@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Native C4 indexer compressor for DeepSeek-V4 decode on MUSA.
+"""Native C4 indexer compressor for DeepSeek-V4 on MUSA.
 
-The production source patch imports this module lazily. Supported small-token
-decode shapes use the native kernel; unsupported shapes, including prefill,
-fall back to vLLM's Triton implementation.
+The production source patch imports this module lazily. Both small-token
+decode and larger prefill shapes use the same shape-generic native kernel;
+unsupported dtype/layout combinations fall back to vLLM's Triton
+implementation.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ _ROPE_DIM = 64
 _STATE_BLOCK_SIZE = 4
 _STATE_WIDTH = 256
 _STATE_ROW_WIDTH = 512
-_MAX_DECODE_ROWS = 128
 _SUPPORTED_KV_BLOCK_SIZES = (64, 256)
 _INDEX_DTYPES = (torch.int32, torch.int64)
 
@@ -79,8 +79,8 @@ def _guard_c4_indexer_compressor(
     if state_slot_mapping.dim() != 1:
         return False, "state_slot_mapping must be 1D"
     num_rows = state_slot_mapping.numel()
-    if not 0 < num_rows <= _MAX_DECODE_ROWS:
-        return False, f"native C4 path supports 1..128 decode rows, got {num_rows}"
+    if num_rows <= 0:
+        return False, f"native C4 path requires positive rows, got {num_rows}"
     for name, tensor in (
         ("token_to_req_indices", token_to_req_indices),
         ("positions", positions),
@@ -177,7 +177,7 @@ def try_musa_deepseek_v4_c4_indexer_compressor(
     state_width: int,
     kv_block_size: int,
 ) -> tuple[bool, str]:
-    """Run the native decode path or request the Triton shape fallback."""
+    """Run the native C4 path or request the Triton shape fallback."""
     supported, reason = _guard_c4_indexer_compressor(
         state_cache,
         token_to_req_indices,

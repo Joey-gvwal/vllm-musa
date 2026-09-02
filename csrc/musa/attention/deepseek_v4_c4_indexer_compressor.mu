@@ -25,7 +25,6 @@ constexpr int64_t kTokenValueBytes = kHeadDim;
 constexpr int64_t kTokenScaleBytes = sizeof(float);
 constexpr int64_t kWarpsPerBlock = 4;
 constexpr int64_t kThreadsPerBlock = 32 * kWarpsPerBlock;
-constexpr int64_t kMaxDecodeRows = 128;
 constexpr float kFp8Max = 448.0f;
 constexpr float kLog2E = 1.4426950408889634f;
 
@@ -371,9 +370,8 @@ void deepseek_v4_c4_indexer_compress_cache(
               "C4 indexer compressor requires state block size 4");
   TORCH_CHECK(state_width == kStateWidth,
               "C4 indexer compressor requires state width 256");
-  TORCH_CHECK(state_slot_mapping.numel() > 0 &&
-                  state_slot_mapping.numel() <= kMaxDecodeRows,
-              "C4 native path supports 1..128 decode rows");
+  TORCH_CHECK(state_slot_mapping.numel() > 0,
+              "C4 native path requires positive rows");
 
   const int64_t num_tokens = state_slot_mapping.numel();
   TORCH_CHECK(token_to_req_indices.numel() >= num_tokens,

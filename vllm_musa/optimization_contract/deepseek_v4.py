@@ -174,6 +174,12 @@ def resolve_deepseek_v4_contract(
                 OptimizationFeature.DEEPSEEK_V4_TP8_MTP_ASYNC_PREFILL_QUEUE_FENCE,
             }
         )
+        if execution.cudagraph_mode == "full_decode_only":
+            # MUSA graph replay does not preserve the cross-stream event and
+            # buffer dependencies used by the DSV4 auxiliary overlap path.
+            # Keep the contract default fail-safe: graph forwards serialize;
+            # eager forwards remain eligible for overlap.
+            preferred.add(OptimizationFeature.DEEPSEEK_V4_GRAPH_AUX_SERIALIZATION)
         if execution.has_parallel_config:
             preferred.update(
                 {

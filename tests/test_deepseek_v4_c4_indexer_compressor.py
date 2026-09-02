@@ -159,12 +159,14 @@ def test_source_patch_keeps_triton_fallback() -> None:
     assert "+            return" in patch
 
 
-def test_wrapper_is_default_on_and_shape_bounded() -> None:
+def test_wrapper_is_default_on_and_shape_generic() -> None:
     source = WRAPPER.read_text()
 
     assert '_SUPPORTED_KV_BLOCK_SIZES = (64, 256)' in source
-    assert "0 < num_rows <= _MAX_DECODE_ROWS" in source
+    assert "num_rows <= 0" in source
+    assert "positive rows" in source
     assert "return False, reason" in source
+    assert "_MAX_DECODE_ROWS" not in source
     assert "VLLM_MUSA_DEEPSEEK_V4_C4_INDEXER_COMPRESS_IMPL" not in source
     assert "os.environ" not in source
 
