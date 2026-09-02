@@ -7,7 +7,7 @@ diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_exec
 index fff4a1aa..d003219e 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -1836,6 +1836,62 @@ class SparseAttnIndexer(CustomOp):
+@@ -1836,6 +1836,63 @@ class SparseAttnIndexer(CustomOp):
                  "CUDA, ROCm and XPU platforms."
              )
 
@@ -21,6 +21,7 @@ index fff4a1aa..d003219e 100644
 +        """
 +        return (
 +            current_platform.is_musa()
++            and self.use_musa_native_indexer
 +            and _musa_sparse_indexer_is_current_stream_capturing()
 +            and not _musa_sparse_indexer_graph_exact_decode_enabled()
 +        )

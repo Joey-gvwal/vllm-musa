@@ -110,6 +110,9 @@ def test_flash_base_tp8_resolves_validated_profile() -> None:
     assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_SHARED_MLP_CLAMP_FP8)
     assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER)
     assert contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_GRAPH_AUX_SERIALIZATION
+    )
+    assert contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER
     )
     assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_TP8_FLASHMLA_SPARSE_PAGE256)
@@ -135,7 +138,24 @@ def test_flash_base_tp4_is_supported_but_not_tp8_preferred() -> None:
     assert not contract.prefers(
         OptimizationFeature.DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256
     )
+    assert contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_GRAPH_AUX_SERIALIZATION
+    )
     assert contract.prefers(OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER)
+
+
+def test_flash_base_eager_keeps_aux_overlap_available() -> None:
+    config = _flash_base_config()
+    config.compilation_config.cudagraph_mode = "NONE"
+
+    contract = resolve_optimization_contract(config)
+
+    assert contract.supports(
+        OptimizationFeature.DEEPSEEK_V4_GRAPH_AUX_SERIALIZATION
+    )
+    assert not contract.prefers(
+        OptimizationFeature.DEEPSEEK_V4_GRAPH_AUX_SERIALIZATION
+    )
 
 
 def test_flash_base_multibatch_keeps_shared_mlp_path() -> None:

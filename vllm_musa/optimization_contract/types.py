@@ -36,6 +36,9 @@ class OptimizationFeature(str, Enum):
     DEEPSEEK_V4_TP8_FUSED_ADD_RMSNORM_BLOCK256 = (
         "deepseek_v4.tp8_fused_add_rmsnorm_block256"
     )
+    DEEPSEEK_V4_GRAPH_AUX_SERIALIZATION = (
+        "deepseek_v4.graph_aux_serialization"
+    )
     DEEPSEEK_V4_CAR_GRAPH_INPUT_CAPTURE_GUARD = (
         "deepseek_v4.car_graph_input_capture_guard"
     )
