@@ -14,7 +14,7 @@ accumulation. Non-MUSA execution is unchanged.
 
 ## Evidence
 
-The run used the code represented by commit `652d2b5794b6aba2d5e3e781d0f6b19625ed65d0` (based on `v0.28.0-dev`), the same
+The run used the code represented by commit `565ceb5a6bec7de53a4f35de2c6c1c920eb5f846` (based on `v0.28.0-dev`), the same
 OmniDocBench prompt and post-processing as the archived benchmark, and 8 pages
 uniformly selected from a 32-page sample:
 
@@ -37,6 +37,30 @@ kernel test. This avoids the FP32 q/k/v conversion and is the current targeted
 vLLM fix. A native MUSA Flash SDPA BF16 kernel correction would still be a
 torch-musa/MUDNN change outside this vLLM patch.
 
+## Full OmniDocBench regression
+
+The targeted path was then run on all 1,651 pages with the same archived
+four-GPU inference and evaluator scripts. Compared with the archived
+all-vision-FP32 baseline (`results/main_regression_20260901`), it produced:
+
+| Metric | All-vision FP32 baseline | Masked-SDPA MATH + BF16 | Change |
+|---|---:|---:|---:|
+| Overall | 84.2056 | **85.0948** | **+0.8892** |
+| Text Edit | 0.103909 | **0.103018** | -0.000891 |
+| Formula CDM | 84.5772% | **87.8162%** | **+3.2390 pp** |
+| Table TEDS | **78.4306%** | 77.7700% | -0.6606 pp |
+| Table TEDS-S | **81.7559%** | 80.9526% | -0.8033 pp |
+| Table Edit | 0.194344 | 0.201177 | +0.006833 |
+| Reading Order Edit | 0.179140 | **0.178171** | -0.000968 |
+
+The MATH run had 2,352/2,352 CDM samples and 665 table samples, with zero
+CDM exceptions and zero page-level timeouts. Its four-GPU wall time was
+`1950.859 s` (`0.846294 page/s`) versus `2060.555 s`
+(`0.801241 page/s`) for the all-vision-FP32 baseline: **5.32% lower wall
+time / 5.62% higher aggregate throughput**. This is an end-to-end result;
+the MATH backend is still a selective workaround, not a claim that the
+underlying MUSA Flash kernel has been repaired.
+
 ## Reproduction
 
 The complete scripts and raw diagnostic outputs are in:
@@ -53,6 +77,7 @@ git -C /tmp/vllm-base apply --check \
   vllm_musa/patches/series/0135-MUSA-fix-deepseek-ocr-tokenizer-and-vision-precision.patch
 ```
 
-The full 1,651-page OmniDocBench regression should be run after installing
-the patch and rebuilding/reinstalling vLLM-MUSA. The 8-page diagnostic is a
-localization gate, not a replacement for the full benchmark.
+The full-run artifacts are under
+`~/Documents/DeepSeek-OCR-OmniDocBench-20260901/results/musa_math_full_20260902/`.
+The 8-page diagnostic remains a localization gate, not a replacement for the
+full benchmark.
