@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: vllm-musa <noreply@mthreads.com>
+Date: Wed, 3 Sep 2026 14:05:00 +0800
+Subject: [PATCH] MUSA: keep DSV4 MTP overlap with stream waits
+
+---
+ vllm/models/deepseek_v4/attention.py | 5 +----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -591,10 +591,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         # overlap with default's GEMM + cache write.
+         if self.indexer is not None:
+             aux_streams = self.aux_stream_list
+-            if (
+-                _musa_dsv4_mtp_multi_request_graph()
+-                or not _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0])
+-            ):
++            if not _musa_deepseek_v4_aux_overlap_enabled(hidden_states.shape[0]):
+                 aux_streams = None
+             indexer = self.indexer
+             # Local ref so the closure keeps a non-None type for mypy.
+-- 
+2.43.0
