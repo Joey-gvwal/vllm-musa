@@ -1,0 +1,67 @@
+From 2dd6a2c614a4a2b149aef63bf5880049a9415fb2 Mon Sep 17 00:00:00 2001
+From: MUSA Maintainers <musa-maintainers@mthreads.com>
+Date: Sun, 7 Sep 2026 18:20:00 +0800
+Subject: [PATCH] MUSA: support SGLang DSV4 BF16 wo_a checkpoints
+
+SGLang's DeepSeek-V4 FP8 repack keeps the attention wo_a projections in BF16
+and omits their FP8 scales. Allocate wo_a as BF16 on MUSA, normalize upstream
+FP8 wo_a checkpoints to BF16 while loading, and avoid accessing the absent
+scale in the O-projection dispatch.
+
+---
+ vllm/models/deepseek_v4/attention.py         | 4 +++-
+ vllm/models/deepseek_v4/nvidia/model.py      | 6 ++++++
+ vllm/models/deepseek_v4/nvidia/ops/o_proj.py | 2 +-
+ 3 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index ed5708b..381b1cb 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -376,11 +376,13 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         )
+ 
+         self.kv_norm = RMSNorm(self.head_dim, self.eps)
++        musa_bf16_wo_a = current_platform.is_musa()
+         self.wo_a = ColumnParallelLinear(
+             self.n_heads * self.head_dim // self.n_groups,
+             self.n_groups * self.o_lora_rank,
+             bias=False,
+-            quant_config=quant_config,
++            params_dtype=torch.bfloat16 if musa_bf16_wo_a else None,
++            quant_config=None if musa_bf16_wo_a else quant_config,
+             return_bias=False,
+             prefix=f"{prefix}.wo_a",
+         )
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index 9bed7d8..10ad4d4 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -1418,6 +1418,12 @@ class DeepseekV4ForCausalLM(nn.Module, SupportsPP, DeepseekV4MixtureOfExperts):
+         return getattr(self.model, "_mtp_hidden_buffer", None)
+ 
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
++        if current_platform.is_musa():
++            from vllm_musa.deepseek_v4_jit.fp8_einsum import (
++                prepare_musa_deepseek_v4_wo_a_weights,
++            )
++
++            weights = prepare_musa_deepseek_v4_wo_a_weights(weights)
+         loader = AutoWeightsLoader(self, skip_substrs=["mtp."])
+         loaded_params = loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+         self.model.finalize_mega_moe_weights()
+diff --git a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
+index ec5f550..73f0c50 100644
+--- a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
++++ b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
+@@ -71,7 +71,7 @@ def deep_gemm_fp8_o_proj(
+             o_fp8,
+             o_scale,
+             wo_a.weight,
+-            wo_a.weight_scale_inv,
++            getattr(wo_a, "weight_scale_inv", None),
+             z,
+             "bhr,hdr->bhd",
+         )
+-- 
+2.39.5

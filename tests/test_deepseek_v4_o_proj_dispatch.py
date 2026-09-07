@@ -14,6 +14,13 @@ GEMV_PATH = Path(__file__).resolve().parents[1] / "csrc" / "musa" / "gemv.mu"
 CUSTOM_OPS_PATH = (
     Path(__file__).resolve().parents[1] / "vllm_musa" / "_custom_ops.py"
 )
+BF16_WO_A_PATCH_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "vllm_musa"
+    / "patches"
+    / "series"
+    / "0117-MUSA-support-SGLang-DSV4-BF16-wo-a.patch"
+)
 
 
 def _module_tree() -> ast.Module:
@@ -144,3 +151,44 @@ def test_musa_fused_gemv_accepts_caller_owned_fp8_output() -> None:
     )
     assert isinstance(native_call.args[2], ast.Name)
     assert native_call.args[2].id == "output"
+
+
+def test_o_proj_dispatch_supports_bf16_wo_a_without_scale() -> None:
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    tree = _module_tree()
+    dispatcher = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "try_musa_deepseek_v4_fp8_einsum"
+    )
+
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "einsum"
+        for node in ast.walk(dispatcher)
+    )
+    assert "torch.bfloat16, torch.float16, torch.float32" in source
+    assert source.index("if weight.dtype in (") < source.index(
+        "if weight_scale is None:"
+    )
+
+
+def test_wo_a_loader_supports_upstream_fp8_and_sglang_bf16() -> None:
+    source = MODULE_PATH.read_text(encoding="utf-8")
+
+    assert "def prepare_musa_deepseek_v4_wo_a_weights(" in source
+    assert 'weight_suffix = ".attn.wo_a.weight"' in source
+    assert 'scale_suffix = ".attn.wo_a.scale"' in source
+    assert "yield weight_name, _dequant_checkpoint_weight(" in source
+    assert "yield weight_name, weight.to(torch.bfloat16)" in source
+
+
+def test_vllm_patch_allocates_musa_wo_a_as_bf16() -> None:
+    source = BF16_WO_A_PATCH_PATH.read_text(encoding="utf-8")
+
+    assert "params_dtype=torch.bfloat16 if musa_bf16_wo_a else None" in source
+    assert "quant_config=None if musa_bf16_wo_a else quant_config" in source
+    assert "prepare_musa_deepseek_v4_wo_a_weights(weights)" in source
+    assert 'getattr(wo_a, "weight_scale_inv", None)' in source

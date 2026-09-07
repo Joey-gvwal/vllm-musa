@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+
 import torch
 
 _GROUP_SIZE = 128
@@ -70,6 +72,106 @@ def _normalize_weight(
         )
 
     return weight, scales, out_dim, in_dim
+
+
+def _normalize_bf16_weight(
+    weight: torch.Tensor,
+    groups: int,
+) -> torch.Tensor:
+    if weight.dim() == 2:
+        flat_out_dim, in_dim = weight.shape
+        if flat_out_dim % groups != 0:
+            raise ValueError(
+                "DeepSeek-V4 BF16 O-projection expected 2D weight rows to be "
+                f"divisible by groups={groups}, got {tuple(weight.shape)}"
+            )
+        return weight.reshape(groups, flat_out_dim // groups, in_dim)
+    if weight.dim() == 3 and weight.shape[0] == groups:
+        return weight
+    raise ValueError(
+        "DeepSeek-V4 BF16 O-projection expects a 2D or group-aligned 3D "
+        f"weight, got {tuple(weight.shape)} for groups={groups}"
+    )
+
+
+def _dequant_checkpoint_weight(
+    weight: torch.Tensor,
+    scale: torch.Tensor,
+) -> torch.Tensor:
+    if weight.dim() != 2 or scale.dim() != 2:
+        raise ValueError(
+            "DeepSeek-V4 wo_a FP8 checkpoint expects 2D weight and scale, "
+            f"got {tuple(weight.shape)} and {tuple(scale.shape)}"
+        )
+    out_blocks, in_blocks = scale.shape
+    if weight.shape != (out_blocks * _GROUP_SIZE, in_blocks * _GROUP_SIZE):
+        raise ValueError(
+            "DeepSeek-V4 wo_a FP8 checkpoint shape mismatch: "
+            f"weight={tuple(weight.shape)}, scale={tuple(scale.shape)}"
+        )
+    blocks = weight.to(torch.float32).reshape(
+        out_blocks,
+        _GROUP_SIZE,
+        in_blocks,
+        _GROUP_SIZE,
+    )
+    return (blocks * scale.to(torch.float32)[:, None, :, None]).reshape(
+        weight.shape
+    ).to(torch.bfloat16)
+
+
+def prepare_musa_deepseek_v4_wo_a_weights(
+    weights: Iterable[tuple[str, torch.Tensor]],
+) -> Iterator[tuple[str, torch.Tensor]]:
+    """Normalize DeepSeek-V4 ``wo_a`` checkpoints for the MUSA BF16 path.
+
+    The upstream checkpoint stores FP8 ``wo_a.weight`` plus ``wo_a.scale``.
+    SGLang's repacked FP8 checkpoint stores BF16 ``wo_a.weight`` and omits the
+    scale tensor, while retaining stale scale entries in its index. Buffer only
+    these small projection tensors, dequantize the upstream form, and pass the
+    SGLang form through unchanged.
+    """
+    pending: dict[str, dict[str, tuple[str, torch.Tensor]]] = {}
+    order: list[str] = []
+    weight_suffix = ".attn.wo_a.weight"
+    scale_suffix = ".attn.wo_a.scale"
+
+    for name, tensor in weights:
+        if name.endswith(weight_suffix):
+            prefix = name[: -len(".weight")]
+            if prefix not in pending:
+                pending[prefix] = {}
+                order.append(prefix)
+            pending[prefix]["weight"] = (name, tensor)
+        elif name.endswith(scale_suffix):
+            prefix = name[: -len(".scale")]
+            if prefix not in pending:
+                pending[prefix] = {}
+                order.append(prefix)
+            pending[prefix]["scale"] = (name, tensor)
+        else:
+            yield name, tensor
+
+    fp8_dtype = torch.float8_e4m3fn
+    for prefix in order:
+        values = pending[prefix]
+        if "weight" not in values:
+            raise ValueError(f"DeepSeek-V4 wo_a scale has no weight: {prefix}")
+        weight_name, weight = values["weight"]
+        scale_entry = values.get("scale")
+        if weight.dtype == fp8_dtype:
+            if scale_entry is None:
+                raise ValueError(
+                    f"DeepSeek-V4 FP8 wo_a weight has no scale: {weight_name}"
+                )
+            yield weight_name, _dequant_checkpoint_weight(weight, scale_entry[1])
+        elif weight.dtype in (torch.bfloat16, torch.float16, torch.float32):
+            yield weight_name, weight.to(torch.bfloat16)
+        else:
+            raise TypeError(
+                f"Unsupported DeepSeek-V4 wo_a dtype for {weight_name}: "
+                f"{weight.dtype}"
+            )
 
 
 def try_musa_deepseek_v4_fp8_einsum_gemv(
@@ -237,11 +339,26 @@ def try_musa_deepseek_v4_fp8_einsum(
     activation: torch.Tensor,
     activation_scale: torch.Tensor,
     weight: torch.Tensor,
-    weight_scale: torch.Tensor,
+    weight_scale: torch.Tensor | None,
     out: torch.Tensor,
     equation: str,
 ) -> tuple[bool, str]:
     """Try supported MUSA replacements for DeepSeek-V4 FP8 einsum."""
+    if weight.dtype in (torch.bfloat16, torch.float16, torch.float32):
+        if equation != "bhr,hdr->bhd":
+            return False, f"unsupported equation {equation!r}"
+        activation_deq = _dequant_activation(activation, activation_scale).to(
+            torch.bfloat16
+        )
+        weight_bf16 = _normalize_bf16_weight(weight, activation.shape[1])
+        out.copy_(
+            torch.einsum(equation, activation_deq, weight_bf16).to(out.dtype)
+        )
+        return True, "torch_bf16_wo_a_einsum"
+
+    if weight_scale is None:
+        return False, "FP8 weight requires a weight scale"
+
     handled, reason = try_musa_deepseek_v4_fp8_einsum_gemv(
         activation,
         activation_scale,
