@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""DeepSeek-V4 FP8 einsum helpers for MUSA provider experiments."""
+"""DeepSeek-V4 O-projection dispatch helpers for the MUSA provider."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import torch
 
 _GROUP_SIZE = 128
 _DEEPGEMM_MIN_TOKENS = 128
+_BF16_WEIGHT_DTYPES = (torch.bfloat16, torch.float16, torch.float32)
 
 
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
@@ -165,7 +166,7 @@ def prepare_musa_deepseek_v4_wo_a_weights(
                     f"DeepSeek-V4 FP8 wo_a weight has no scale: {weight_name}"
                 )
             yield weight_name, _dequant_checkpoint_weight(weight, scale_entry[1])
-        elif weight.dtype in (torch.bfloat16, torch.float16, torch.float32):
+        elif weight.dtype in _BF16_WEIGHT_DTYPES:
             yield weight_name, weight.to(torch.bfloat16)
         else:
             raise TypeError(
@@ -344,7 +345,7 @@ def try_musa_deepseek_v4_fp8_einsum(
     equation: str,
 ) -> tuple[bool, str]:
     """Try supported MUSA replacements for DeepSeek-V4 FP8 einsum."""
-    if weight.dtype in (torch.bfloat16, torch.float16, torch.float32):
+    if weight.dtype in _BF16_WEIGHT_DTYPES:
         if equation != "bhr,hdr->bhd":
             return False, f"unsupported equation {equation!r}"
         activation_deq = _dequant_activation(activation, activation_scale).to(

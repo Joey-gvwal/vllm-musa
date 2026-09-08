@@ -197,8 +197,12 @@ def test_o_proj_dispatch_supports_bf16_wo_a_without_scale() -> None:
     )
     assert 'return True, "torch_bf16_wo_a_mm"' in source
     assert 'return True, "torch_bf16_wo_a_bmm"' in source
-    assert "torch.bfloat16, torch.float16, torch.float32" in source
-    assert source.index("if weight.dtype in (") < source.index(
+    assert (
+        "_BF16_WEIGHT_DTYPES = (torch.bfloat16, torch.float16, torch.float32)"
+        in source
+    )
+    assert "if weight.dtype in _BF16_WEIGHT_DTYPES:" in source
+    assert source.index("if weight.dtype in _BF16_WEIGHT_DTYPES:") < source.index(
         "if weight_scale is None:"
     )
 

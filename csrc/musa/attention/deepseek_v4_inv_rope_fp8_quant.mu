@@ -97,7 +97,8 @@ __global__ void deepseek_v4_inv_rope_bf16_kernel(
                           token * out_stride_token + head_in_group * kHeadDim;
 
   for (int64_t dim = tid; dim < kHeadDim; dim += kThreads) {
-    output[dim] = __float2bfloat16(load_rotated_or_raw(input, dim, cos_ptr, sin_ptr));
+    output[dim] =
+        __float2bfloat16(load_rotated_or_raw(input, dim, cos_ptr, sin_ptr));
   }
 }
 
