@@ -21,6 +21,20 @@ BF16_WO_A_PATCH_PATH = (
     / "series"
     / "0117-MUSA-support-SGLang-DSV4-BF16-wo-a.patch"
 )
+BF16_WO_A_NATIVE_PATCH_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "vllm_musa"
+    / "patches"
+    / "series"
+    / "0118-MUSA-DSV4-BF16-woa-native-rope.patch"
+)
+BF16_ROPE_KERNEL_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "csrc"
+    / "musa"
+    / "attention"
+    / "deepseek_v4_inv_rope_fp8_quant.mu"
+)
 
 
 def _module_tree() -> ast.Module:
@@ -206,3 +220,14 @@ def test_vllm_patch_allocates_musa_wo_a_as_bf16() -> None:
     assert "quant_config=None if musa_bf16_wo_a else quant_config" in source
     assert "prepare_musa_deepseek_v4_wo_a_weights(weights)" in source
     assert 'getattr(wo_a, "weight_scale_inv", None)' in source
+
+
+def test_bf16_wo_a_uses_native_inverse_rope_and_gemm_patch() -> None:
+    patch = BF16_WO_A_NATIVE_PATCH_PATH.read_text(encoding="utf-8")
+    kernel = BF16_ROPE_KERNEL_PATH.read_text(encoding="utf-8")
+
+    assert "deepseek_v4_fused_inv_rope_bf16" in patch
+    assert "torch.mm(o_bf16[:, 0, :], wo_a_bf16[0].transpose(0, 1))" in patch
+    assert "torch.bmm(o_bf16, wo_a_bf16.transpose(1, 2))" in patch
+    assert "deepseek_v4_inv_rope_bf16_kernel" in kernel
+    assert "deepseek_v4_fused_inv_rope_bf16" in kernel

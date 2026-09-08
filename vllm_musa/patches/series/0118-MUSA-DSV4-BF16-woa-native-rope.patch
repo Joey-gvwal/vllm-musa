@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MUSA Maintainers <musa-maintainers@mthreads.com>
+Date: Mon, 8 Sep 2026 12:00:00 +0800
+Subject: [PATCH] MUSA: keep BF16 DeepSeek-V4 wo_a on native path
+
+Route BF16 wo_a checkpoints through the native inverse-RoPE BF16 op and a
+shape-specialized BF16 GEMM, avoiding the FP8 quantize/dequantize round trip.
+
+---
+diff --git a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
+index 73f0c507a..953466c3a 100644
+--- a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
++++ b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
+@@ -45,46 +45,70 @@ def deep_gemm_fp8_o_proj(
+     Shared by the FlashMLA and FlashInfer CUDA backends. ``einsum_recipe`` /
+     ``tma_aligned_scales`` come from ``compute_fp8_einsum_recipe``.
+     """
+-    o_fp8, o_scale = fused_inv_rope_fp8_quant(
+-        o,
+-        positions,
+-        cos_sin_cache,
+-        n_groups=n_groups,
+-        heads_per_group=heads_per_group,
+-        nope_dim=nope_dim,
+-        rope_dim=rope_dim,
+-        tma_aligned_scales=tma_aligned_scales,
+-    )
+     z = torch.empty(
+         (o.shape[0], n_groups, o_lora_rank),
+         device=o.device,
+         dtype=torch.bfloat16,
+     )
+-    if current_platform.is_musa():
+-        # MUSA: mate's fp8_einsum rejects the 2D o_proj weight that upstream
+-        # passes; the MUSA provider normalizes it to the grouped 3D layout.
+-        from vllm_musa.deepseek_v4_jit.fp8_einsum import (
+-            try_musa_deepseek_v4_fp8_einsum,
+-        )
++    if current_platform.is_musa() and getattr(wo_a, "weight_scale_inv", None) is None:
++        # SGLang-MUSA keeps the repacked wo_a path in BF16: inverse RoPE is
++        # fused without quantizing o, followed by a shape-specialized BF16
++        # GEMM. This avoids the FP8 quantize/dequantize round trip on MUSA.
++        from vllm_musa import _custom_ops as musa_ops
+ 
+-        handled, reason = try_musa_deepseek_v4_fp8_einsum(
+-            o_fp8,
+-            o_scale,
+-            wo_a.weight,
+-            getattr(wo_a, "weight_scale_inv", None),
+-            z,
+-            "bhr,hdr->bhd",
+-        )
+-        if not handled:
+-            raise RuntimeError(
+-                f"MUSA DeepSeek-V4 o_proj fp8_einsum unsupported: {reason}"
+-            )
++        o_bf16 = musa_ops.deepseek_v4_fused_inv_rope_bf16(
++            o,
++            positions,
++            cos_sin_cache,
++            n_groups,
++            heads_per_group,
++            nope_dim,
++            rope_dim,
++        )
++        wo_a_bf16 = wo_a.weight.view(n_groups, o_lora_rank, -1)
++        if n_groups == 1:
++            z[:, 0, :].copy_(
++                torch.mm(o_bf16[:, 0, :], wo_a_bf16[0].transpose(0, 1))
++            )
++        else:
++            z.copy_(torch.bmm(o_bf16, wo_a_bf16.transpose(1, 2)))
+     else:
+-        fp8_einsum(
+-            "bhr,hdr->bhd",
+-            (o_fp8, o_scale),
+-            (wo_a.weight, wo_a.weight_scale_inv),
+-            z,
+-            recipe=einsum_recipe,
++        o_fp8, o_scale = fused_inv_rope_fp8_quant(
++            o,
++            positions,
++            cos_sin_cache,
++            n_groups=n_groups,
++            heads_per_group=heads_per_group,
++            nope_dim=nope_dim,
++            rope_dim=rope_dim,
++            tma_aligned_scales=tma_aligned_scales,
+         )
++        if current_platform.is_musa():
++            # MUSA: mate's fp8_einsum rejects the 2D o_proj weight that
++            # upstream passes; the MUSA provider normalizes it to the grouped
++            # 3D layout.
++            from vllm_musa.deepseek_v4_jit.fp8_einsum import (
++                try_musa_deepseek_v4_fp8_einsum,
++            )
++
++            handled, reason = try_musa_deepseek_v4_fp8_einsum(
++                o_fp8,
++                o_scale,
++                wo_a.weight,
++                getattr(wo_a, "weight_scale_inv", None),
++                z,
++                "bhr,hdr->bhd",
++            )
++            if not handled:
++                raise RuntimeError(
++                    f"MUSA DeepSeek-V4 o_proj fp8_einsum unsupported: {reason}"
++                )
++        else:
++            fp8_einsum(
++                "bhr,hdr->bhd",
++                (o_fp8, o_scale),
++                (wo_a.weight, wo_a.weight_scale_inv),
++                z,
++                recipe=einsum_recipe,
++            )
+     return wo_b(z.flatten(1))
+--
+2.39.5

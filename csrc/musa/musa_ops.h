@@ -211,6 +211,10 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
     const torch::Tensor &cos_sin_cache, int64_t n_groups,
     int64_t heads_per_group, int64_t nope_dim, int64_t rope_dim,
     int64_t quant_group_size, bool tma_aligned_scales);
+torch::Tensor deepseek_v4_fused_inv_rope_bf16(
+    const torch::Tensor &o, const torch::Tensor &positions,
+    const torch::Tensor &cos_sin_cache, int64_t n_groups,
+    int64_t heads_per_group, int64_t nope_dim, int64_t rope_dim);
 void deepseek_v4_topk_softplus_sqrt(
     torch::Tensor &topk_weights, torch::Tensor &topk_indices,
     torch::Tensor &token_expert_indices, const torch::Tensor &gating_output,

@@ -69,6 +69,38 @@ __device__ __forceinline__ float load_rotated_or_raw(
   return odd * c - even * s;
 }
 
+// BF16 counterpart used by SGLang-style checkpoints whose wo_a weights are
+// already dequantized.  Keeping inverse-RoPE in this kernel avoids the FP8
+// quantize/dequantize round trip before the BF16 wo_a GEMM.
+__global__ void deepseek_v4_inv_rope_bf16_kernel(
+    const __mt_bfloat16* __restrict__ o, int64_t o_stride_token,
+    int64_t o_stride_head, const void* __restrict__ positions,
+    int position_kind, const float* __restrict__ cos_sin_cache,
+    int64_t cache_stride_pos, __mt_bfloat16* __restrict__ bf16_out,
+    int64_t out_stride_group, int64_t out_stride_token, int64_t num_tokens,
+    int64_t heads_per_group) {
+  const int64_t token = static_cast<int64_t>(blockIdx.x);
+  const int64_t global_head = static_cast<int64_t>(blockIdx.y);
+  const int tid = threadIdx.x;
+  if (token >= num_tokens) {
+    return;
+  }
+
+  const int64_t group = global_head / heads_per_group;
+  const int64_t head_in_group = global_head - group * heads_per_group;
+  const int64_t pos = load_index(positions, position_kind, token);
+  const float* cos_ptr = cos_sin_cache + pos * cache_stride_pos;
+  const float* sin_ptr = cos_ptr + kRopeDim / 2;
+  const __mt_bfloat16* input =
+      o + token * o_stride_token + global_head * o_stride_head;
+  __mt_bfloat16* output = bf16_out + group * out_stride_group +
+                          token * out_stride_token + head_in_group * kHeadDim;
+
+  for (int64_t dim = tid; dim < kHeadDim; dim += kThreads) {
+    output[dim] = __float2bfloat16(load_rotated_or_raw(input, dim, cos_ptr, sin_ptr));
+  }
+}
+
 template <bool TMA_ALIGNED_SCALES>
 __global__ void deepseek_v4_inv_rope_fp8_quant_kernel(
     const __mt_bfloat16* __restrict__ o, int64_t o_stride_token,
@@ -343,4 +375,60 @@ std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_inv_rope_fp8_quant(
               musaGetErrorString(err));
 
   return std::make_tuple(fp8_buf.transpose(0, 1), scale_buf.transpose(0, 1));
+}
+
+torch::Tensor deepseek_v4_fused_inv_rope_bf16(
+    const torch::Tensor& o, const torch::Tensor& positions,
+    const torch::Tensor& cos_sin_cache, int64_t n_groups,
+    int64_t heads_per_group, int64_t nope_dim, int64_t rope_dim) {
+  check_musa_tensor(o, "o");
+  check_musa_tensor(positions, "positions");
+  check_musa_tensor(cos_sin_cache, "cos_sin_cache");
+  TORCH_CHECK(o.scalar_type() == torch::kBFloat16, "o must be bfloat16");
+  TORCH_CHECK(cos_sin_cache.scalar_type() == torch::kFloat32,
+              "cos_sin_cache must be float32");
+  TORCH_CHECK(o.dim() == 3 && o.size(2) == kHeadDim,
+              "o must have shape [tokens, heads, 512]");
+  TORCH_CHECK(o.stride(2) == 1, "o last dimension must be contiguous");
+  TORCH_CHECK(positions.dim() == 1 && positions.numel() == o.size(0),
+              "positions must be [tokens]");
+  TORCH_CHECK(positions.is_contiguous(), "positions must be contiguous");
+  TORCH_CHECK(cos_sin_cache.dim() == 2 && cos_sin_cache.size(1) == kRopeDim,
+              "cos_sin_cache must have shape [max_positions, 64]");
+  TORCH_CHECK(cos_sin_cache.stride(1) == 1,
+              "cos_sin_cache last dimension must be contiguous");
+  TORCH_CHECK(o.device() == positions.device() &&
+                  o.device() == cos_sin_cache.device(),
+              "o, positions, and cos_sin_cache must be on the same device");
+  TORCH_CHECK(nope_dim == kNopeDim && rope_dim == kRopeDim,
+              "only DeepSeek-V4 dimensions 448/64 are supported");
+  TORCH_CHECK(heads_per_group > 0 && n_groups > 0,
+              "n_groups and heads_per_group must be positive");
+  TORCH_CHECK(o.size(1) == n_groups * heads_per_group,
+              "num heads must equal n_groups * heads_per_group");
+
+  const int64_t num_tokens = o.size(0);
+  const int64_t d = heads_per_group * kHeadDim;
+  auto bf16_buf = torch::empty({n_groups, num_tokens, d},
+                               o.options().dtype(torch::kBFloat16));
+  if (num_tokens == 0 || o.size(1) == 0) {
+    return bf16_buf.transpose(0, 1);
+  }
+
+  const at::musa::OptionalMUSAGuard device_guard(device_of(o));
+  musaStream_t stream = at::musa::getCurrentMUSAStream();
+  const dim3 grid(static_cast<unsigned int>(num_tokens),
+                  static_cast<unsigned int>(o.size(1)));
+  const dim3 block(kThreads);
+  deepseek_v4_inv_rope_bf16_kernel<<<grid, block, 0, stream>>>(
+      static_cast<const __mt_bfloat16*>(o.data_ptr()), o.stride(0),
+      o.stride(1), positions.data_ptr(), index_kind(positions, "positions"),
+      static_cast<const float*>(cos_sin_cache.data_ptr()),
+      cos_sin_cache.stride(0), static_cast<__mt_bfloat16*>(bf16_buf.data_ptr()),
+      bf16_buf.stride(0), bf16_buf.stride(1), num_tokens, heads_per_group);
+  const auto err = musaGetLastError();
+  TORCH_CHECK(err == musaSuccess,
+              "deepseek_v4_fused_inv_rope_bf16 launch failed: ",
+              musaGetErrorString(err));
+  return bf16_buf.transpose(0, 1);
 }
