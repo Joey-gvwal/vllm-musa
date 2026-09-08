@@ -163,12 +163,26 @@ def test_o_proj_dispatch_supports_bf16_wo_a_without_scale() -> None:
         and node.name == "try_musa_deepseek_v4_fp8_einsum"
     )
 
+    bf16_calls = {
+        node.func.attr
+        for node in ast.walk(dispatcher)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "torch"
+    }
+    assert {
+        "mm",
+        "bmm",
+    }.issubset(bf16_calls)
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "einsum"
         for node in ast.walk(dispatcher)
     )
+    assert 'return True, "torch_bf16_wo_a_mm"' in source
+    assert 'return True, "torch_bf16_wo_a_bmm"' in source
     assert "torch.bfloat16, torch.float16, torch.float32" in source
     assert source.index("if weight.dtype in (") < source.index(
         "if weight_scale is None:"

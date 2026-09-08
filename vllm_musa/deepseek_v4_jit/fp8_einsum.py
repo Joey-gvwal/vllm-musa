@@ -351,10 +351,18 @@ def try_musa_deepseek_v4_fp8_einsum(
             torch.bfloat16
         )
         weight_bf16 = _normalize_bf16_weight(weight, activation.shape[1])
+        # SGLang-MUSA avoids the generic einsum lowering for the production
+        # TP8 layout (G=1, D=4096, R=1024): a plain GEMM maps to the MUSA
+        # BF16 matmul path and avoids materializing a strided 3-D operand.
+        if weight_bf16.shape[0] == 1:
+            out[:, 0, :].copy_(
+                torch.mm(activation_deq[:, 0, :], weight_bf16[0].transpose(0, 1))
+            )
+            return True, "torch_bf16_wo_a_mm"
         out.copy_(
-            torch.einsum(equation, activation_deq, weight_bf16).to(out.dtype)
+            torch.bmm(activation_deq, weight_bf16.transpose(1, 2)).to(out.dtype)
         )
-        return True, "torch_bf16_wo_a_einsum"
+        return True, "torch_bf16_wo_a_bmm"
 
     if weight_scale is None:
         return False, "FP8 weight requires a weight scale"
