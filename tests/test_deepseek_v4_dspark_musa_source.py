@@ -25,3 +25,10 @@ def test_dspark_rejection_sampler_preserves_optional_feature_flags() -> None:
     assert 'target_logits.device.type == "musa"' in patch
     assert "draft_logits = target_logits.new_empty((1, 1, 1))" in patch
     assert "SYNTHETIC_MODE=synthetic_mode" in patch
+
+
+def test_dsv4_loaders_fall_back_to_resolved_quant_expert_dtype() -> None:
+    patch = _patch("0142-MUSA-honor-DeepSeek-V4-FP8-expert-dtype-override.patch")
+    assert "vllm_config.quant_config, \"expert_dtype\"" in patch
+    assert "self.quant_config, \"expert_dtype\"" in patch
+    assert "FP8 block scale names" in patch

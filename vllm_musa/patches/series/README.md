@@ -17,12 +17,9 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-<<<<<<< HEAD
-Currently **152 patches**. This branch includes the Qwen3.6 patches for commonGDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
-=======
-Currently **141 patches**. This branch includes the Qwen3.6 patches for common
+Currently **155 patches**. This branch includes the Qwen3.6 patches for common
+
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
->>>>>>> feat(musa): enable DeepSeek-V4 DSpark on v0.28
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
 adds Qwen3.5-122B/Qwen3-VL MM encoder FlashAttention routing, TP-only shared
@@ -35,7 +32,8 @@ the learned indexer — the metadata-only recent window is not used on the
 native path — and hands off auxiliary overlap with stream waits instead of
 CUDA events. The DSpark additions route context-KV insertion through the MUSA
 custom operator and provide typed optional pointers for greedy rejection sampling.
-The final five patches adapt the v0.28 Model Runner V2 rejection kernels to MUSA Triton scalar-predicate and
+They also honor the resolved FP8 expert dtype when converted checkpoints omit
+the HF metadata field. The final five patches adapt the v0.28 Model Runner V2 rejection kernels to MUSA Triton scalar-predicate and
 Gumbel-helper contracts without changing the upstream acceptance or resampling
 algorithm. DeepSeek-V4 remains on Model Runner V1 by default on MUSA for its
 faster FULL_DECODE_ONLY serving path; users and V2-only speculative paths can
