@@ -615,19 +615,21 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
     }
 
     BlockConfig config{0, 0, 0.f, false};
-    const bool mp60_w1_range =
-        num_mp == 60 && w1 && bseqlen >= 2 && bseqlen <= 12;
-    const bool mp60_w2_range = num_mp == 60 && w2 && bseqlen >= 6 &&
-                               bseqlen <= 72 && bseqlen % 6 == 0;
+    const bool small_m_bin = num_mp == 48 || num_mp == 60;
+    const bool small_m_w1_range =
+        small_m_bin && w1 && bseqlen >= 2 && bseqlen <= 12;
+    const bool small_m_w2_range = small_m_bin && w2 && bseqlen >= 6 &&
+                                  bseqlen <= 72 && bseqlen % 6 == 0;
     if (bseqlen == 1) {
         config = w1 ? BlockConfig{4, 32, 0.f, true}
                     : BlockConfig{32, 4, 0.f, true};
-    } else if (mp60_w1_range || mp60_w2_range ||
+    } else if (small_m_w1_range || small_m_w2_range ||
                (w1 && bseqlen == 8) || (w2 && bseqlen == 48)) {
         // On MP60, cold-L2 route-mode sweeps place the native/upstream
         // crossover at target M=12. W1 sees M rows while routed W2 sees
         // M*topk rows, so the same target interval is [2,12] and [6,72]
-        // respectively. Keep the legacy exact M=8 choice on MP56; other MP56
+        // respectively. MP48 uses the same interval and tile. Keep the legacy
+        // exact M=8 choice on MP56; other MP56
         // shapes retain their previously calibrated generic path.
         config = BlockConfig{32, 4, 0.f, true};
     } else {

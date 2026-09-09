@@ -275,6 +275,29 @@ _CALIBRATED_THRESHOLDS.update(
 _CALIBRATED_THRESHOLDS.update(
     {
         _s5000_fp8_shape(
+            multiprocessor_count=48,
+            local_experts=256,
+            w1_output_size=512,
+            w2_input_size=256,
+            hidden_size=4096,
+            top_k=6,
+            w1_scale_shape=(256, 4, 32),
+            w2_scale_shape=(256, 32, 2),
+            gemv_block="16x8",
+            graph_mode=graph_mode,
+        ): _thresholds(
+            # Preserve the MP56 contract's exact per-rank shape on MP48.
+            # Match the native W1/W2 selector through target M=12.
+            gemv_max_tokens=12,
+            grouped_gemm_min_tokens=None,
+            source=f"s5000-mp48-dsv4-tp8-{graph_mode}-block16-split32-m12",
+        )
+        for graph_mode in ("eager", "capture")
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _s5000_fp8_shape(
             local_experts=64,
             w1_output_size=2816,
             w2_input_size=1408,
