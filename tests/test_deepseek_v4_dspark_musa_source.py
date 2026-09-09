@@ -39,3 +39,9 @@ def test_dsv4_loaders_prefer_resolved_fp8_over_config_default() -> None:
     assert 'resolved_quant_dtype in ("fp4", "fp8")' in patch
     assert 'resolved_quant_dtype == "fp8"' in patch
 
+
+
+def test_dspark_loader_prefers_resolved_fp8_expert_scales() -> None:
+    patch = _patch("0144-MUSA-select-FP8-expert-scales-in-DSpark-loader.patch")
+    assert "resolved_quant_dtype in (\"fp4\", \"fp8\")" in patch
+    assert "expert_scale_suffix" in patch
