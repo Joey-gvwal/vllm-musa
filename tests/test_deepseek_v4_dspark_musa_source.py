@@ -32,3 +32,10 @@ def test_dsv4_loaders_fall_back_to_resolved_quant_expert_dtype() -> None:
     assert "vllm_config.quant_config, \"expert_dtype\"" in patch
     assert "self.quant_config, \"expert_dtype\"" in patch
     assert "FP8 block scale names" in patch
+
+
+def test_dsv4_loaders_prefer_resolved_fp8_over_config_default() -> None:
+    patch = _patch("0143-MUSA-prefer-resolved-DeepSeek-V4-FP8-dtype.patch")
+    assert 'resolved_quant_dtype in ("fp4", "fp8")' in patch
+    assert 'resolved_quant_dtype == "fp8"' in patch
+
