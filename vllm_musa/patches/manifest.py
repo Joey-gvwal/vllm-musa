@@ -381,6 +381,12 @@ _SHADOW_MODULES = [
     ),
     (
         "5",
+        "vllm_musa/v1/attention/ops/qwen_qsa_sglang_triton.py",
+        None,
+        "new MUSA module: SGLang-derived packed QSA GQA bridge",
+    ),
+    (
+        "5",
         "vllm_musa/v1/executor/multiproc_executor.py",
         "vllm/v1/executor/multiproc_executor.py",
         "rebinds upstream (sim 0.08) — 4b-conversion candidate",
