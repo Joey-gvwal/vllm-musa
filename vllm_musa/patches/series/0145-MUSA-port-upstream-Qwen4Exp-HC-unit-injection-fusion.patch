@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joey-gvwal <joey_gvwal@yeah.net>
+Date: Mon, 14 Sep 2026 17:07:51 +0800
+Subject: [PATCH] MUSA: remove unproven QSA stream overlap
+
+---
+ ...verlap-QSA-index-projection-with-QKV.patch | 27 -------------------
+ ...tain-QSA-side-stream-buffer-lifetime.patch | 24 -----------------
+ 2 files changed, 51 deletions(-)
+ delete mode 100644 vllm_musa/patches/series/0143-MUSA-overlap-QSA-index-projection-with-QKV.patch
+ delete mode 100644 vllm_musa/patches/series/0144-MUSA-retain-QSA-side-stream-buffer-lifetime.patch
+
+diff --git a/vllm_musa/patches/series/0143-MUSA-overlap-QSA-index-projection-with-QKV.patch b/vllm_musa/patches/series/0143-MUSA-overlap-QSA-index-projection-with-QKV.patch
+deleted file mode 100644
+index 1916928f..00000000
+--- a/vllm_musa/patches/series/0143-MUSA-overlap-QSA-index-projection-with-QKV.patch
++++ /dev/null
+@@ -1,27 +0,0 @@
+-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+-From: Joey-gvwal <joey_gvwal@yeah.net>
+-Date: Mon, 14 Sep 2026 12:35:07 +0800
+-Subject: [PATCH] MUSA: register Qwen GDN fused projection before capture
+-
+----
+- .../layers/mamba/gdn/qwen_gdn_linear_attn.py               | 7 +++++++
+- 1 file changed, 7 insertions(+)
+-
+-diff --git a/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py b/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+-index dd3448b6..c9494c03 100644
+---- a/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+-+++ b/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+-@@ -21,6 +21,13 @@ from vllm_musa.optimization_contract import (
+-     OptimizationFeature,
+-     resolve_optimization_contract,
+- )
+-+# Register the fused z/b/a custom op before vLLM captures the Qwen4Exp graph.
+-+# The forward method keeps a local import for optional/non-MUSA paths, but a
+-+# compile-cache load can reference the op before the first forward call.
+-+from vllm_musa.jit_kernel.tilelang.gdn_fused_proj import (  # noqa: F401
+-+    fused_zba as _register_fused_zba,
+-+)
+-+
+- 
+- logger = init_logger(__name__)
+- 
+diff --git a/vllm_musa/patches/series/0144-MUSA-retain-QSA-side-stream-buffer-lifetime.patch b/vllm_musa/patches/series/0144-MUSA-retain-QSA-side-stream-buffer-lifetime.patch
+deleted file mode 100644
+index 7c187d74..00000000
+--- a/vllm_musa/patches/series/0144-MUSA-retain-QSA-side-stream-buffer-lifetime.patch
++++ /dev/null
+@@ -1,24 +0,0 @@
+-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+-From: Joey-gvwal <joey_gvwal@yeah.net>
+-Date: Mon, 14 Sep 2026 16:48:41 +0800
+-Subject: [PATCH] MUSA: retain QSA side-stream buffer lifetime
+-
+----
+- vllm/models/qwen4_exp/nvidia/qsa.py | 4 ++++
+- 1 file changed, 4 insertions(+)
+-
+-diff --git a/vllm/models/qwen4_exp/nvidia/qsa.py b/vllm/models/qwen4_exp/nvidia/qsa.py
+-index 4131bdf2ac..f290cb392e 100644
+---- a/vllm/models/qwen4_exp/nvidia/qsa.py
+-+++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+-@@ -435,6 +435,10 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
+-             with torch.musa.stream(self._indexer_stream):
+-                 projected_qk, _ = self.indexer.index_qk_proj(hidden_states)
+-             current_stream.wait_stream(self._indexer_stream)
+-+            # The projection buffer is allocated on the side stream and
+-+            # consumed by the current-stream QSA op. Record that dependency so
+-+            # the caching allocator cannot recycle it before consumption.
+-+            projected_qk.record_stream(current_stream)
+-         else:
+-             projected_qk, _ = self.indexer.index_qk_proj(hidden_states)
+-         qkv, _ = self.qkv_proj(hidden_states)
