@@ -21,6 +21,13 @@ from vllm_musa.optimization_contract import (
     OptimizationFeature,
     resolve_optimization_contract,
 )
+# Register the fused z/b/a custom op before vLLM captures the Qwen4Exp graph.
+# The forward method keeps a local import for optional/non-MUSA paths, but a
+# compile-cache load can reference the op before the first forward call.
+from vllm_musa.jit_kernel.tilelang.gdn_fused_proj import (  # noqa: F401
+    fused_zba as _register_fused_zba,
+)
+
 
 logger = init_logger(__name__)
 
