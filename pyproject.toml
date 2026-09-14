@@ -59,6 +59,7 @@ include = ["vllm_musa*"]
 
 [tool.setuptools.package-data]
 vllm_musa = [
+    "configs/*.json",
     "jit_kernel/csrc/*.h",
     "jit_kernel/csrc/*/*.mu",
     "jit_kernel/include/.gitkeep",

@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MUSA Maintainers <musa@example.invalid>
+Date: Thu, 4 Sep 2026 12:00:00 +0800
+Subject: [PATCH] MUSA: keep page-aligned Mamba state backing for Qwen3.8
+
+Keep Mamba fields indexed by the physical page stride when attention and Mamba
+pools share backing storage. This preserves request reuse correctness for
+Qwen3.8 while allowing the GDN path to gather non-contiguous fields.
+
+---
+diff --git a/vllm/v1/worker/gpu/attn_utils.py b/vllm/v1/worker/gpu/attn_utils.py
+index 7aa6fbe4b6..25cb18b31e 100644
+--- a/vllm/v1/worker/gpu/attn_utils.py
++++ b/vllm/v1/worker/gpu/attn_utils.py
+@@ -505,24 +505,18 @@ def _reshape_kv_cache(
+                             )
+                         )
+                         field_offset = field_end
++                    kv_caches[layer_name] = state_tensors
+                 else:
+-                    storage_offset = 0
+-                    for shape, dtype in zip(
+-                        kv_cache_spec.shapes, kv_cache_spec.dtypes
+-                    ):
+-                        state_nbytes = prod(shape) * get_dtype_size(dtype)
+-                        end = storage_offset + num_blocks * state_nbytes
+-                        if end > kv_raw_tensor.numel():
+-                            raise RuntimeError(
+-                                "Mamba cache backing is too small for contiguous "
+-                                f"state pools: end={end}, "
+-                                f"size={kv_raw_tensor.numel()}, shape={shape}, "
+-                                f"dtype={dtype}, num_blocks={num_blocks}"
+-                            )
+-                        state = kv_raw_tensor[storage_offset:end].view(dtype)
+-                        state_tensors.append(state.view(num_blocks, *shape))
+-                        storage_offset = end
+-                kv_caches[layer_name] = state_tensors
++                    # Preserve the upstream page-aligned Mamba backing. Each
++                    # physical block contains every state field, and GDN
++                    # gathers/scatters a field when its view is not contiguous.
++                    # Do not compact fields into adjacent pools: doing so makes
++                    # the state index stride disagree with the block table when
++                    # Mamba and attention pools use different page sizes.
++                    page_size_bytes = kv_cache_spec.page_size_bytes
++                    kv_caches[layer_name] = kv_raw_tensor[
++                        : num_blocks * page_size_bytes
++                    ].view(num_blocks, 1, 1, page_size_bytes)
+             else:
+                 raise NotImplementedError(
+                     f"Unsupported KV cache spec type: {type(kv_cache_spec)}"
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 1852958abb..bc2ce82ea7 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -7985,29 +7985,45 @@ class GPUModelRunner(
+                 elif isinstance(kv_cache_spec, MambaSpec):
+                     has_mamba = True
+                     raw_tensor = kv_cache_raw_tensors[layer_name]
+-                    # Segregate the Mamba state fields into independent
+-                    # contiguous block pools.  Packing conv/SSM bytes into
+-                    # every physical page gives the SSM view a page-sized
+-                    # block stride, forcing GDN decode to gather and scatter
+-                    # state on every layer invocation.
+-                    raw_tensor = raw_tensor.view(-1)
+-                    state_tensors: list[torch.Tensor] = []
+-                    storage_offset = 0
+-                    for shape, dtype in zip(
+-                        kv_cache_spec.shapes, kv_cache_spec.dtypes
+-                    ):
+-                        state_nbytes = prod(shape) * get_dtype_size(dtype)
+-                        end = storage_offset + num_blocks * state_nbytes
+-                        if end > raw_tensor.numel():
+-                            raise RuntimeError(
+-                                "Mamba cache backing is too small for contiguous "
+-                                f"state pools: end={end}, size={raw_tensor.numel()}, "
+-                                f"shape={shape}, dtype={dtype}, num_blocks={num_blocks}"
++                    if packing is not None:
++                        # Shared attention/Mamba backing uses one physical
++                        # block stride. Keep each state field strided by that
++                        # block stride; compacting fields into adjacent pools
++                        # makes request reuse read the wrong Mamba state.
++                        layer_offset, block_stride = packing
++                        raw_pages = raw_tensor.view(-1, block_stride)
++                        field_offset = layer_offset
++                        state_tensors: list[torch.Tensor] = []
++                        for shape, dtype in zip(
++                            kv_cache_spec.shapes, kv_cache_spec.dtypes
++                        ):
++                            state_nbytes = prod(shape) * get_dtype_size(dtype)
++                            field_end = field_offset + state_nbytes
++                            if field_end > block_stride:
++                                raise RuntimeError(
++                                    "Packed Mamba state exceeds its block stride: "
++                                    f"end={field_end}, block_stride={block_stride}, "
++                                    f"shape={shape}, dtype={dtype}"
++                                )
++                            packed_state = raw_pages[:, field_offset:field_end].view(dtype)
++                            inner_strides = [1] * len(shape)
++                            for i in range(len(shape) - 2, -1, -1):
++                                inner_strides[i] = inner_strides[i + 1] * shape[i + 1]
++                            state_tensors.append(
++                                packed_state.as_strided(
++                                    (num_blocks, *shape),
++                                    (packed_state.stride(0), *inner_strides),
++                                )
+                             )
+-                        state = raw_tensor[storage_offset:end].view(dtype)
+-                        state_tensors.append(state.view(num_blocks, *shape))
+-                        storage_offset = end
+-                    kv_caches[layer_name] = state_tensors
++                            field_offset = field_end
++                        kv_caches[layer_name] = state_tensors
++                    else:
++                        # Unpacked Mamba backing is page-aligned. The GDN layer
++                        # can gather/scatter fields from each physical page.
++                        page_size_bytes = kv_cache_spec.page_size_bytes
++                        kv_caches[layer_name] = raw_tensor[
++                            : num_blocks * page_size_bytes
++                        ].view(num_blocks, 1, 1, page_size_bytes)
+                 else:
+                     raise NotImplementedError
+ 
+-- 
+2.43.0

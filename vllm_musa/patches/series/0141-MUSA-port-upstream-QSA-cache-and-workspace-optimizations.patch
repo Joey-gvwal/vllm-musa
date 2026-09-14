@@ -1,0 +1,388 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joey-gvwal <joey_gvwal@yeah.net>
+Date: Mon, 14 Sep 2026 10:25:52 +0800
+Subject: [PATCH] MUSA: port upstream QSA cache and workspace optimizations
+
+---
+ vllm/models/qwen4_exp/common/qsa_cache.py     | 22 +++++--
+ vllm/models/qwen4_exp/nvidia/indexer_qsa.py   | 41 ++++++++++---
+ .../qwen4_exp/nvidia/ops/qsa_indexer.py       | 59 +++++++++++++------
+ 3 files changed, 89 insertions(+), 33 deletions(-)
+
+diff --git a/vllm/models/qwen4_exp/common/qsa_cache.py b/vllm/models/qwen4_exp/common/qsa_cache.py
+index ba12cdca55..c2006d138d 100644
+--- a/vllm/models/qwen4_exp/common/qsa_cache.py
++++ b/vllm/models/qwen4_exp/common/qsa_cache.py
+@@ -616,6 +616,7 @@ class QSAForwardMetadata(AttentionMetadata):
+     num_prefill_tokens: int
+     max_query_len: int
+     decode_query_len: int
++    max_seq_len: int
+     storage_block_size: int
+     compress_ratio: int
+ 
+@@ -742,16 +743,23 @@ class QSAMetadataBuilder(AttentionMetadataBuilder[QSAForwardMetadata]):
+             num_prefill_tokens=num_prefill_tokens,
+             max_query_len=common_attn_metadata.max_query_len,
+             decode_query_len=decode_query_len,
++            max_seq_len=common_attn_metadata.max_seq_len,
+             storage_block_size=self.storage_block_size,
+             compress_ratio=self.compress_ratio,
+         )
+ 
+ 
+ class QSAStateBackend(AttentionBackend):
+-    """Key-only dummy backend for out-of-band BF16 QSA side-cache operations."""
++    """Key-only dummy backend for out-of-band QSA side-cache operations."""
+ 
+     supported_dtypes: ClassVar[list[torch.dtype]] = [torch.bfloat16]
+-    supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = ["auto", "bfloat16"]
++    # fp8 entries allow the optional e4m3 compressed indexer cache.
++    supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [
++        "auto",
++        "bfloat16",
++        "fp8",
++        "fp8_e4m3",
++    ]
+ 
+     @staticmethod
+     def get_name() -> str:
+@@ -813,8 +821,12 @@ class _QSAStateCache(nn.Module, AttentionLayerBase):
+         """Adapt the unified [B, H, N, C] view to QSA's [B, N, H, C]."""
+         if kv_cache.ndim != 4 or kv_cache.shape[1] != 1:
+             raise ValueError("QSA state cache must be [blocks, 1, states, width]")
+-        if kv_cache.dtype != torch.bfloat16 or kv_cache.shape[3] != self.head_size:
+-            raise ValueError("QSA state cache does not match its packed BF16 spec")
++        if kv_cache.dtype != self.dtype or kv_cache.shape[3] != self.head_size:
++            raise ValueError(
++                f"QSA state cache does not match its spec "
++                f"(dtype {kv_cache.dtype} != {self.dtype} or width "
++                f"{kv_cache.shape[3]} != {self.head_size})"
++            )
+         super().bind_kv_cache(kv_cache.transpose(1, 2))
+ 
+     def get_attn_backend(self) -> type[AttentionBackend]:
+@@ -874,7 +886,7 @@ class QSAKeyStateCache(_QSAStateCache):
+ 
+ 
+ class QSACompressedKeyCache(_QSAStateCache):
+-    """Normalized, group-first-RoPE BF16 key at one row per complete group."""
++    """Normed, group-first-RoPE key at one row per complete group."""
+ 
+     def get_kv_cache_spec(self, vllm_config: VllmConfig) -> KVCacheSpec:
+         del vllm_config
+diff --git a/vllm/models/qwen4_exp/nvidia/indexer_qsa.py b/vllm/models/qwen4_exp/nvidia/indexer_qsa.py
+index 6a33499931..9e2ce0cfe7 100644
+--- a/vllm/models/qwen4_exp/nvidia/indexer_qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/indexer_qsa.py
+@@ -88,7 +88,7 @@ def _supports_fused_pre_indexer(
+ 
+ 
+ class QSAIndexer(nn.Module):
+-    """Replicated Q/K projection plus paged, weight-free QSA selection.
++    """QSA projection weights, side caches, and paged, weight-free selection.
+ 
+     ``prefix`` must be the checkpoint's indexer prefix, normally
+     ``model.layers.N.self_attn.indexer``.  Consequently the trainable names are
+@@ -147,6 +147,21 @@ class QSAIndexer(nn.Module):
+ 
+         cache_config = vllm_config.cache_config
+         cache_prefix = f"{prefix}." if prefix else ""
++        # Plain e4m3 without scales: Q and the compressed K are RMSNormed
++        # before quantization, and the logits kernels dot fp8 x fp8 directly.
++        self.indexer_kv_dtype = vllm_config.attention_config.resolve_indexer_kv_dtype(
++            "bf16"
++        )
++        if self.indexer_kv_dtype == "fp8":
++            indexer_dtype = torch.float8_e4m3fn
++        elif self.indexer_kv_dtype == "bf16":
++            indexer_dtype = torch.bfloat16
++        else:
++            raise NotImplementedError(
++                f"indexer_kv_dtype={self.indexer_kv_dtype!r} is not supported "
++                "by the Qwen4Exp QSA indexer (only 'bf16' or 'fp8')."
++            )
++        self.indexer_dtype = indexer_dtype
+         self.raw_key_cache = QSAKeyStateCache(
+             head_size=self.index_head_dim,
+             dtype=torch.bfloat16,
+@@ -158,7 +173,7 @@ class QSAIndexer(nn.Module):
+         )
+         self.compressed_key_cache = QSACompressedKeyCache(
+             head_size=self.index_head_dim,
+-            dtype=torch.bfloat16,
++            dtype=indexer_dtype,
+             compress_ratio=self.compress_ratio,
+             prefix=f"{cache_prefix}compressed_key_cache",
+             cache_config=cache_config,
+@@ -213,11 +228,18 @@ class QSAIndexer(nn.Module):
+ 
+     def forward(
+         self,
+-        hidden_states: torch.Tensor,
++        projected_qk: torch.Tensor,
+         positions: torch.Tensor,
+         out: torch.Tensor | None = None,
+     ) -> torch.Tensor:
+-        """Return fixed-width request-relative token indices padded with ``-1``."""
++        """Update side caches and select token indices from pre-projected Q/K.
++
++        Returns the packed buffer of shape [num_tokens, output_width + 1]:
++        the leading ``output_width`` columns are ``-1``-padded
++        request-relative token indices, and the trailing column is the row's
++        valid-entry count (the attention kernel's loop bound, never a token
++        index).
++        """
+ 
+         metadata = self._metadata()
+         if metadata is None:
+@@ -225,10 +247,10 @@ class QSAIndexer(nn.Module):
+             if self.skip_topk and out is not None:
+                 return out
+             result = torch.full(
+-                (hidden_states.shape[0], self.packed_output_width),
++                (projected_qk.shape[0], self.packed_output_width),
+                 -1,
+                 dtype=torch.int32,
+-                device=hidden_states.device,
++                device=projected_qk.device,
+             )
+             result[:, -1] = 0
+             if out is not None:
+@@ -245,11 +267,9 @@ class QSAIndexer(nn.Module):
+ 
+         raw_metadata, compressed_metadata = metadata
+         num_tokens = raw_metadata.num_actual_tokens
+-        hidden_states = hidden_states[:num_tokens]
++        projected_qk = projected_qk[:num_tokens]
+         positions = positions[..., :num_tokens]
+ 
+-        # Q/K projection
+-        projected_qk, _ = self.index_qk_proj(hidden_states)
+         projected_q, raw_keys = projected_qk.split(
+             (
+                 self.index_n_heads * self.index_head_dim,
+@@ -265,6 +285,7 @@ class QSAIndexer(nn.Module):
+                 num_tokens,
+                 self.index_n_heads,
+                 self.index_head_dim,
++                dtype=self.indexer_dtype,
+             )
+             qsa_pre_indexer(
+                 projected_q,
+@@ -302,6 +323,7 @@ class QSAIndexer(nn.Module):
+                 self.q_layernorm.variance_epsilon,
+             ).reshape_as(q)
+             q = apply_qsa_rope(self.rotary_emb, positions, q)
++            q = q.to(self.indexer_dtype)
+ 
+             raw_key_cache = raw_key_state_cache.key_cache
+             rope_position_cache = raw_key_state_cache.rope_position_cache
+@@ -412,6 +434,7 @@ class QSAIndexer(nn.Module):
+                 self.compress_ratio,
+                 compressed_metadata.max_query_len,
+                 block_indices[prefill_slice],
++                compressed_metadata.max_seq_len,
+             )
+         expand_qsa_block_indices(
+             block_indices,
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
+index 16da5b161f..5de5aa0e6d 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
+@@ -97,7 +97,7 @@ def _qsa_mqa_paged_uniform_kernel(
+             scores,
+             (BLOCK_N, DECODE_QUERY_LEN_PADDED, NUM_HEADS_PADDED),
+         )
+-        score = tl.sum(scores, axis=2) / HEAD_DIM**0.5
++        score = tl.sum(scores, axis=2)
+         tl.store(
+             logits_ptr + rows[None, :] * stride_logits_row + columns[:, None],
+             score,
+@@ -123,8 +123,8 @@ def _qsa_mqa_paged_prefill_kernel(
+     stride_logits_row,
+     num_rows,
+     query_offset,
++    page_table_width,
+     PAGE_SIZE: tl.constexpr,
+-    PAGE_TABLE_WIDTH: tl.constexpr,
+     NUM_HEADS: tl.constexpr,
+     HEAD_DIM: tl.constexpr,
+     TILE_R: tl.constexpr,
+@@ -132,7 +132,7 @@ def _qsa_mqa_paged_prefill_kernel(
+     K_TILES: tl.constexpr,
+     STAGES: tl.constexpr,
+ ) -> None:
+-    NUM_COLUMNS: tl.constexpr = PAGE_TABLE_WIDTH * PAGE_SIZE
++    num_columns = page_table_width * PAGE_SIZE
+     NUM_HEADS_PADDED: tl.constexpr = triton.next_power_of_2(NUM_HEADS)
+     # tl.dot requires a reduction dimension of at least 16.
+     BLOCK_D: tl.constexpr = HEAD_DIM
+@@ -163,7 +163,7 @@ def _qsa_mqa_paged_prefill_kernel(
+     if k_tile_start * BLOCK_N >= max_visible:
+         return
+     k_tile_end = tl.minimum(k_tile_start + K_TILES, tl.cdiv(max_visible, BLOCK_N))
+-    k_tile_end = tl.minimum(k_tile_end, tl.cdiv(NUM_COLUMNS, BLOCK_N))
++    k_tile_end = tl.minimum(k_tile_end, tl.cdiv(num_columns, BLOCK_N))
+ 
+     dims = tl.arange(0, HEAD_DIM)
+     m = tl.arange(0, TILE_R * NUM_HEADS_PADDED)
+@@ -184,7 +184,7 @@ def _qsa_mqa_paged_prefill_kernel(
+     for tile in tl.range(k_tile_start, k_tile_end, num_stages=STAGES):
+         columns = tile * BLOCK_N + column_offsets
+         live = columns < max_visible
+-        logical_page = tl.minimum(columns // PAGE_SIZE, PAGE_TABLE_WIDTH - 1)
++        logical_page = tl.minimum(columns // PAGE_SIZE, page_table_width - 1)
+         page_offset = columns % PAGE_SIZE
+         physical_page = tl.load(
+             page_table_ptr + request * stride_table_req + logical_page,
+@@ -200,13 +200,16 @@ def _qsa_mqa_paged_prefill_kernel(
+             other=0.0,
+             eviction_policy="evict_first",
+         )
++        # With an fp8 cache, SM90 lowers this dot to reduced-precision wgmma
++        # accumulation; SM100 tcgen05 accumulates in fp32. The SM90 error
++        # (~1e-4 relative) is far below the e4m3 quantization noise floor.
+         scores = tl.dot(keys, query, out_dtype=tl.float32)
+         scores = tl.reshape(scores, (BLOCK_N, TILE_R, NUM_HEADS_PADDED))
+-        score = tl.sum(tl.maximum(scores, 0.0), axis=2) / HEAD_DIM**0.5
++        score = tl.sum(tl.maximum(scores, 0.0), axis=2)
+         store_mask = (
+             valid_rows[None, :]
+             & (columns[:, None] < visible[None, :])
+-            & (columns[:, None] < NUM_COLUMNS)
++            & (columns[:, None] < num_columns)
+         )
+         tl.store(
+             logits_ptr + rows[None, :] * stride_logits_row + columns[:, None],
+@@ -335,7 +338,7 @@ def warmup_qsa_mqa_paged_decode(
+     for decode_query_len, num_requests in profiles:
+         num_rows = decode_query_len * num_requests
+         q_ptr = TritonWarmupTensor(
+-            torch.bfloat16,
++            k_cache.dtype,
+             shape=(num_rows, num_heads, head_dim),
+         )
+         logits_ptr = TritonWarmupTensor(
+@@ -363,7 +366,8 @@ def warmup_qsa_mqa_paged_decode(
+             BLOCK_N=_DECODE_BLOCK_N,
+             TILES_PER_PROG=tiles_per_program,
+             STAGES=2,
+-            num_warps=2,
++            # tuned on GB300
++            num_warps=1 if k_cache.dtype == torch.float8_e4m3fn else 2,
+             grid=(
+                 num_requests,
+                 triton.cdiv(columns, _DECODE_BLOCK_N * tiles_per_program),
+@@ -379,22 +383,29 @@ def _prefill_logits(
+     query_start_loc: torch.Tensor,
+     visible_blocks: torch.Tensor,
+     max_query_len: int,
++    logits_width: int,
+     query_offset: int,
+     num_queries: int,
+ ) -> torch.Tensor:
+     assert query_start_loc.shape == (page_table.shape[0] + 1,)
+     assert visible_blocks.shape == (q.shape[0],)
+     assert 0 <= query_offset <= query_offset + num_queries <= q.shape[0]
++    assert 0 < logits_width <= page_table.shape[1] * k_cache.shape[1]
+ 
+-    columns = page_table.shape[1] * k_cache.shape[1]
+-    logits = torch.empty((num_queries, columns), dtype=torch.float32, device=q.device)
+-    TILE_R = 64
++    logits = torch.empty(
++        (num_queries, logits_width), dtype=torch.float32, device=q.device
++    )
++    # tuned on GB300
++    if k_cache.dtype == torch.float8_e4m3fn:
++        TILE_R, STAGES, num_warps = 32, 2, 8
++    else:
++        TILE_R, STAGES, num_warps = 64, 2, 4
+     BLOCK_N = 64
+     K_TILES = 16
+     grid = (
+         page_table.shape[0],
+         triton.cdiv(min(num_queries, max_query_len), TILE_R),
+-        triton.cdiv(columns, BLOCK_N * K_TILES),
++        triton.cdiv(logits_width, BLOCK_N * K_TILES),
+     )
+     _qsa_mqa_paged_prefill_kernel[grid](
+         q,
+@@ -409,15 +420,15 @@ def _prefill_logits(
+         *logits.stride()[:-1],
+         num_queries,
+         query_offset,
++        page_table.shape[1],
+         PAGE_SIZE=k_cache.shape[1],
+-        PAGE_TABLE_WIDTH=page_table.shape[1],
+         NUM_HEADS=q.shape[1],
+         HEAD_DIM=q.shape[2],
+         TILE_R=TILE_R,
+         BLOCK_N=BLOCK_N,
+         K_TILES=K_TILES,
+-        STAGES=2,
+-        num_warps=4,
++        STAGES=STAGES,
++        num_warps=num_warps,
+     )
+     return logits
+ 
+@@ -548,6 +559,7 @@ def qsa_select_paged_decode(
+     assert token_topk % compress_ratio == 0
+     assert block_indices.shape == (q.shape[0], token_topk // compress_ratio)
+     assert decode_query_len > 0 and q.shape[0] % decode_query_len == 0
++    assert q.dtype == k_cache.dtype, "Q and the compressed K cache must match"
+     num_requests = q.shape[0] // decode_query_len
+     assert page_table.shape[0] == num_requests
+     assert visible_blocks.shape == (q.shape[0],)
+@@ -577,7 +589,8 @@ def qsa_select_paged_decode(
+         BLOCK_N=_DECODE_BLOCK_N,
+         TILES_PER_PROG=tiles_per_program,
+         STAGES=2,
+-        num_warps=2,
++        # tuned on GB300
++        num_warps=1 if k_cache.dtype == torch.float8_e4m3fn else 2,
+     )
+     _topk(
+         logits,
+@@ -599,6 +612,7 @@ def qsa_select_paged_prefill(
+     compress_ratio: int,
+     max_query_len: int,
+     block_indices: torch.Tensor,
++    max_seq_len: int,
+ ) -> None:
+     """Score and select compressed prefill blocks in bounded chunks.
+ 
+@@ -614,16 +628,22 @@ def qsa_select_paged_prefill(
+         compress_ratio: Number of logical tokens represented by a cache row.
+         max_query_len: Maximum number of query tokens in one request.
+         block_indices: Compressed-index output buffer.
++        max_seq_len: Longest context length in the batch this step.
+     """
+ 
+     assert token_topk % compress_ratio == 0
+     assert block_indices.shape == (q.shape[0], token_topk // compress_ratio)
++    assert q.dtype == k_cache.dtype, "Q and the compressed K cache must match"
+     rows = q.shape[0]
+-    columns = page_table.shape[1] * k_cache.shape[1]
++    # No row scores beyond cdiv(max_seq_len, compress_ratio) compressed
++    # columns. Round up to 64 to keep the logits row stride
++    # cooperative_topk-compatible.
++    logits_width = triton.cdiv(triton.cdiv(max_seq_len, compress_ratio), 64) * 64
++    logits_width = min(max(64, logits_width), page_table.shape[1] * k_cache.shape[1])
+ 
+     # chunk the inputs to keep temp logits below VLLM_SPARSE_INDEXER_MAX_LOGITS_MB
+     max_logits_bytes = envs.VLLM_SPARSE_INDEXER_MAX_LOGITS_MB * 1024 * 1024
+-    rows_per_chunk = max(1, max_logits_bytes // (columns * 4))
++    rows_per_chunk = max(1, max_logits_bytes // (logits_width * 4))
+     topk_workspace = torch.empty(
+         (_TOPK_WORKSPACE_BYTES,), dtype=torch.uint8, device=q.device
+     )
+@@ -638,6 +658,7 @@ def qsa_select_paged_prefill(
+             query_start_loc,
+             visible_blocks,
+             max_query_len,
++            logits_width,
+             query_offset=query_start,
+             num_queries=query_end - query_start,
+         )
