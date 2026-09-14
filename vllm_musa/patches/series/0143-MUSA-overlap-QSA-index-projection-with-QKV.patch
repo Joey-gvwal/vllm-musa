@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Joey-gvwal <joey_gvwal@yeah.net>
+Date: Mon, 14 Sep 2026 12:35:07 +0800
+Subject: [PATCH] MUSA: register Qwen GDN fused projection before capture
+
+---
+ .../layers/mamba/gdn/qwen_gdn_linear_attn.py               | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py b/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+index dd3448b6..c9494c03 100644
+--- a/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
++++ b/vllm_musa/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+@@ -21,6 +21,13 @@ from vllm_musa.optimization_contract import (
+     OptimizationFeature,
+     resolve_optimization_contract,
+ )
++# Register the fused z/b/a custom op before vLLM captures the Qwen4Exp graph.
++# The forward method keeps a local import for optional/non-MUSA paths, but a
++# compile-cache load can reference the op before the first forward call.
++from vllm_musa.jit_kernel.tilelang.gdn_fused_proj import (  # noqa: F401
++    fused_zba as _register_fused_zba,
++)
++
+ 
+ logger = init_logger(__name__)
+ 
