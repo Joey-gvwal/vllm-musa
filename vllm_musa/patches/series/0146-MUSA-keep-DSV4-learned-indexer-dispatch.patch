@@ -1,0 +1,178 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 15 Sep 2026 21:47:16 +0800
+Subject: [PATCH] MUSA: keep DSV4 learned indexer dispatch
+
+---
+ vllm/models/deepseek_v4/attention.py | 101 +++++++--------------------
+ 1 file changed, 26 insertions(+), 75 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 7877fd5..7b3fc0c 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -474,15 +474,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+ 
+         # Keep the attention input preparation in the captured graph. Only the
+         # sparse indexer and MLA attention run in the eager break below.
+-        use_musa_recent_indexer = (
+-            self.indexer is not None
+-            and self.indexer.uses_musa_recent_indices()
+-        )
+         qr_kv, kv_score, indexer_kv_score, indexer_weights = (
+-            self._run_parallel_input_projections(
+-                hidden_states,
+-                skip_indexer_weights=use_musa_recent_indexer,
+-            )
++            self._run_parallel_input_projections(hidden_states)
+         )
+         qr, kv = qr_kv.split([self.q_lora_rank, self.head_dim], dim=-1)
+         qr, kv = fused_q_kv_rmsnorm(
+@@ -502,7 +495,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             indexer_weights,
+             positions,
+             o_padded,
+-            use_musa_recent_indexer,
+         )
+         o = o_padded[:, : self.n_local_heads, :]
+ 
+@@ -520,7 +512,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         indexer_weights: torch.Tensor | None,
+         positions: torch.Tensor,
+         o_padded: torch.Tensor,
+-        use_musa_recent_indexer: bool,
+     ) -> None:
+         """Wide eager region: the whole of ``_prepare_and_attn`` runs eagerly.
+ 
+@@ -536,7 +527,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             indexer_weights,
+             positions,
+             o_padded,
+-            use_musa_recent_indexer,
+         )
+ 
+     def _prepare_and_attn(
+@@ -549,7 +539,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         indexer_weights: torch.Tensor | None,
+         positions: torch.Tensor,
+         o_padded: torch.Tensor,
+-        use_musa_recent_indexer: bool,
+     ) -> None:
+         """Attention input preparation followed by the sparse indexer and MLA.
+ 
+@@ -576,50 +565,29 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         if indexer is not None:
+             assert compressor is not None
+             assert indexer_kv_score is not None
+-            if use_musa_recent_indexer:
+-                q, (_, _) = execute_in_parallel(
+-                    project_query_and_cache_kv,
+-                    [
+-                        lambda: indexer.forward_musa_recent(
+-                            hidden_states,
+-                            indexer_kv_score,
+-                            positions,
+-                            self.indexer_rotary_emb,
+-                        ),
+-                        lambda: compressor(kv_score, positions, self.rotary_emb),
+-                    ],
+-                    self.ln_events[0],
+-                    [self.ln_events[1], self.ln_events[2]],
+-                    [aux_streams[0], aux_streams[1]]
+-                    if aux_streams is not None
+-                    else None,
+-                    enable=aux_streams is not None,
+-                    use_stream_waits=current_platform.is_musa(),
+-                )
+-            else:
+-                assert indexer_weights is not None
+-                q, (indexer_inputs, _) = execute_in_parallel(
+-                    project_query_and_cache_kv,
+-                    [
+-                        lambda: indexer(
+-                            hidden_states,
+-                            qr,
+-                            indexer_kv_score,
+-                            indexer_weights,
+-                            positions,
+-                            self.indexer_rotary_emb,
+-                        ),
+-                        lambda: compressor(kv_score, positions, self.rotary_emb),
+-                    ],
+-                    self.ln_events[0],
+-                    [self.ln_events[1], self.ln_events[2]],
+-                    [aux_streams[0], aux_streams[1]]
+-                    if aux_streams is not None
+-                    else None,
+-                    enable=aux_streams is not None,
+-                    use_stream_waits=current_platform.is_musa(),
+-                )
+-                index_q, index_q_scale, index_weights_out = indexer_inputs
++            assert indexer_weights is not None
++            q, (indexer_inputs, _) = execute_in_parallel(
++                project_query_and_cache_kv,
++                [
++                    lambda: indexer(
++                        hidden_states,
++                        qr,
++                        indexer_kv_score,
++                        indexer_weights,
++                        positions,
++                        self.indexer_rotary_emb,
++                    ),
++                    lambda: compressor(kv_score, positions, self.rotary_emb),
++                ],
++                self.ln_events[0],
++                [self.ln_events[1], self.ln_events[2]],
++                [aux_streams[0], aux_streams[1]]
++                if aux_streams is not None
++                else None,
++                enable=aux_streams is not None,
++                use_stream_waits=current_platform.is_musa(),
++            )
++            index_q, index_q_scale, index_weights_out = indexer_inputs
+         elif compressor is not None:
+             aux_stream = aux_streams[0] if aux_streams is not None else None
+             q, _ = maybe_execute_in_parallel(
+@@ -652,10 +620,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         return qr_kv
+ 
+     def _run_parallel_input_projections(
+-        self,
+-        hidden_states: torch.Tensor,
+-        *,
+-        skip_indexer_weights: bool = False,
++        self, hidden_states: torch.Tensor
+     ) -> tuple[
+         torch.Tensor,
+         torch.Tensor | None,
+@@ -701,7 +666,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                     torch.float32,
+                 )
+ 
+-            aux_fns[1] = None if skip_indexer_weights else indexer_weights_proj
++            aux_fns[1] = indexer_weights_proj
+             aux_fns[2] = indexer_compressor_kv_score
+ 
+         qr_kv, (kv_score, indexer_weights, indexer_kv_score) = execute_in_parallel(
+@@ -1071,20 +1036,6 @@ class DeepseekV4Indexer(nn.Module):
+             torch.cuda.Event(),
+         ]
+ 
+-    def forward_musa_recent(
+-        self,
+-        hidden_states: torch.Tensor,
+-        compressed_kv_score: torch.Tensor,
+-        positions: torch.Tensor,
+-        rotary_emb: nn.Module,
+-    ) -> torch.Tensor:
+-        """Maintain indexer K cache and emit recent indices without Q work."""
+-        self.compressor(compressed_kv_score, positions, rotary_emb)
+-        return self.indexer_op.forward_musa_recent(hidden_states)
+-
+-    def uses_musa_recent_indices(self) -> bool:
+-        return self.indexer_op.uses_musa_recent_indices()
+-
+     def forward(
+         self,
+         hidden_states: torch.Tensor,

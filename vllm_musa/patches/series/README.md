@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **157 patches**. This branch includes the Qwen3.6 patches for common
+Currently **160 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -27,9 +27,11 @@ vision-block graph capture. It also serializes DeepSeek-V4 long-prefill
 attention branches on MUSA while preserving decode/MTP auxiliary-stream
 overlap, restores MUSA component-based memory profiling, and routes the v0.28
 DeepSeek-V4 MHC paths through MUSA providers. DeepSeek-V4 graph capture keeps
-the learned indexer — the metadata-only recent window is not used on the
-native path — and hands off auxiliary overlap with stream waits instead of
-CUDA events. The DSpark additions route context-KV insertion through the MUSA
+the learned indexer. The metadata-only recent window, its Q/weight skip, and
+the CUDAGraph recent-fill fallback are removed so capture, eager, and native
+decode share the same learned indices. Decode kernel selection uses request
+length rather than block-table capacity. Auxiliary overlap still uses stream
+waits instead of CUDA events. The DSpark additions route context-KV insertion through the MUSA
 custom operator and provide typed optional pointers for greedy rejection sampling.
 They also honor the resolved FP8 expert dtype when converted checkpoints omit
 the HF metadata field. The final five patches adapt the v0.28 Model Runner V2 rejection kernels to MUSA Triton scalar-predicate and

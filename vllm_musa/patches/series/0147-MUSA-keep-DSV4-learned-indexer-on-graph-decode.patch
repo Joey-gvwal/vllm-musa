@@ -1,0 +1,335 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 15 Sep 2026 21:47:16 +0800
+Subject: [PATCH] MUSA: keep DSV4 learned indexer on graph decode
+
+---
+ .../layers/sparse_attn_indexer.py             | 262 ++----------------
+ 1 file changed, 27 insertions(+), 235 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 7f65da5..4e4b000 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -58,153 +58,19 @@ def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
+     return False
+ 
+ 
+-def _musa_fill_recent_rows_capture(
+-    topk_indices_buffer: torch.Tensor,
+-    row_start: int,
+-    lengths: torch.Tensor,
+-    cap: int,
+-) -> None:
+-    flat_lengths = lengths.reshape(-1).to(torch.long)
+-    rows = min(
+-        flat_lengths.numel(),
+-        topk_indices_buffer.shape[0] - row_start,
+-    )
+-    if rows <= 0 or cap <= 0:
+-        return
+-    row_lengths = flat_lengths[:rows].clamp(min=0)
+-    counts = row_lengths.clamp(max=cap)
+-    starts = (row_lengths - counts).clamp(min=0)
+-    offsets = torch.arange(cap, device=topk_indices_buffer.device, dtype=torch.long)
+-    values = starts.unsqueeze(-1) + offsets.unsqueeze(0)
+-    valid = offsets.unsqueeze(0) < counts.unsqueeze(-1)
+-    rows_view = topk_indices_buffer[row_start : row_start + rows, :cap]
+-    rows_view.copy_(
+-        torch.where(
+-            valid,
+-            values.to(topk_indices_buffer.dtype),
+-            rows_view,
+-        )
+-    )
+-
+-
+-def _musa_fill_recent_sparse_indexer_indices_capture(
+-    hidden_states: torch.Tensor,
+-    k_cache_prefix: LayerNameType,
+-    topk_tokens: int,
+-    topk_indices_buffer: torch.Tensor,
+-) -> torch.Tensor:
+-    topk = min(topk_tokens, topk_indices_buffer.shape[-1])
+-    topk_indices_buffer[: hidden_states.shape[0], :topk] = -1
+-    if topk <= 0:
+-        return topk_indices_buffer
+-
+-    cap = int(os.getenv("VLLM_MUSA_SPARSE_INDEXER_FALLBACK_TOPK", "16"))
+-    cap = max(0, min(cap, topk))
+-    if cap == 0:
+-        return topk_indices_buffer
+-
+-    attn_metadata = get_forward_context().attn_metadata
+-    if not isinstance(attn_metadata, dict):
+-        return topk_indices_buffer
+-
+-    metadata = attn_metadata.get(_resolve_layer_name(k_cache_prefix))
+-    if not isinstance(metadata, DeepseekV32IndexerMetadata):
+-        return topk_indices_buffer
+-
+-    if metadata.num_decodes > 0 and metadata.decode is not None:
+-        _musa_fill_recent_rows_capture(
+-            topk_indices_buffer,
+-            0,
+-            metadata.decode.seq_lens,
+-            cap,
+-        )
+-
+-    if metadata.num_prefills > 0 and metadata.prefill is not None:
+-        for chunk in metadata.prefill.chunks:
+-            _musa_fill_recent_rows_capture(
+-                topk_indices_buffer,
+-                int(chunk.token_start),
+-                chunk.cu_seqlen_ke - chunk.cu_seqlen_ks,
+-                cap,
+-            )
+-
+-    return topk_indices_buffer
+-
+-
+-def _musa_fill_recent_sparse_indexer_indices(
+-    hidden_states: torch.Tensor,
+-    k_cache_prefix: LayerNameType,
+-    topk_tokens: int,
+-    topk_indices_buffer: torch.Tensor,
+-) -> torch.Tensor:
+-    if _musa_sparse_indexer_is_current_stream_capturing():
+-        return _musa_fill_recent_sparse_indexer_indices_capture(
+-            hidden_states,
+-            k_cache_prefix,
+-            topk_tokens,
+-            topk_indices_buffer,
+-        )
+-
+-    # Diagnostic fallback: preserve sparse-attention control flow by selecting a
+-    # small recent compressed-token window when the learned indexer kernels are
+-    # unavailable on MUSA.
+-    topk = min(topk_tokens, topk_indices_buffer.shape[-1])
+-    topk_indices_buffer[: hidden_states.shape[0], :topk] = -1
+-    if topk <= 0:
+-        return topk_indices_buffer
+-
+-    cap = int(os.getenv("VLLM_MUSA_SPARSE_INDEXER_FALLBACK_TOPK", "16"))
+-    cap = max(0, min(cap, topk))
+-    if cap == 0:
+-        return topk_indices_buffer
+-
+-    attn_metadata = get_forward_context().attn_metadata
+-    if not isinstance(attn_metadata, dict):
+-        return topk_indices_buffer
+-
+-    metadata = attn_metadata.get(_resolve_layer_name(k_cache_prefix))
+-    if not isinstance(metadata, DeepseekV32IndexerMetadata):
+-        return topk_indices_buffer
++def _musa_decode_request_max_seq_len(decode_metadata) -> int:
++    """Return the request-side decode length used to select the native kernel.
+ 
+-    def fill_rows(row_start: int, lengths: torch.Tensor) -> None:
+-        flat_lengths = lengths.reshape(-1).to(torch.long)
+-        rows = min(
+-            flat_lengths.numel(),
+-            hidden_states.shape[0] - row_start,
+-            topk_indices_buffer.shape[0] - row_start,
+-        )
+-        for row_offset in range(rows):
+-            length = int(flat_lengths[row_offset].item())
+-            count = min(cap, max(length, 0))
+-            if count <= 0:
+-                continue
+-            start = length - count
+-            row = row_start + row_offset
+-            topk_indices_buffer[row, :count] = torch.arange(
+-                start,
+-                length,
+-                device=topk_indices_buffer.device,
+-                dtype=topk_indices_buffer.dtype,
+-            )
+-
+-    if metadata.num_decodes > 0 and metadata.decode is not None:
+-        fill_rows(0, metadata.decode.seq_lens)
+-
+-    if metadata.num_prefills > 0 and metadata.prefill is not None:
+-        for chunk in metadata.prefill.chunks:
+-            fill_rows(
+-                int(chunk.token_start),
+-                chunk.cu_seqlen_ke - chunk.cu_seqlen_ks,
+-            )
+-
+-    return topk_indices_buffer
+-
+-
+-def _musa_sparse_indexer_graph_exact_decode_enabled() -> bool:
+-    # The exact graph decode path is still diagnostic: it removes the recent
+-    # window approximation, but regresses DeepSeek-V4-Flash-Base graph+MTP TPS
+-    # at long context until the exact provider is fully optimized.
+-    return os.getenv("VLLM_MUSA_SPARSE_INDEXER_GRAPH_EXACT_DECODE", "0") == "1"
++    Host syncs such as ``.item()`` can fail while a graph is capturing. Fail
++    closed in that case so dispatch stays on the learned Torch path.
++    """
++    seq_lens = getattr(decode_metadata, "seq_lens", None)
++    if seq_lens is None:
++        return 2**31 - 1
++    try:
++        return int(seq_lens.reshape(-1).max().item())
++    except (RuntimeError, ValueError, TypeError):
++        return 2**31 - 1
+ 
+ 
+ def _musa_sparse_indexer_native_decode_enabled() -> bool:
+@@ -469,7 +335,7 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
+         and q_quant.dtype == torch.float8_e4m3fn
+         and kv_cache.dtype == torch.uint8
+         and weights.dtype == torch.float32
+-        and decode_metadata.block_table.shape[1] * kv_cache.shape[1] <= 8192
++        and _musa_decode_request_max_seq_len(decode_metadata) <= 8192
+     ):
+         seq_lens = decode_metadata.seq_lens.reshape(-1)
+         rows = min(
+@@ -506,7 +372,7 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
+         or q_quant.dtype != torch.float8_e4m3fn
+         or kv_cache.dtype != torch.uint8
+         or weights.dtype != torch.float32
+-        or decode_metadata.block_table.shape[1] * kv_cache.shape[1] > 4096
++        or _musa_decode_request_max_seq_len(decode_metadata) > 4096
+     ):
+         return False
+ 
+@@ -1155,11 +1021,8 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+     # Avoid logger calls in fallback forward paths; these functions may be
+     # reached while TorchDynamo/CUDA Graph capture is active.
+     if use_fp4_cache or isinstance(q_quant, tuple):
+-        return _musa_fill_recent_sparse_indexer_indices(
+-            hidden_states,
+-            k_cache_prefix,
+-            topk_tokens,
+-            topk_indices_buffer,
++        raise NotImplementedError(
++            "MUSA learned-indexer capture supports the FP8 path only"
+         )
+ 
+     attn_metadata = get_forward_context().attn_metadata
+@@ -1196,12 +1059,9 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+             )
+ 
+     if metadata.num_prefills > 0:
+-        _musa_fill_recent_sparse_indexer_indices(
+-            hidden_states,
+-            k_cache_prefix,
+-            topk_tokens,
+-            topk_indices_buffer,
+-        )
++        # Prefill is handled by the eager materialized/native path. Graph
++        # capture is decode-only for the DSV4 serving contract.
++        pass
+ 
+     return topk_indices_buffer
+ 
+@@ -1228,30 +1088,17 @@ def _musa_fill_exact_sparse_indexer_indices(
+         return topk_indices_buffer
+ 
+     if _musa_sparse_indexer_is_current_stream_capturing():
+-        is_glm52_graph_path = (
+-            not isinstance(q_quant, tuple)
+-            and q_quant.ndim == 3
+-            and q_quant.shape[1] == 32
+-            and _musa_sparse_indexer_glm52_materialized_enabled()
+-        )
+-        if is_glm52_graph_path or _musa_sparse_indexer_graph_exact_decode_enabled():
+-            return _musa_fill_exact_sparse_indexer_indices_capture(
+-                hidden_states,
+-                k_cache_prefix,
+-                kv_cache,
+-                q_quant,
+-                weights,
+-                topk_tokens,
+-                head_dim,
+-                max_model_len,
+-                topk_indices_buffer,
+-                use_fp4_cache,
+-            )
+-        return _musa_fill_recent_sparse_indexer_indices(
++        return _musa_fill_exact_sparse_indexer_indices_capture(
+             hidden_states,
+             k_cache_prefix,
++            kv_cache,
++            q_quant,
++            weights,
+             topk_tokens,
++            head_dim,
++            max_model_len,
+             topk_indices_buffer,
++            use_fp4_cache,
+         )
+ 
+     if use_fp4_cache or isinstance(q_quant, tuple):
+@@ -2123,68 +1970,13 @@ class SparseAttnIndexer(CustomOp):
+                     self.use_musa_materialized_prefill,
+                 )
+             except NotImplementedError:
+-                return _musa_fill_recent_sparse_indexer_indices(
+-                    hidden_states,
+-                    self.k_cache.prefix,
+-                    self.topk_tokens,
+-                    self.topk_indices_buffer,
+-                )
++                raise
+         else:
+             raise NotImplementedError(
+                 "SparseAttnIndexer native forward is only implemented for "
+                 "CUDA, ROCm and XPU platforms."
+             )
+ 
+-    def uses_musa_recent_indices(self) -> bool:
+-        """Whether this capture uses the MUSA recent-window approximation."""
+-        # The recent table is metadata-only: it does not consume the learned
+-        # indexer query or per-head weights and therefore is not semantically
+-        # equivalent to the DSV4 learned indexer. The DSV4 optimization
+-        # contract is currently the only caller that sets
+-        # ``use_musa_native_indexer``.
+-        if self.use_musa_native_indexer:
+-            return False
+-        return (
+-            current_platform.is_musa()
+-            and self.use_musa_native_indexer
+-            and _musa_sparse_indexer_is_current_stream_capturing()
+-            and not _musa_sparse_indexer_graph_exact_decode_enabled()
+-        )
+-
+-    def forward_musa_recent(self, hidden_states: torch.Tensor) -> torch.Tensor:
+-        """Reuse metadata-built recent indices for every C4 layer."""
+-        attn_metadata = get_forward_context().attn_metadata
+-        metadata = None
+-        if isinstance(attn_metadata, dict):
+-            metadata = attn_metadata.get(_resolve_layer_name(self.k_cache.prefix))
+-        if (
+-            isinstance(metadata, DeepseekV32IndexerMetadata)
+-            and metadata.recent_indices is not None
+-        ):
+-            if not metadata.recent_indices_ready:
+-                rows = min(
+-                    hidden_states.shape[0],
+-                    self.topk_indices_buffer.shape[0],
+-                    metadata.recent_indices.shape[0],
+-                )
+-                topk = min(
+-                    self.topk_tokens,
+-                    self.topk_indices_buffer.shape[1],
+-                    metadata.recent_indices.shape[1],
+-                )
+-                self.topk_indices_buffer[:rows, :topk].copy_(
+-                    metadata.recent_indices[:rows, :topk]
+-                )
+-                metadata.recent_indices_ready = True
+-            return self.topk_indices_buffer
+-
+-        return _musa_fill_recent_sparse_indexer_indices(
+-            hidden_states,
+-            self.k_cache.prefix,
+-            self.topk_tokens,
+-            self.topk_indices_buffer,
+-        )
+-
+     def forward_cuda(
+         self,
+         hidden_states: torch.Tensor,
