@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 15 Sep 2026 23:59:22 +0800
+Subject: [PATCH] MUSA: enable DSV4 learned paged-MQA decode
+
+---
+ .../layers/sparse_attn_indexer.py             | 21 ++++++++++++++-----
+ vllm/v1/attention/backends/mla/indexer.py     |  5 ++++-
+ 2 files changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index d1dc184..e0c08eb 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -217,12 +217,22 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
+     head_dim: int,
+     max_model_len: int,
+ ) -> bool:
++    is_glm52 = (
++        q_quant.ndim == 3
++        and q_quant.shape[1] == 32
++        and topk_tokens <= 2048
++    )
++    is_deepseek_v4 = (
++        q_quant.ndim == 3
++        and q_quant.shape[1] == 64
++        and topk_tokens <= 512
++    )
+     if (
+-        not _musa_sparse_indexer_glm52_materialized_enabled()
++        not (
++            (is_glm52 and _musa_sparse_indexer_glm52_materialized_enabled())
++            or is_deepseek_v4
++        )
+         or head_dim != 128
+-        or q_quant.ndim != 3
+-        or q_quant.shape[1] != 32
+-        or topk_tokens > 2048
+         or q_quant.dtype != torch.float8_e4m3fn
+         or kv_cache.dtype != torch.uint8
+         or weights.dtype != torch.float32
+@@ -239,7 +249,8 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
+     batch_size, next_n = context_lens.shape
+     rows = min(q_quant.shape[0], context_lens.numel(), topk_indices.shape[0])
+     topk = min(int(topk_tokens), topk_indices.shape[1])
+-    materialized_width = max(0, int(max_model_len))
++    page_capacity = int(decode_metadata.block_table.shape[1]) * int(kv_cache.shape[1])
++    materialized_width = max(int(topk), min(int(max_model_len), page_capacity))
+     if rows <= 0 or topk <= 0:
+         return True
+     if materialized_width <= topk:
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 480e71f..03f79b5 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -1036,8 +1036,11 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+                 try:
+                     from mate import deep_gemm as musa_deep_gemm
+ 
++                    meta_lens = seq_lens
++                    if seq_lens.dim() == 2 and seq_lens.shape[-1] == 1:
++                        meta_lens = seq_lens.squeeze(-1)
+                     metadata = musa_deep_gemm.get_paged_mqa_logits_metadata(
+-                        seq_lens,
++                        meta_lens,
+                         self.kv_cache_spec.storage_block_size,
+                         self.num_sms,
+                     )

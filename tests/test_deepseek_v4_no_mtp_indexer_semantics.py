@@ -8,6 +8,7 @@ METADATA_PATCH = SERIES / "0145-MUSA-remove-DSV4-recent-indexer-metadata.patch"
 DISPATCH_PATCH = SERIES / "0146-MUSA-keep-DSV4-learned-indexer-dispatch.patch"
 GRAPH_PATCH = SERIES / "0147-MUSA-keep-DSV4-learned-indexer-on-graph-decode.patch"
 GRAPH_SAFE_PATCH = SERIES / "0148-MUSA-keep-DSV4-learned-decode-graph-safe.patch"
+PAGED_MQA_PATCH = SERIES / "0149-MUSA-enable-DSV4-learned-paged-MQA-decode.patch"
 
 
 def test_dsv4_native_indexer_does_not_select_metadata_only_recent_path() -> None:
@@ -58,3 +59,11 @@ def test_dsv4_attention_and_graph_decode_are_learned_only() -> None:
     assert "_musa_decode_seq_len_fits_native_contract" in graph_safe_additions
     assert "if _musa_sparse_indexer_is_current_stream_capturing():" in graph_safe_additions
     assert "q_quant.to(torch.float32)" not in graph_safe_additions
+
+    paged = PAGED_MQA_PATCH.read_text()
+    paged_additions = "\n".join(
+        line[1:] for line in paged.splitlines() if line.startswith("+")
+    )
+    assert "is_deepseek_v4" in paged_additions
+    assert "or is_deepseek_v4" in paged_additions
+    assert "meta_lens" in paged_additions

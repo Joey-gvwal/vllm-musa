@@ -9,6 +9,7 @@ METADATA_PATCH = SERIES / "0145-MUSA-remove-DSV4-recent-indexer-metadata.patch"
 DISPATCH_PATCH = SERIES / "0146-MUSA-keep-DSV4-learned-indexer-dispatch.patch"
 GRAPH_PATCH = SERIES / "0147-MUSA-keep-DSV4-learned-indexer-on-graph-decode.patch"
 GRAPH_SAFE_PATCH = SERIES / "0148-MUSA-keep-DSV4-learned-decode-graph-safe.patch"
+PAGED_MQA_PATCH = SERIES / "0149-MUSA-enable-DSV4-learned-paged-MQA-decode.patch"
 
 
 def _additions(patch: Path) -> str:
@@ -71,3 +72,13 @@ def test_graph_decode_length_gate_never_host_syncs() -> None:
     assert "_musa_decode_seq_len_fits_native_contract(" in additions
     assert "q_quant.to(torch.float32)" not in additions
     assert "the only graph-safe path" in additions
+
+
+def test_dsv4_decode_can_use_learned_paged_mqa() -> None:
+    additions = _additions(PAGED_MQA_PATCH)
+
+    assert "is_deepseek_v4" in additions
+    assert "q_quant.shape[1] == 64" in additions
+    assert "or is_deepseek_v4" in additions
+    assert "materialized_width = max(int(topk), min(int(max_model_len), page_capacity))" in additions
+    assert "meta_lens = seq_lens" in additions
