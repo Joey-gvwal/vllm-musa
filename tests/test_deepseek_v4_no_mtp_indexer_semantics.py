@@ -7,6 +7,7 @@ LEARNED_CAPTURE_PATCH = SERIES / "0138-MUSA-keep-DSV4-learned-indexer-on-graph-c
 METADATA_PATCH = SERIES / "0145-MUSA-remove-DSV4-recent-indexer-metadata.patch"
 DISPATCH_PATCH = SERIES / "0146-MUSA-keep-DSV4-learned-indexer-dispatch.patch"
 GRAPH_PATCH = SERIES / "0147-MUSA-keep-DSV4-learned-indexer-on-graph-decode.patch"
+GRAPH_SAFE_PATCH = SERIES / "0148-MUSA-keep-DSV4-learned-decode-graph-safe.patch"
 
 
 def test_dsv4_native_indexer_does_not_select_metadata_only_recent_path() -> None:
@@ -49,3 +50,11 @@ def test_dsv4_attention_and_graph_decode_are_learned_only() -> None:
     assert "return _musa_fill_exact_sparse_indexer_indices_capture(" in graph_additions
     assert "_musa_decode_request_max_seq_len" in graph_additions
     assert "_musa_fill_recent_sparse_indexer_indices" not in graph_additions
+
+    graph_safe = GRAPH_SAFE_PATCH.read_text()
+    graph_safe_additions = "\n".join(
+        line[1:] for line in graph_safe.splitlines() if line.startswith("+")
+    )
+    assert "_musa_decode_seq_len_fits_native_contract" in graph_safe_additions
+    assert "if _musa_sparse_indexer_is_current_stream_capturing():" in graph_safe_additions
+    assert "q_quant.to(torch.float32)" not in graph_safe_additions

@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 15 Sep 2026 22:42:25 +0800
+Subject: [PATCH] MUSA: keep DSV4 learned decode graph-safe
+
+---
+ .../layers/sparse_attn_indexer.py             | 44 ++++++++++---------
+ 1 file changed, 24 insertions(+), 20 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 4e4b000..d1dc184 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -58,19 +58,27 @@ def _musa_sparse_indexer_is_current_stream_capturing() -> bool:
+     return False
+ 
+ 
+-def _musa_decode_request_max_seq_len(decode_metadata) -> int:
+-    """Return the request-side decode length used to select the native kernel.
++def _musa_decode_seq_len_fits_native_contract(
++    decode_metadata,
++    kv_cache: torch.Tensor,
++    limit: int,
++) -> bool:
++    """Eager uses request length. Capture never host-syncs.
+ 
+-    Host syncs such as ``.item()`` can fail while a graph is capturing. Fail
+-    closed in that case so dispatch stays on the learned Torch path.
++    The native kernel clamps to its compile-time max, so capture always
++    selects it once the dtype and shape gates have passed.
+     """
++    if _musa_sparse_indexer_is_current_stream_capturing():
++        return True
+     seq_lens = getattr(decode_metadata, "seq_lens", None)
+     if seq_lens is None:
+-        return 2**31 - 1
++        capacity = int(decode_metadata.block_table.shape[1]) * int(kv_cache.shape[1])
++        return capacity <= limit
+     try:
+-        return int(seq_lens.reshape(-1).max().item())
++        return int(seq_lens.reshape(-1).max().item()) <= limit
+     except (RuntimeError, ValueError, TypeError):
+-        return 2**31 - 1
++        capacity = int(decode_metadata.block_table.shape[1]) * int(kv_cache.shape[1])
++        return capacity <= limit
+ 
+ 
+ def _musa_sparse_indexer_native_decode_enabled() -> bool:
+@@ -335,7 +343,9 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
+         and q_quant.dtype == torch.float8_e4m3fn
+         and kv_cache.dtype == torch.uint8
+         and weights.dtype == torch.float32
+-        and _musa_decode_request_max_seq_len(decode_metadata) <= 8192
++        and _musa_decode_seq_len_fits_native_contract(
++            decode_metadata, kv_cache, 8192
++        )
+     ):
+         seq_lens = decode_metadata.seq_lens.reshape(-1)
+         rows = min(
+@@ -372,7 +382,9 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
+         or q_quant.dtype != torch.float8_e4m3fn
+         or kv_cache.dtype != torch.uint8
+         or weights.dtype != torch.float32
+-        or _musa_decode_request_max_seq_len(decode_metadata) > 4096
++        or not _musa_decode_seq_len_fits_native_contract(
++            decode_metadata, kv_cache, 4096
++        )
+     ):
+         return False
+ 
+@@ -1046,17 +1058,9 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+             head_dim,
+             max_model_len,
+         ):
+-            q_deq = q_quant.to(torch.float32)
+-            weights_fp32 = weights.to(torch.float32)
+-            _musa_fill_decode_topk_from_indexer_cache_capture(
+-                q_deq[: metadata.num_decode_tokens],
+-                kv_cache,
+-                weights_fp32[: metadata.num_decode_tokens],
+-                metadata.decode,
+-                topk_indices_buffer[: metadata.num_decode_tokens, :topk_tokens],
+-                topk_tokens,
+-                head_dim,
+-            )
++            # Capture cannot host-cast FP8 queries. Native learned decode is
++            # the only graph-safe path; leave padded -1 rows on miss.
++            pass
+ 
+     if metadata.num_prefills > 0:
+         # Prefill is handled by the eager materialized/native path. Graph

@@ -8,6 +8,7 @@ SERIES = ROOT / "vllm_musa/patches/series"
 METADATA_PATCH = SERIES / "0145-MUSA-remove-DSV4-recent-indexer-metadata.patch"
 DISPATCH_PATCH = SERIES / "0146-MUSA-keep-DSV4-learned-indexer-dispatch.patch"
 GRAPH_PATCH = SERIES / "0147-MUSA-keep-DSV4-learned-indexer-on-graph-decode.patch"
+GRAPH_SAFE_PATCH = SERIES / "0148-MUSA-keep-DSV4-learned-decode-graph-safe.patch"
 
 
 def _additions(patch: Path) -> str:
@@ -59,3 +60,14 @@ def test_graph_decode_uses_learned_indexer_not_recent_window() -> None:
     assert "block_table.shape[1] * kv_cache.shape[1]" not in additions
     assert "does not support prefill" not in additions
     assert "MUSA learned-indexer capture supports the FP8 path only" in additions
+
+
+def test_graph_decode_length_gate_never_host_syncs() -> None:
+    additions = _additions(GRAPH_SAFE_PATCH)
+
+    assert "def _musa_decode_seq_len_fits_native_contract(" in additions
+    assert "if _musa_sparse_indexer_is_current_stream_capturing():" in additions
+    assert "return True" in additions
+    assert "_musa_decode_seq_len_fits_native_contract(" in additions
+    assert "q_quant.to(torch.float32)" not in additions
+    assert "the only graph-safe path" in additions
