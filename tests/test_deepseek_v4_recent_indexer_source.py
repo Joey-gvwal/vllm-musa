@@ -5,11 +5,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa/patches/series"
-METADATA_PATCH = SERIES / "0145-MUSA-remove-DSV4-recent-indexer-metadata.patch"
-DISPATCH_PATCH = SERIES / "0146-MUSA-keep-DSV4-learned-indexer-dispatch.patch"
-GRAPH_PATCH = SERIES / "0147-MUSA-keep-DSV4-learned-indexer-on-graph-decode.patch"
-GRAPH_SAFE_PATCH = SERIES / "0148-MUSA-keep-DSV4-learned-decode-graph-safe.patch"
-PAGED_MQA_PATCH = SERIES / "0149-MUSA-enable-DSV4-learned-paged-MQA-decode.patch"
+METADATA_PATCH = SERIES / "0158-MUSA-remove-DSV4-recent-indexer-metadata.patch"
+DISPATCH_PATCH = SERIES / "0159-MUSA-keep-DSV4-learned-indexer-dispatch.patch"
+GRAPH_PATCH = SERIES / "0160-MUSA-keep-DSV4-learned-indexer-on-graph-decode.patch"
+GRAPH_SAFE_PATCH = SERIES / "0161-MUSA-keep-DSV4-learned-decode-graph-safe.patch"
+PAGED_MQA_PATCH = SERIES / "0162-MUSA-enable-DSV4-learned-paged-MQA-decode.patch"
 
 
 def _additions(patch: Path) -> str:

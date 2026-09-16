@@ -10,7 +10,7 @@ def _patch(name: str) -> str:
 
 
 def test_dspark_context_kv_uses_musa_custom_op() -> None:
-    patch = _patch("0140-MUSA-vllm.models.deepseek_v4.nvidia.dspark.patch")
+    patch = _patch("0153-MUSA-vllm.models.deepseek_v4.nvidia.dspark.patch")
     assert "from vllm.platforms import current_platform" in patch
     assert "if current_platform.is_musa():" in patch
     assert "_musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(" in patch
@@ -19,7 +19,7 @@ def test_dspark_context_kv_uses_musa_custom_op() -> None:
 
 def test_dspark_rejection_sampler_preserves_optional_feature_flags() -> None:
     patch = _patch(
-        "0141-MUSA-vllm.v1.worker.gpu.spec_decode.rejection_sampler_utils-dspark.patch"
+        "0154-MUSA-vllm.v1.worker.gpu.spec_decode.rejection_sampler_utils-dspark.patch"
     )
     assert "synthetic_mode = synthetic_conditional_rates is not None" in patch
     assert 'target_logits.device.type == "musa"' in patch
@@ -28,20 +28,20 @@ def test_dspark_rejection_sampler_preserves_optional_feature_flags() -> None:
 
 
 def test_dsv4_loaders_fall_back_to_resolved_quant_expert_dtype() -> None:
-    patch = _patch("0142-MUSA-honor-DeepSeek-V4-FP8-expert-dtype-override.patch")
+    patch = _patch("0155-MUSA-honor-DeepSeek-V4-FP8-expert-dtype-override.patch")
     assert "vllm_config.quant_config, \"expert_dtype\"" in patch
     assert "self.quant_config, \"expert_dtype\"" in patch
     assert "FP8 block scale names" in patch
 
 
 def test_dsv4_loaders_prefer_resolved_fp8_over_config_default() -> None:
-    patch = _patch("0143-MUSA-prefer-resolved-DeepSeek-V4-FP8-dtype.patch")
+    patch = _patch("0156-MUSA-prefer-resolved-DeepSeek-V4-FP8-dtype.patch")
     assert 'resolved_quant_dtype in ("fp4", "fp8")' in patch
     assert 'resolved_quant_dtype == "fp8"' in patch
 
 
 
 def test_dspark_loader_prefers_resolved_fp8_expert_scales() -> None:
-    patch = _patch("0144-MUSA-select-FP8-expert-scales-in-DSpark-loader.patch")
+    patch = _patch("0157-MUSA-select-FP8-expert-scales-in-DSpark-loader.patch")
     assert "resolved_quant_dtype in (\"fp4\", \"fp8\")" in patch
     assert "expert_scale_suffix" in patch

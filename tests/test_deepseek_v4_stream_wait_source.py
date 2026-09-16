@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = ROOT / (
     "vllm_musa/patches/series/"
-    "0139-MUSA-use-stream-waits-for-DSV4-overlap-hand-off.patch"
+    "0152-MUSA-use-stream-waits-for-DSV4-overlap-hand-off.patch"
 )
 
 
