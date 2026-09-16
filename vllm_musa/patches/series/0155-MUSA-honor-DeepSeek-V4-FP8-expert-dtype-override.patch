@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 9 Sep 2026 17:10:00 +0800
+Subject: [PATCH] fix(musa): honor FP8 expert dtype override in DSV4 loaders
+
+Converted DeepSeek-V4 FP8 checkpoints can omit expert_dtype from the
+transformers config. Reuse the resolved DeepSeek quantization config for target
+and DSpark MTP weight mapping so --hf-overrides expert_dtype=fp8 selects the
+FP8 block scale names.
+
+---
+ vllm/models/deepseek_v4/nvidia/model.py | 7 ++++++-
+ vllm/models/deepseek_v4/nvidia/mtp.py   | 9 +++++----
+ 2 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index 128debf70c..dsv4dtype 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -1485,7 +1485,12 @@
+ 
+         config = vllm_config.model_config.hf_config
+         self.config = config
+-        expert_dtype = getattr(config, "expert_dtype", "fp4")
++        # Some converted FP8 checkpoints omit expert_dtype from hf_config.
++        # The DeepSeek quant config resolves it from hf_overrides, so reuse that
++        # authoritative value instead of silently selecting the FP4 mapper.
++        expert_dtype = getattr(config, "expert_dtype", None)
++        if expert_dtype is None:
++            expert_dtype = getattr(vllm_config.quant_config, "expert_dtype", "fp4")
+         if expert_dtype != "fp4":
+             self.hf_to_vllm_mapper = _make_deepseek_v4_weights_mapper(expert_dtype)
+ 
+diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
+index 128debf70c..dsv4dtype 100644
+--- a/vllm/models/deepseek_v4/nvidia/mtp.py
++++ b/vllm/models/deepseek_v4/nvidia/mtp.py
+@@ -377,10 +377,11 @@
+         # FP8 experts register ``..._weight_scale_inv`` (block_quant) while
+         # FP4/MXFP4 experts register ``..._weight_scale``. Choose the suffix
+         # for the rename below based on the model's expert dtype.
++        expert_dtype = getattr(self.config, "expert_dtype", None)
++        if expert_dtype is None:
++            expert_dtype = getattr(self.quant_config, "expert_dtype", "fp4")
+         expert_scale_suffix = (
+-            ".weight_scale"
+-            if getattr(self.config, "expert_dtype", "fp4") == "fp4"
+-            else ".weight_scale_inv"
++            ".weight_scale" if expert_dtype == "fp4" else ".weight_scale_inv"
+         )
+ 
+         for name, loaded_weight in weights:

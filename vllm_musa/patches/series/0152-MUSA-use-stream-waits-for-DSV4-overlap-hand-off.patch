@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 8 Sep 2026 18:34:46 +0800
+Subject: [PATCH] MUSA: use stream waits for DSV4 overlap hand-off
+
+---
+ vllm/models/deepseek_v4/attention.py |  5 +++++
+ vllm/utils/multi_stream_utils.py     | 31 +++++++++++++++++++++++++++-
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 128debf70c..7877fd5ff5 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -594,6 +594,7 @@
+                     if aux_streams is not None
+                     else None,
+                     enable=aux_streams is not None,
++                    use_stream_waits=current_platform.is_musa(),
+                 )
+             else:
+                 assert indexer_weights is not None
+@@ -616,6 +617,7 @@
+                     if aux_streams is not None
+                     else None,
+                     enable=aux_streams is not None,
++                    use_stream_waits=current_platform.is_musa(),
+                 )
+                 index_q, index_q_scale, index_weights_out = indexer_inputs
+         elif compressor is not None:
+@@ -626,6 +628,7 @@
+                 self.ln_events[0],
+                 self.ln_events[1],
+                 aux_stream,
++                use_stream_waits=current_platform.is_musa(),
+             )
+         else:
+             q = project_query_and_cache_kv()
+@@ -714,6 +717,7 @@
+                     hidden_states.shape[0]
+                 )
+             ),
++            use_stream_waits=current_platform.is_musa(),
+         )
+ 
+         return qr_kv, kv_score, indexer_kv_score, indexer_weights
+@@ -1147,6 +1151,7 @@
+             self.ln_events[0],
+             self.ln_events[1],
+             aux_stream,
++            use_stream_waits=current_platform.is_musa(),
+         )
+         if isinstance(q_quant, tuple):
+             q, q_scale = q_quant
+diff --git a/vllm/utils/multi_stream_utils.py b/vllm/utils/multi_stream_utils.py
+index a8286c8..d370431 100644
+--- a/vllm/utils/multi_stream_utils.py
++++ b/vllm/utils/multi_stream_utils.py
+@@ -19,6 +19,7 @@
+     event0: torch.cuda.Event,
+     event1: torch.cuda.Event,
+     aux_stream: torch.cuda.Stream | None = None,
++    use_stream_waits: bool = False,
+ ) -> tuple[Any, Any]:
+     """Run two functions potentially in parallel on separate CUDA streams.
+ 
+@@ -38,6 +39,8 @@
+         aux_stream: The second CUDA stream for fn1.
+             Multi-stream is disabled when aux_stream is None or a breakable
+             CUDA graph capture is active.
++        use_stream_waits: Use stream-level wait hand-offs instead of explicit
++            event record/wait calls. This is required by MUSA graph replay.
+ 
+     Returns:
+         Tuple of (fn0_result, fn1_result).
+@@ -48,7 +51,14 @@
+         if BreakableCUDAGraphCapture.is_active():
+             aux_stream = None
+ 
+-    if aux_stream is not None:
++    if aux_stream is not None and use_stream_waits:
++        current_stream = torch.cuda.current_stream()
++        aux_stream.wait_stream(current_stream)
++        with torch.cuda.stream(aux_stream):
++            result1 = fn1()
++        result0 = fn0()
++        current_stream.wait_stream(aux_stream)
++    elif aux_stream is not None:
+         event0.record()
+         result0 = fn0()
+         with torch.cuda.stream(aux_stream):
+@@ -69,6 +79,7 @@
+     done_events: list[torch.cuda.Event],
+     aux_streams: list[torch.cuda.Stream] | None = None,
+     enable: bool = False,
++    use_stream_waits: bool = False,
+ ) -> tuple[Any, list[Any]]:
+     """Run default_fn on the current stream and aux_fns concurrently on
+     aux_streams.
+@@ -96,6 +107,8 @@
+             so callers that pass aux_streams must also pass enable=True
+             (typically gated by an env var) to actually overlap. When False,
+             execution falls back to sequential on the current stream.
++        use_stream_waits: Use stream-level wait hand-offs instead of explicit
++            event record/wait calls. This is required by MUSA graph replay.
+ 
+     Returns:
+         Tuple of (default_result, aux_results) where aux_results[i] is the
+@@ -111,6 +124,22 @@
+         "aux_fns, aux_streams, and done_events must be the same length"
+     )
+ 
++    if use_stream_waits:
++        current_stream = torch.cuda.current_stream()
++        aux_results = [None] * len(aux_fns)
++        for i, fn in enumerate(aux_fns):
++            if fn is None:
++                continue
++            aux_streams[i].wait_stream(current_stream)
++            with torch.cuda.stream(aux_streams[i]):
++                aux_results[i] = fn()
++
++        default_result = default_fn()
++        for i, fn in enumerate(aux_fns):
++            if fn is not None:
++                current_stream.wait_stream(aux_streams[i])
++        return default_result, aux_results
++
+     aux_results = [None] * len(aux_fns)
+     pending: list[torch.cuda.Event] = []
+ 

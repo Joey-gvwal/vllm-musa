@@ -79,6 +79,68 @@ def test_unknown_shape_stays_on_upstream_path():
     )
 
 
+def test_mp48_dsv4_native_gemv_boundary_and_shape_isolation():
+    for graph_mode in ("eager", "capture"):
+        shape = _shape(
+            multiprocessor_count=48,
+            local_experts=256,
+            w1_output_size=512,
+            w2_input_size=256,
+            top_k=6,
+            w1_scale_shape=(256, 4, 32),
+            w2_scale_shape=(256, 32, 2),
+            gemv_block="16x8",
+            graph_mode=graph_mode,
+        )
+        for num_tokens in (1, 2, 8, 11, 12, 13, 16):
+            backend = select_fused_moe_backend(
+                shape=shape,
+                num_tokens=num_tokens,
+                can_use_gemv=True,
+                can_use_grouped_gemm=True,
+                stream_is_capturing=graph_mode == "capture",
+            )
+            expected = (
+                MusaFusedMoeBackend.GEMV
+                if num_tokens <= 12
+                else MusaFusedMoeBackend.UPSTREAM
+            )
+            assert backend == expected
+        for override in ({"top_k": 8}, {"local_experts": 128}, {"expert_parallel": True}):
+            unrelated = _shape(**{**shape.__dict__, **override})
+            assert thresholds_for_shape(unrelated).source == "uncalibrated-shape"
+
+
+def test_mp56_dsv4_native_gemv_boundary_matches_mp48_mp60():
+    for graph_mode in ("eager", "capture"):
+        shape = _shape(
+            multiprocessor_count=56,
+            local_experts=256,
+            w1_output_size=512,
+            w2_input_size=256,
+            top_k=6,
+            w1_scale_shape=(256, 4, 32),
+            w2_scale_shape=(256, 32, 2),
+            gemv_block="16x8",
+            graph_mode=graph_mode,
+        )
+        assert thresholds_for_shape(shape).gemv_max_tokens == 12
+        for num_tokens in (1, 2, 8, 11, 12, 13, 16):
+            backend = select_fused_moe_backend(
+                shape=shape,
+                num_tokens=num_tokens,
+                can_use_gemv=True,
+                can_use_grouped_gemm=True,
+                stream_is_capturing=graph_mode == "capture",
+            )
+            expected = (
+                MusaFusedMoeBackend.GEMV
+                if num_tokens <= 12
+                else MusaFusedMoeBackend.UPSTREAM
+            )
+            assert backend == expected
+
+
 def test_grouped_gemm_is_never_selected_during_capture():
     shape = _shape()
 
@@ -208,7 +270,45 @@ def test_s5000_calibrated_shapes_use_route_worst_boundaries():
         w2_scale_shape=(256, 32, 2),
         gemv_block="16x8",
     )
-    assert thresholds_for_shape(dsv4_block16).gemv_max_tokens == 5
+    assert thresholds_for_shape(dsv4_block16).gemv_max_tokens == 12
+    dsv4_block16_capture = _shape(
+        multiprocessor_count=60,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+        graph_mode="capture",
+    )
+    assert thresholds_for_shape(dsv4_block16_capture).gemv_max_tokens == 12
+    dsv4_block16_mp56 = _shape(
+        multiprocessor_count=56,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+    )
+    assert thresholds_for_shape(dsv4_block16_mp56).gemv_max_tokens == 12
+    dsv4_block16_mp56_capture = _shape(
+        multiprocessor_count=56,
+        local_experts=256,
+        w1_output_size=512,
+        w2_input_size=256,
+        hidden_size=4096,
+        top_k=6,
+        w1_scale_shape=(256, 4, 32),
+        w2_scale_shape=(256, 32, 2),
+        gemv_block="16x8",
+        graph_mode="capture",
+    )
+    assert thresholds_for_shape(dsv4_block16_mp56_capture).gemv_max_tokens == 12
     assert thresholds_for_shape(dsv4).grouped_gemm_min_tokens is None
     assert thresholds_for_shape(dsv2).gemv_max_tokens == 3
     assert thresholds_for_shape(dsv2).grouped_gemm_min_tokens is None

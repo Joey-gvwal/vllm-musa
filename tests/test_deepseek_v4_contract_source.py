@@ -50,7 +50,7 @@ def test_sparse_indexer_contract_keeps_glm_entry_shape_local() -> None:
     assert "DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER" in patch
     assert "use_musa_materialized_prefill" in patch
     assert "q_quant.shape[1] == 32" in patch
-    assert "and self.use_musa_native_indexer" in patch
+    assert "use_musa_native_indexer" in patch
 
 
 def test_mtp_sparse_prefill_fixes_are_bound_at_the_dsv4_owner() -> None:

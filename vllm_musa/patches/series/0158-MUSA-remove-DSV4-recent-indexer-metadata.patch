@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 15 Sep 2026 21:47:16 +0800
+Subject: [PATCH] MUSA: remove DSV4 recent indexer metadata
+
+---
+ vllm/v1/attention/backends/mla/indexer.py | 79 -----------------------
+ 1 file changed, 79 deletions(-)
+
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 9b5bd73..480e71f 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -1,6 +1,5 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+-import os
+ from dataclasses import dataclass
+ 
+ import torch
+@@ -471,8 +470,6 @@ class DeepseekV32IndexerMetadata:
+ 
+     decode: DeepSeekV32IndexerDecodeMetadata | None = None
+     prefill: DeepseekV32IndexerPrefillMetadata | None = None
+-    recent_indices: torch.Tensor | None = None
+-    recent_indices_ready: bool = False
+ 
+ 
+ def get_max_prefill_buffer_size(vllm_config: VllmConfig):
+@@ -528,7 +525,6 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+ 
+     def __init__(self, *args, block_table_width: int, **kwargs) -> None:
+         super().__init__(*args, **kwargs)
+-        self.model_config = self.vllm_config.model_config
+         scheduler_config = self.vllm_config.scheduler_config
+         parallel_config = self.vllm_config.parallel_config
+         self.dcp_world_size = parallel_config.decode_context_parallel_size
+@@ -622,16 +618,6 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+         # Get compress_ratio for DeepseekV4 support
+         if isinstance(self.kv_cache_spec, MLAAttentionSpec):
+             self.compress_ratio = self.kv_cache_spec.compress_ratio
+-        self.recent_indices_buffer: torch.Tensor | None = None
+-        if self.compress_ratio == 4 and current_platform.is_musa():
+-            self.recent_indices_buffer = torch.empty(
+-                (
+-                    scheduler_config.max_num_batched_tokens,
+-                    self.model_config.hf_config.index_topk,
+-                ),
+-                dtype=torch.int32,
+-                device=self.device,
+-            )
+         if self.dcp_world_size > 1 and self.compress_ratio > 1:
+             raise NotImplementedError(
+                 "DCP is not supported with sparse indexer KV compression "
+@@ -1085,16 +1071,6 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+                 global_seq_lens=global_seq_lens_for_decode,
+             )
+ 
+-        recent_indices = None
+-        if self.recent_indices_buffer is not None:
+-            recent_indices = self._build_recent_indices(
+-                num_tokens,
+-                num_decode_tokens,
+-                num_prefill_tokens,
+-                decode_metadata,
+-                prefill_metadata,
+-            )
+-
+         attn_metadata = DeepseekV32IndexerMetadata(
+             seq_lens=common_attn_metadata.seq_lens,
+             max_seq_len=common_attn_metadata.max_seq_len,
+@@ -1105,65 +1081,10 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+             num_prefill_tokens=num_prefill_tokens,
+             prefill=prefill_metadata,
+             decode=decode_metadata,
+-            recent_indices=recent_indices,
+-            recent_indices_ready=False,
+         )
+ 
+         return attn_metadata
+ 
+-    def _build_recent_indices(
+-        self,
+-        num_tokens: int,
+-        num_decode_tokens: int,
+-        num_prefill_tokens: int,
+-        decode_metadata: DeepSeekV32IndexerDecodeMetadata | None,
+-        prefill_metadata: DeepseekV32IndexerPrefillMetadata | None,
+-    ) -> torch.Tensor:
+-        assert self.recent_indices_buffer is not None
+-        out = self.recent_indices_buffer
+-        topk = min(self.model_config.hf_config.index_topk, out.shape[1])
+-        rows = min(int(num_tokens), out.shape[0])
+-        out[:rows, :topk] = -1
+-        if topk <= 0 or rows <= 0:
+-            return out
+-
+-        try:
+-            cap = int(os.getenv("VLLM_MUSA_SPARSE_INDEXER_FALLBACK_TOPK", "16"))
+-        except ValueError:
+-            cap = 16
+-        cap = max(0, min(cap, topk))
+-        if cap <= 0:
+-            return out
+-
+-        def fill_rows(row_start: int, lengths: torch.Tensor) -> None:
+-            start = max(0, int(row_start))
+-            if start >= rows:
+-                return
+-            flat_lengths = lengths.reshape(-1).to(torch.long)
+-            count = min(flat_lengths.numel(), rows - start)
+-            if count <= 0:
+-                return
+-            row_lengths = flat_lengths[:count].clamp(min=0)
+-            counts = row_lengths.clamp(max=cap)
+-            starts = (row_lengths - counts).clamp(min=0)
+-            offsets = torch.arange(
+-                cap, device=out.device, dtype=torch.long
+-            ).unsqueeze(0)
+-            values = starts.unsqueeze(-1) + offsets
+-            valid = offsets < counts.unsqueeze(-1)
+-            rows_view = out[start : start + count, :cap]
+-            rows_view.copy_(torch.where(valid, values.to(out.dtype), rows_view))
+-
+-        if num_decode_tokens > 0 and decode_metadata is not None:
+-            fill_rows(0, decode_metadata.seq_lens)
+-        if num_prefill_tokens > 0 and prefill_metadata is not None:
+-            for chunk in prefill_metadata.chunks:
+-                fill_rows(
+-                    int(chunk.token_start),
+-                    chunk.cu_seqlen_ke - chunk.cu_seqlen_ks,
+-                )
+-        return out
+-
+ 
+ def build_prefill_chunk_metadata(
+     start_idx: int,

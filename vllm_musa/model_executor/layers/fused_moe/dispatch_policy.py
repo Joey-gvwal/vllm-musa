@@ -65,6 +65,7 @@ _DEFAULT_THRESHOLDS: Final = MusaFusedMoeThresholds(
 
 def _s5000_fp8_shape(
     *,
+    multiprocessor_count: int = 60,
     local_experts: int,
     w1_output_size: int,
     w2_input_size: int,
@@ -77,7 +78,7 @@ def _s5000_fp8_shape(
 ) -> MusaFusedMoeShape:
     return MusaFusedMoeShape(
         device_capability=(3, 1),
-        multiprocessor_count=60,
+        multiprocessor_count=multiprocessor_count,
         local_experts=local_experts,
         w1_output_size=w1_output_size,
         w2_input_size=w2_input_size,
@@ -228,9 +229,65 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_block="16x8",
             graph_mode=graph_mode,
         ): _thresholds(
-            gemv_max_tokens=5,
+            # Cold-L2 crossover calibration covers adaptive target verify
+            # lengths, not only the fixed DSpark-7 M=8 shape.  The MP60
+            # split-tile selector uses 32x4 through M=12; hot routing regresses
+            # at M=13, so larger token batches retain the upstream path.
+            gemv_max_tokens=12,
             grouped_gemm_min_tokens=None,
-            source=f"s5000-mp60-20260721-e256-n512-k4096-{graph_mode}-block16-dense-v5",
+            source=(
+                f"s5000-mp60-20260818-e256-n512-k4096-{graph_mode}-"
+                "block16-split32-m12"
+            ),
+        )
+        for graph_mode in ("eager", "capture")
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _s5000_fp8_shape(
+            multiprocessor_count=56,
+            local_experts=256,
+            w1_output_size=512,
+            w2_input_size=256,
+            hidden_size=4096,
+            top_k=6,
+            w1_scale_shape=(256, 4, 32),
+            w2_scale_shape=(256, 32, 2),
+            gemv_block="16x8",
+            graph_mode=graph_mode,
+        ): _thresholds(
+            # Same DSV4 TP8 per-rank shape as MP48/MP60. Native W1/W2
+            # split-tile covers target M=12; M>=13 stays on upstream.
+            gemv_max_tokens=12,
+            grouped_gemm_min_tokens=None,
+            source=(
+                f"s5000-mp56-e256-n512-k4096-{graph_mode}-"
+                "block16-split32-m12"
+            ),
+        )
+        for graph_mode in ("eager", "capture")
+    }
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        _s5000_fp8_shape(
+            multiprocessor_count=48,
+            local_experts=256,
+            w1_output_size=512,
+            w2_input_size=256,
+            hidden_size=4096,
+            top_k=6,
+            w1_scale_shape=(256, 4, 32),
+            w2_scale_shape=(256, 32, 2),
+            gemv_block="16x8",
+            graph_mode=graph_mode,
+        ): _thresholds(
+            # Preserve the MP56 contract's exact per-rank shape on MP48.
+            # Match the native W1/W2 selector through target M=12.
+            gemv_max_tokens=12,
+            grouped_gemm_min_tokens=None,
+            source=f"s5000-mp48-dsv4-tp8-{graph_mode}-block16-split32-m12",
         )
         for graph_mode in ("eager", "capture")
     }

@@ -599,9 +599,10 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
     int scale_k_group_tile,
     int nr_n,
     int vlen,
+    int num_mp,
     int bseqlen) {
     if (!is_fp8 || use_int4_w4a16 || num_experts != 256 ||
-        scale_k_group_tile != 128 || bseqlen != 1) {
+        scale_k_group_tile != 128) {
         return false;
     }
 
@@ -609,11 +610,29 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
                     reduce_size == 512 && nr_n == 256;
     const bool w2 = !use_swigelu && topk == 1 && hidden_size == 256 &&
                     reduce_size == 4096 && nr_n == 4096;
-    const BlockConfig config =
-        w1 ? BlockConfig{4, 32, 0.f, true}
-           : BlockConfig{32, 4, 0.f, true};
-    return (w1 || w2) &&
-           IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
+    if (!w1 && !w2) {
+        return false;
+    }
+
+    BlockConfig config{0, 0, 0.f, false};
+    const bool small_m_bin =
+        num_mp == 48 || num_mp == 56 || num_mp == 60;
+    const bool small_m_w1_range =
+        small_m_bin && w1 && bseqlen >= 2 && bseqlen <= 12;
+    const bool small_m_w2_range = small_m_bin && w2 && bseqlen >= 6 &&
+                                  bseqlen <= 72 && bseqlen % 6 == 0;
+    if (bseqlen == 1) {
+        config = w1 ? BlockConfig{4, 32, 0.f, true}
+                    : BlockConfig{32, 4, 0.f, true};
+    } else if (small_m_w1_range || small_m_w2_range) {
+        // S5000 MP48/56/60: native/upstream crossover is target M=12.
+        // W1 sees M rows; routed W2 sees M*topk rows, so the same
+        // interval is [2,12] and [6,72].
+        config = BlockConfig{32, 4, 0.f, true};
+    } else {
+        return false;
+    }
+    return IsForcedBlockConfigValid(config, nr_n, hidden_size, vlen);
 }
 
 bool SelectDeepSeekV4Fp8OProjTile(
@@ -1026,8 +1045,9 @@ void musa_fused_gemv_moe(
     BlockConfig qwen_fp8_moe_config{32, 4, 0.f, true};
     BlockConfig deepseek_fp8_w1_config{32, 4, 0.f, true};
     BlockConfig deepseek_v4_fp8_moe_config =
-        use_swigelu ? BlockConfig{4, 32, 0.f, true}
-                    : BlockConfig{32, 4, 0.f, true};
+        use_swigelu && bseqlen == 1
+            ? BlockConfig{4, 32, 0.f, true}
+            : BlockConfig{32, 4, 0.f, true};
     BlockConfig* best_config = &fallback_config;
     if (ShouldUseDeepSeekV4Fp8MoeSplitTile(
             is_fp8,
@@ -1040,6 +1060,7 @@ void musa_fused_gemv_moe(
             scale_k_group_tile,
             nr_n,
             vlen,
+            num_mp,
             bseqlen)) {
         best_config = &deepseek_v4_fp8_moe_config;
     } else if (ParseForcedBlockConfig(&forced_config)) {
