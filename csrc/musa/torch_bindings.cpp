@@ -123,6 +123,17 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
                 &deepseek_v4_c4_indexer_compress_cache);
 
   musa_ops.def(
+      "deepseek_v4_sparse_compress_cache(Tensor state_cache, Tensor "
+      "token_to_req_indices, Tensor positions, Tensor state_slot_mapping, "
+      "Tensor block_table, Tensor rms_norm_weight, Tensor cos_sin_cache, "
+      "Tensor! kv_cache, Tensor kv_slot_mapping, float rms_eps, int "
+      "state_block_size, int state_width, int kv_block_size, int "
+      "compress_ratio, int token_stride, int scale_dim, int quant_block) "
+      "-> ()");
+  musa_ops.impl("deepseek_v4_sparse_compress_cache", torch::kMUSA,
+                &deepseek_v4_sparse_compress_cache);
+
+  musa_ops.def(
       "deepseek_v4_fused_q_kv_rmsnorm(Tensor q, Tensor kv, Tensor q_weight, "
       "Tensor kv_weight, float eps) -> (Tensor, Tensor)");
   musa_ops.impl("deepseek_v4_fused_q_kv_rmsnorm", torch::kMUSA,

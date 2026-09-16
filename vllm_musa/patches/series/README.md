@@ -39,7 +39,9 @@ the HF metadata field. The final five patches adapt the v0.28 Model Runner V2 re
 Gumbel-helper contracts without changing the upstream acceptance or resampling
 algorithm. DeepSeek-V4 remains on Model Runner V1 by default on MUSA for its
 faster FULL_DECODE_ONLY serving path; users and V2-only speculative paths can
-still opt into Model Runner V2 explicitly. The fused TileLang `hc_head` is
+still opt into Model Runner V2 explicitly. DeepSeek-V4 512-d sparse C4/C128 compression on decode rows
+1..128 is dispatched to a native MUSA kernel, with Triton kept as the
+shape fallback. The fused TileLang `hc_head` is
 enabled on MUSA by importing TileLang before the eager JIT decorators capture
 their module globals. DeepEP shutdown now drops cached handles before native
 teardown and supports both explicit `destroy()` and legacy destructor-only
