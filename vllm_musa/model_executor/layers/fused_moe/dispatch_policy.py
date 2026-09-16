@@ -257,16 +257,13 @@ _CALIBRATED_THRESHOLDS.update(
             gemv_block="16x8",
             graph_mode=graph_mode,
         ): _thresholds(
-            # DSpark-7 verifies eight target tokens in one graph replay. Graph
-            # preparation can resolve this dispatcher before stream capture,
-            # so eager and capture entries must agree on the M=8 boundary.
-            # The native selector pairs M=8 with the MP56-calibrated 32x4
-            # W1/W2 tiles while every larger M retains the upstream path.
-            gemv_max_tokens=8,
+            # Same DSV4 TP8 per-rank shape as MP48/MP60. Native W1/W2
+            # split-tile covers target M=12; M>=13 stays on upstream.
+            gemv_max_tokens=12,
             grouped_gemm_min_tokens=None,
             source=(
-                f"s5000-mp56-20260814-e256-n512-k4096-{graph_mode}-"
-                "block16-dspark7-m8"
+                f"s5000-mp56-e256-n512-k4096-{graph_mode}-"
+                "block16-split32-m12"
             ),
         )
         for graph_mode in ("eager", "capture")

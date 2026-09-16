@@ -16,8 +16,9 @@ def test_deepseek_v4_w1_w2_use_shape_specific_tiles() -> None:
 
     assert "num_experts != 256" in helper
     assert "bseqlen == 1" in helper
-    assert "w1 && bseqlen == 8" in helper
-    assert "w2 && bseqlen == 48" in helper
+    assert "num_mp == 48 || num_mp == 56 || num_mp == 60" in helper
+    assert "bseqlen >= 2 && bseqlen <= 12" in helper
+    assert "bseqlen <= 72 && bseqlen % 6 == 0" in helper
     assert "topk == 6 && hidden_size == 4096" in helper
     assert "reduce_size == 512 && nr_n == 256" in helper
     assert "topk == 1 && hidden_size == 256" in helper

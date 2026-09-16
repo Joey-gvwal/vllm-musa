@@ -615,7 +615,8 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
     }
 
     BlockConfig config{0, 0, 0.f, false};
-    const bool small_m_bin = num_mp == 48 || num_mp == 60;
+    const bool small_m_bin =
+        num_mp == 48 || num_mp == 56 || num_mp == 60;
     const bool small_m_w1_range =
         small_m_bin && w1 && bseqlen >= 2 && bseqlen <= 12;
     const bool small_m_w2_range = small_m_bin && w2 && bseqlen >= 6 &&
@@ -623,14 +624,10 @@ bool ShouldUseDeepSeekV4Fp8MoeSplitTile(
     if (bseqlen == 1) {
         config = w1 ? BlockConfig{4, 32, 0.f, true}
                     : BlockConfig{32, 4, 0.f, true};
-    } else if (small_m_w1_range || small_m_w2_range ||
-               (w1 && bseqlen == 8) || (w2 && bseqlen == 48)) {
-        // On MP60, cold-L2 route-mode sweeps place the native/upstream
-        // crossover at target M=12. W1 sees M rows while routed W2 sees
-        // M*topk rows, so the same target interval is [2,12] and [6,72]
-        // respectively. MP48 uses the same interval and tile. Keep the legacy
-        // exact M=8 choice on MP56; other MP56
-        // shapes retain their previously calibrated generic path.
+    } else if (small_m_w1_range || small_m_w2_range) {
+        // S5000 MP48/56/60: native/upstream crossover is target M=12.
+        // W1 sees M rows; routed W2 sees M*topk rows, so the same
+        // interval is [2,12] and [6,72].
         config = BlockConfig{32, 4, 0.f, true};
     } else {
         return false;
