@@ -1,5 +1,5 @@
-From efd525b4a9a15b991f44266af383cad1e9dc12dd Mon Sep 17 00:00:00 2001
-From: Joey-gvwal <joey_gvwal@yeah.net>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
 Date: Tue, 15 Sep 2026 10:06:32 +0800
 Subject: [PATCH] MUSA: preserve QSA cached rotary position bounds after
  upstream port
@@ -46,6 +46,3 @@ index d16c4a95fd..9f0d0a0105 100644
          num_warps=1,
      )
  
--- 
-2.25.1
-

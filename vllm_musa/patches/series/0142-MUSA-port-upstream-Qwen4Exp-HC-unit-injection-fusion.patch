@@ -1,0 +1,310 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 14 Sep 2026 17:16:45 +0800
+Subject: [PATCH] MUSA: port upstream Qwen4Exp HC unit injection fusion
+
+---
+ .../qwen4_exp/nvidia/hyperconnection.py       | 14 ++--
+ vllm/models/qwen4_exp/nvidia/model.py         |  6 +-
+ vllm/models/qwen4_exp/nvidia/mtp.py           |  7 +-
+ vllm/models/qwen4_exp/nvidia/ops/hc.py        | 73 ++++++++++++-------
+ 4 files changed, 60 insertions(+), 40 deletions(-)
+
+diff --git a/vllm/models/qwen4_exp/nvidia/hyperconnection.py b/vllm/models/qwen4_exp/nvidia/hyperconnection.py
+index 8ca503d214..acdba8c781 100644
+--- a/vllm/models/qwen4_exp/nvidia/hyperconnection.py
++++ b/vllm/models/qwen4_exp/nvidia/hyperconnection.py
+@@ -52,9 +52,10 @@ class GatedResidual(nn.Module):
+ 
+     ``combine_and_mix()`` runs the pre pipeline (grouped GemmaRMSNorm -> merged
+     low-rank down+inject GEMM -> silu -> up GEMM -> sigmoid -> gated mean
+-    over the HC streams). When passed a pending block output and an injection,
+-    it fuses their residual combine with the RMSNorm. Final mixers use
+-    ``use_combine=False`` and do not produce a new injection.
++    over the HC streams). When passed a pending block output, it fuses its
++    residual combine with the RMSNorm. A missing injection selects unit-weight
++    combine. Final mixers use ``use_combine=False`` and do not produce a new
++    injection.
+ 
+     Weights: the norm owns the grouped GemmaRMSNorm affine; the projections
+     are vLLM Linear modules (merged replicated linear for down+inject), so
+@@ -153,13 +154,14 @@ class GatedResidual(nn.Module):
+         self,
+         hidden_states: torch.Tensor,
+         prev_block_output: torch.Tensor,
+-        prev_injection: torch.Tensor,
++        prev_injection: torch.Tensor | None,
+     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+         """Consume a pending combine, then prepare the next block input.
+ 
+         ``hidden_states`` is the multi-stream state from before the pending
+         block's mix. Its combine with ``block_output`` is fused with this
+-        module's input RMSNorm.
++        module's input RMSNorm. A missing injection applies the block output
++        to every stream with unit weight.
+         """
+         hidden_states, xn = hc_combine_norm(
+             hidden_states,
+@@ -189,7 +191,7 @@ class GatedResidual(nn.Module):
+         self,
+         hidden_states: torch.Tensor,
+         block_output: torch.Tensor,
+-        injection: torch.Tensor,
++        injection: torch.Tensor | None,
+     ) -> torch.Tensor:
+         return hc_combine(hidden_states, block_output, injection, self.hc_count)
+ 
+diff --git a/vllm/models/qwen4_exp/nvidia/model.py b/vllm/models/qwen4_exp/nvidia/model.py
+index 91350be936..def8d1b35d 100644
+--- a/vllm/models/qwen4_exp/nvidia/model.py
++++ b/vllm/models/qwen4_exp/nvidia/model.py
+@@ -279,11 +279,13 @@ class Qwen4ExpDecoderLayer(nn.Module):
+         query_start_loc: torch.Tensor | None,
+         ngram_context: torch.Tensor | None,
+     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
++        if prev_block_output is None:
++            assert prev_injection is None
+         attn_hc = self.attn_hyper_connection
+         if self.ple is not None:
+             # PLE adds directly to the multi-stream state, so pending HC state
+             # must be materialized before the addition.
+-            if prev_block_output is not None and prev_injection is not None:
++            if prev_block_output is not None:
+                 hidden_states = attn_hc.combine(
+                     hidden_states, prev_block_output, prev_injection
+                 )
+@@ -299,7 +301,7 @@ class Qwen4ExpDecoderLayer(nn.Module):
+             )
+ 
+         # Fuse a pending combine with this HC module's mix when possible.
+-        if prev_block_output is not None and prev_injection is not None:
++        if prev_block_output is not None:
+             hidden_states, block_input, injection = attn_hc.combine_and_mix(
+                 hidden_states, prev_block_output, prev_injection
+             )
+diff --git a/vllm/models/qwen4_exp/nvidia/mtp.py b/vllm/models/qwen4_exp/nvidia/mtp.py
+index 64ac147945..df0d661bad 100644
+--- a/vllm/models/qwen4_exp/nvidia/mtp.py
++++ b/vllm/models/qwen4_exp/nvidia/mtp.py
+@@ -271,6 +271,7 @@ class Qwen4ExpMultiTokenPredictor(nn.Module):
+     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | IntermediateTensors:
+         hc_count = self.hc_count
+         hidden_size = self.hidden_size
++        prev_block_output: torch.Tensor | None = None
+ 
+         if get_pp_group().is_first_rank:
+             assert hidden_states is not None
+@@ -291,10 +292,8 @@ class Qwen4ExpMultiTokenPredictor(nn.Module):
+                 num_tokens, hc_count, hidden_size
+             )
+             hidden_states = self.fc_hidden(hidden_states)
+-            # Add the embedding residual to every branch, then fold back
+-            # to [T, hc_count*H] (HC outer, HS inner) for the HC decoder.
+-            hidden_states = inputs_embeds.unsqueeze(-2) + hidden_states
+             hidden_states = hidden_states.flatten(-2)
++            prev_block_output = inputs_embeds
+         else:
+             assert intermediate_tensors is not None
+             hidden_states = intermediate_tensors["hidden_states"]
+@@ -303,7 +302,7 @@ class Qwen4ExpMultiTokenPredictor(nn.Module):
+         layer = self.layers[current_step_idx]
+         hidden_states, block_output, injection = layer(
+             hidden_states=hidden_states,
+-            prev_block_output=None,
++            prev_block_output=prev_block_output,
+             prev_injection=None,
+             positions=positions,
+             input_ids=None,
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/hc.py b/vllm/models/qwen4_exp/nvidia/ops/hc.py
+index a3487b916e..36bc8cefbc 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/hc.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/hc.py
+@@ -215,14 +215,17 @@ def _hc_combine_kernel(
+     if launch_pdl:
+         tl.extra.cuda.gdc_wait()
+ 
+-    inj = tl.load(inj_ptr + row * stride_inj + offs_hc, mask_hc, other=0.0)
++    if inj_ptr is not None:
++        inj = tl.load(inj_ptr + row * stride_inj + offs_hc, mask_hc, other=0.0)
+     block = tl.load(block_ptr + row * stride_block + offs_inner, mask_inner, other=0.0)
+     res = tl.load(res_ptr + row * stride_res + offs, mask, other=0.0)
+ 
+     # Keeping HC as a broadcast dimension is faster here than four separate
+     # residual load/store sequences.
+-    inj = 2.0 * tl.sigmoid(inj.to(tl.float32) / HC)
+-    out = res.to(tl.float32) + block.to(tl.float32)[None, :] * inj[:, None]
++    if inj_ptr is not None:
++        inj = 2.0 * tl.sigmoid(inj.to(tl.float32) / HC)
++        block = block.to(tl.float32)[None, :] * inj[:, None]
++    out = res.to(tl.float32) + block.to(tl.float32)
+ 
+     if launch_pdl:
+         tl.extra.cuda.gdc_launch_dependents()
+@@ -232,17 +235,20 @@ def _hc_combine_kernel(
+ def _hc_combine(
+     residual: torch.Tensor,
+     block_output: torch.Tensor,
+-    injection_logits: torch.Tensor,
++    injection_logits: torch.Tensor | None,
+     hc_count: int,
+ ) -> torch.Tensor:
+     N, DIM = residual.shape
+     assert DIM % hc_count == 0
+     hc_dim = DIM // hc_count
+     assert block_output.shape == (N, hc_dim)
+-    assert injection_logits.shape == (N, hc_count)
+     assert residual.stride(1) == 1
+     assert block_output.stride(1) == 1
+-    assert injection_logits.stride(1) == 1
++    if injection_logits is not None:
++        assert injection_logits.shape == (N, hc_count)
++        assert injection_logits.stride(1) == 1
++
++    stride_injection = injection_logits.stride(0) if injection_logits is not None else 0
+ 
+     out = residual.new_empty(residual.shape)
+     BLOCK_SIZE = 512
+@@ -253,7 +259,7 @@ def _hc_combine(
+         out,
+         block_output.stride(0),
+         residual.stride(0),
+-        injection_logits.stride(0),
++        stride_injection,
+         out.stride(0),
+         hc_dim,
+         hc_count,
+@@ -287,8 +293,9 @@ def _hc_combine_norm_kernel(
+     NUM_TILES: tl.constexpr = triton.cdiv(HC_DIM, BLOCK_SIZE)
+     NUM_TILES_PAD: tl.constexpr = triton.next_power_of_2(NUM_TILES)
+ 
+-    row = tl.program_id(0)
+-    stream = tl.program_id(1)
++    pid = tl.program_id(0)
++    row = pid // HC
++    stream = pid % HC
+     offs_hc = tl.arange(0, HC_PAD)
+     mask_hc = offs_hc < HC
+     tile_ids = tl.arange(0, NUM_TILES_PAD)
+@@ -305,27 +312,34 @@ def _hc_combine_norm_kernel(
+     # Start the uncached residual load first, then issue the other combine
+     # loads before consuming any of them.
+     res = tl.load(res_ptr + row * stride_res + offs, mask_inner, other=0.0)
+-    inj = tl.load(inj_ptr + row * stride_inj + offs_hc, mask_hc, other=0.0)
+-    block = tl.load(block_ptr + row * stride_block + offs_inner, mask_inner, other=0.0)
+-    inj = 2.0 * tl.sigmoid(inj.to(tl.float32) / HC)
+-    inj = tl.sum(tl.where(offs_hc == stream, inj, 0.0))
++    if inj_ptr is not None:
++        inj = tl.load(inj_ptr + row * stride_inj + offs_hc, mask_hc, other=0.0)
++    block = tl.load(
++        block_ptr + row * stride_block + offs_inner,
++        mask_inner,
++        other=0.0,
++    )
++    if inj_ptr is not None:
++        inj = 2.0 * tl.sigmoid(inj.to(tl.float32) / HC)
++        block = block.to(tl.float32) * tl.sum(tl.where(offs_hc == stream, inj, 0.0))
+     # Round the materialized combine result before normalization. This matches
+     # the unfused combine -> RMSNorm boundary.
+-    out = (res.to(tl.float32) + block.to(tl.float32) * inj).to(out_ptr.dtype.element_ty)
++    out = (res.to(tl.float32) + block.to(tl.float32)).to(out_ptr.dtype.element_ty)
++    if inj_ptr is None:
++        w = tl.load(w_ptr + w_offs, mask_inner, other=0.0)
+     tl.store(out_ptr + row * stride_out + offs, out, mask=mask_inner)
+ 
+     out = out.to(tl.float32)
+-    # Keep the two-axis reduction: flattening the padded tile is ~40% slower
+-    # at decode sizes.
+     sum_sq = tl.sum(tl.sum(out * out, axis=1), axis=0)
+     rrms = tl.rsqrt(sum_sq / HC_DIM + EPS)
+ 
+     if launch_pdl:
+         tl.extra.cuda.gdc_launch_dependents()
+ 
+-    # Loading the weight earlier helps decode but keeps the tile live across
+-    # the reduction and regresses larger batches, so defer it to the norm.
+-    w = tl.load(w_ptr + w_offs, mask_inner, other=0.0)
++    if inj_ptr is not None:
++        # Loading the weight earlier helps decode but keeps the tile live across
++        # the reduction and regresses larger batches, so defer it to the norm.
++        w = tl.load(w_ptr + w_offs, mask_inner, other=0.0)
+     y = out * rrms
+     y += y * w.to(tl.float32)
+     tl.store(y_ptr + row * stride_y + offs, y, mask_inner)
+@@ -334,7 +348,7 @@ def _hc_combine_norm_kernel(
+ def _hc_combine_norm(
+     residual: torch.Tensor,
+     block_output: torch.Tensor,
+-    injection_logits: torch.Tensor,
++    injection_logits: torch.Tensor | None,
+     norm_weight: torch.Tensor,
+     eps: float,
+     hc_count: int,
+@@ -343,17 +357,20 @@ def _hc_combine_norm(
+     assert DIM % hc_count == 0
+     hc_dim = DIM // hc_count
+     assert block_output.shape == (N, hc_dim)
+-    assert injection_logits.shape == (N, hc_count)
+     assert residual.stride(1) == 1
+     assert block_output.stride(1) == 1
+-    assert injection_logits.stride(1) == 1
++    if injection_logits is not None:
++        assert injection_logits.shape == (N, hc_count)
++        assert injection_logits.stride(1) == 1
+     assert norm_weight.is_contiguous()
+     assert norm_weight.numel() in (hc_dim, DIM)
+ 
++    stride_injection = injection_logits.stride(0) if injection_logits is not None else 0
++
+     out = residual.new_empty(residual.shape)
+     y = residual.new_empty(residual.shape)
+     BLOCK_SIZE = 512
+-    _hc_combine_norm_kernel[(N, hc_count)](
++    _hc_combine_norm_kernel[(N * hc_count,)](
+         block_output,
+         residual,
+         injection_logits,
+@@ -362,7 +379,7 @@ def _hc_combine_norm(
+         y,
+         block_output.stride(0),
+         residual.stride(0),
+-        injection_logits.stride(0),
++        stride_injection,
+         out.stride(0),
+         y.stride(0),
+         hc_dim,
+@@ -389,7 +406,7 @@ def _hc_gate_mix_fake(
+ def _hc_combine_fake(
+     residual: torch.Tensor,
+     block_output: torch.Tensor,
+-    injection_logits: torch.Tensor,
++    injection_logits: torch.Tensor | None,
+     hc_count: int,
+ ) -> torch.Tensor:
+     del block_output, injection_logits, hc_count
+@@ -399,7 +416,7 @@ def _hc_combine_fake(
+ def _hc_combine_norm_fake(
+     residual: torch.Tensor,
+     block_output: torch.Tensor,
+-    injection_logits: torch.Tensor,
++    injection_logits: torch.Tensor | None,
+     norm_weight: torch.Tensor,
+     eps: float,
+     hc_count: int,
+@@ -452,7 +469,7 @@ def hc_gate_mix(x: torch.Tensor, gate: torch.Tensor, hc_count: int) -> torch.Ten
+ def hc_combine(
+     residual: torch.Tensor,
+     block_output: torch.Tensor,
+-    injection_logits: torch.Tensor,
++    injection_logits: torch.Tensor | None,
+     hc_count: int,
+ ) -> torch.Tensor:
+     return torch.ops.vllm.qwen4_exp_hc_combine(
+@@ -463,7 +480,7 @@ def hc_combine(
+ def hc_combine_norm(
+     residual: torch.Tensor,
+     block_output: torch.Tensor,
+-    injection_logits: torch.Tensor,
++    injection_logits: torch.Tensor | None,
+     norm_weight: torch.Tensor,
+     eps: float,
+     hc_count: int,

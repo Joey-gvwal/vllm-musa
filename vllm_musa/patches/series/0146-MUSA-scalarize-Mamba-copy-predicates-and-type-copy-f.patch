@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 17 Sep 2026 16:42:17 +0800
+Subject: [PATCH] MUSA: scalarize Mamba copy predicates and type copy funcs
+
+Keep the fused-kernel self-copy guard as bitwise predicates and allow
+per-type Mamba state copy functions.
+---
+ .../worker/gpu/model_states/mamba_hybrid.py   |  3 +++
+ vllm/v1/worker/mamba_utils.py                 | 19 +++++++++++++++----
+ 2 files changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/model_states/mamba_hybrid.py b/vllm/v1/worker/gpu/model_states/mamba_hybrid.py
+index 9cb302a6ed..e5f9afb06f 100644
+--- a/vllm/v1/worker/gpu/model_states/mamba_hybrid.py
++++ b/vllm/v1/worker/gpu/model_states/mamba_hybrid.py
+@@ -22,7 +22,10 @@ from vllm.v1.worker.gpu.model_states.default import DefaultModelState
+ from vllm.v1.worker.gpu.model_states.interface import ModelSpecificAttnMetadata
+ from vllm.v1.worker.mamba_utils import (
+     MambaSpecDecodeGPUContext,
++    get_mamba_group_ids,
++    get_mamba_groups,
+     preprocess_mamba_align_fused_kernel,
++    validate_mamba_state_copy_funcs,
+ )
+ from vllm.v1.worker.utils import AttentionGroup
+ 
+diff --git a/vllm/v1/worker/mamba_utils.py b/vllm/v1/worker/mamba_utils.py
+index 648852699f..f790a61fb8 100644
+--- a/vllm/v1/worker/mamba_utils.py
++++ b/vllm/v1/worker/mamba_utils.py
+@@ -358,11 +358,14 @@ def postprocess_mamba_fused_kernel(
+     # Update accepted-token count before early exits (per-request, so only
+     # state_idx == 0 writes). Also guard on tile_idx == 0 so tiles > 0
+     # (when TEMPORAL_TILES > 1) do not duplicate the store.
+-    if src_block_idx == dest_block_idx and state_idx == 0 and tile_idx == 0:
++    same_block = src_block_idx == dest_block_idx
++    first_state = state_idx == 0
++    first_tile = tile_idx == 0
++    if same_block & first_state & first_tile:
+         tl.store(num_accepted_tokens_out_ptr + req_idx, 1)
+ 
+     # Skip no-op self-copy.
+-    if src_block_idx == dest_block_idx and accept_token_bias == 0:
++    if same_block & (accept_token_bias == 0):
+         return
+ 
+     bt_row_idx = batch_idx if HAS_IDX_MAPPING else req_idx
+@@ -845,7 +848,8 @@ class MambaSpecDecodeGPUContext:
+         self,
+         kv_cache_config: KVCacheConfig,
+         forward_context: dict[str, Any],
+-        mamba_state_copy_funcs: tuple[MambaStateCopyFunc, ...],
++        mamba_state_copy_funcs: tuple[MambaStateCopyFunc, ...]
++        | MambaStateCopyFuncsByType,
+         block_tables: list[torch.Tensor],
+     ) -> None:
+         idx = 0
+@@ -854,6 +858,13 @@ class MambaSpecDecodeGPUContext:
+             for layer_name in layer_names:
+                 attention = forward_context[layer_name]
+                 kv_caches: list[torch.Tensor] = attention.kv_cache
++                if isinstance(mamba_state_copy_funcs, dict):
++                    mamba_spec = _get_mamba_spec_for_layer(
++                        kv_cache_config.kv_cache_groups[mamba_group_id], layer_name
++                    )
++                    state_copy_funcs = mamba_state_copy_funcs[mamba_spec.mamba_type]
++                else:
++                    state_copy_funcs = mamba_state_copy_funcs
+ 
+                 for state_type_idx, state in enumerate(kv_caches):
+                     # Base address
+@@ -872,7 +883,7 @@ class MambaSpecDecodeGPUContext:
+                     # Element size
+                     self.state_elem_sizes[idx] = state.element_size()
+ 
+-                    copy_func = mamba_state_copy_funcs[state_type_idx]
++                    copy_func = state_copy_funcs[state_type_idx]
+                     assert (
+                         copy_func is get_conv_copy_spec
+                         or copy_func is get_temporal_copy_spec

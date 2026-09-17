@@ -1,13 +1,15 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: MUSA Maintainers <musa@example.invalid>
-Date: Thu, 4 Sep 2026 12:00:00 +0800
+From: musa <musa@local>
+Date: Thu, 17 Sep 2026 16:42:17 +0800
 Subject: [PATCH] MUSA: keep page-aligned Mamba state backing for Qwen3.8
 
-Keep Mamba fields indexed by the physical page stride when attention and Mamba
-pools share backing storage. This preserves request reuse correctness for
-Qwen3.8 while allowing the GDN path to gather non-contiguous fields.
-
+Keep Mamba fields indexed by the physical page stride when attention
+and Mamba pools share backing storage.
 ---
+ vllm/v1/worker/gpu/attn_utils.py   | 28 ++++++--------
+ vllm/v1/worker/gpu_model_runner.py | 60 +++++++++++++++++++-----------
+ 2 files changed, 49 insertions(+), 39 deletions(-)
+
 diff --git a/vllm/v1/worker/gpu/attn_utils.py b/vllm/v1/worker/gpu/attn_utils.py
 index 7aa6fbe4b6..25cb18b31e 100644
 --- a/vllm/v1/worker/gpu/attn_utils.py
@@ -120,5 +122,3 @@ index 1852958abb..bc2ce82ea7 100644
                  else:
                      raise NotImplementedError
  
--- 
-2.43.0

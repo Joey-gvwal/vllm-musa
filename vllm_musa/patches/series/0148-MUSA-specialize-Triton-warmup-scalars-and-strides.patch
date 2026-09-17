@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 17 Sep 2026 16:42:17 +0800
+Subject: [PATCH] MUSA: specialize Triton warmup scalars and strides
+
+Expose Triton's integer specialization representatives and optional
+explicit strides on compile-only warmup tensors.
+---
+ .../warmup/jit_warmup_triton_helper.py        | 21 +++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/model_executor/warmup/jit_warmup_triton_helper.py b/vllm/model_executor/warmup/jit_warmup_triton_helper.py
+index b909757621..ccd892c655 100644
+--- a/vllm/model_executor/warmup/jit_warmup_triton_helper.py
++++ b/vllm/model_executor/warmup/jit_warmup_triton_helper.py
+@@ -12,12 +12,26 @@ from vllm.model_executor.warmup.jit_warmup import (
+ )
+ 
+ 
++def triton_scalar_specialization_rep(value: int) -> int:
++    """Return a representative for Triton's default integer specialization."""
++    if value == 1:
++        return 1
++    if -(1 << 31) <= value < (1 << 31):
++        return 16 if value % 16 == 0 else 2
++    if -(1 << 63) <= value < (1 << 63):
++        return 1 << 31 if value % 16 == 0 else (1 << 31) + 1
++    if 0 <= value < (1 << 64):
++        return 1 << 63 if value % 16 == 0 else (1 << 63) + 1
++    raise OverflowError(f"Integer {value} is outside Triton's scalar range")
++
++
+ @dataclass(frozen=True)
+ class TritonWarmupTensor:
+     # Compile-only tensor descriptor for Triton pointer specialization.
+     dtype: Any
+     aligned: bool = True
+     shape: tuple[int, ...] = (1,)
++    strides: tuple[int, ...] | None = None
+ 
+     def data_ptr(self) -> int:
+         return 0 if self.aligned else 1
+@@ -25,13 +39,16 @@ class TritonWarmupTensor:
+     def ptr_range(self) -> int:
+         return 0
+ 
+-    def stride(self) -> tuple[int, ...]:
++    def stride(self, dim: int | None = None) -> int | tuple[int, ...]:
++        if self.strides is not None:
++            return self.strides if dim is None else self.strides[dim]
+         strides: list[int] = []
+         stride = 1
+         for size in reversed(self.shape):
+             strides.append(stride)
+             stride *= size
+-        return tuple(reversed(strides))
++        result = tuple(reversed(strides))
++        return result if dim is None else result[dim]
+ 
+ 
+ @dataclass(frozen=True)

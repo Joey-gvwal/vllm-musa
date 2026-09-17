@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Joey-gvwal <joey_gvwal@yeah.net>
+From: musa <musa@local>
 Date: Sun, 13 Sep 2026 00:08:57 +0800
 Subject: [PATCH] MUSA: wire QSA fast top-k before capture
 

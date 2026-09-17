@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Thu, 17 Sep 2026 16:42:17 +0800
+Subject: [PATCH] MUSA: keep CAR+RMS fusion on the MUSA matcher
+
+Skip the CUDA FlashInfer all-reduce fusion pass on MUSA and enable the
+existing MUSA matcher whenever tensor parallel is active.
+---
+ vllm/compilation/passes/pass_manager.py | 5 ++++-
+ vllm/config/vllm.py                     | 6 ++++++
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
+index abeaaf4c20..bf65a435dd 100644
+--- a/vllm/compilation/passes/pass_manager.py
++++ b/vllm/compilation/passes/pass_manager.py
+@@ -181,7 +181,10 @@ class PostGradPassManager(CustomGraphPass):  # type: ignore[misc]
+             if current_platform.is_musa() and self.pass_config.fuse_allreduce_rms:
+                 self.passes += [MusaAllReduceRMSNormFusionPass(config)]
+ 
+-            if self.pass_config.fuse_allreduce_rms:
++            # MUSA registers a dedicated CAR+RMSNorm matcher above.  The
++            # generic CUDA pass requires FlashInfer and otherwise emits a
++            # misleading skip warning while leaving the MUSA pass unused.
++            if self.pass_config.fuse_allreduce_rms and not current_platform.is_musa():
+                 if rocm_aiter_ops.is_enabled():
+                     self.passes += [RocmAiterAllReduceFusionPass(config)]
+                 else:
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index 5f39baaf1f..03814a2fd2 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -152,6 +152,12 @@ def enable_allreduce_rms_fusion(cfg: "VllmConfig") -> bool:
+     from vllm.platforms import current_platform
+     from vllm.utils.flashinfer import has_flashinfer
+ 
++    # MUSA has its own CAR+RMSNorm matcher and JIT communicator. It does not
++    # use FlashInfer, and the CUDA capability gate would otherwise leave the
++    # already-implemented MUSA pass disabled at every optimization level.
++    if current_platform.is_musa():
++        return cfg.parallel_config.tensor_parallel_size > 1
++
+     if current_platform.is_rocm():
+         from vllm._aiter_ops import rocm_aiter_ops
+ 

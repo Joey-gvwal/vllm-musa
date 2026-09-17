@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Joey-gvwal <joey_gvwal@yeah.net>
+From: musa <musa@local>
 Date: Sat, 12 Sep 2026 23:11:37 +0800
 Subject: [PATCH] MUSA: mask invalid QSA top-k logits
 
