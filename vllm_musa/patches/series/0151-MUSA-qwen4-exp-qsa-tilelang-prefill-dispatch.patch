@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Wed, 17 Sep 2026 13:30:00 +0800
+Subject: [PATCH] MUSA: route QSA prefill to the TileLang sparse attention kernel
+
+Gate the Qwen4Exp QSA prefill path to a TileLang sparse paged GQA kernel
+behind VLLM_MUSA_QSA_TILELANG=1 for the validated shape family (bf16,
+one KV head, page_size 16, head_dim 256, selection width 512).
+
+---
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -5,6 +5,8 @@
+ from __future__ import annotations
+ 
+ from typing import ClassVar, cast
++
++import os
+ 
+ import torch
+ from torch import nn
+@@ -171,6 +173,31 @@
+         if key_cache.dtype != torch.bfloat16 or query.dtype != torch.bfloat16:
+             raise NotImplementedError("Qwen4Exp QSA requires BF16 Q/K/V")
+ 
++        if (
++            current_platform.is_musa()
++            and use_prefill_config
++            and os.environ.get("VLLM_MUSA_QSA_TILELANG") == "1"
++            and query.dtype == torch.bfloat16
++            and key_cache.shape[1] == 16
++            and key_cache.shape[2] == 1
++            and self.head_size == 256
++            and query.shape[1] // key_cache.shape[2] <= 4
++            and logical_indices.shape[1] - 1 == 512
++        ):
++            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn import (
++                qsa_prefill_attention,
++            )
++
++            return qsa_prefill_attention(
++                query[:num_tokens],
++                key_cache,
++                value_cache,
++                logical_indices,
++                attn_metadata.block_table,
++                token_to_req,
++                output[:num_tokens],
++            )
++
+         from .ops.qsa import qsa_sparse_paged_attention
+ 
+         qsa_sparse_paged_attention(
