@@ -113,6 +113,65 @@ __device__ __forceinline__ void load_state_row(
   score4[3] = score_vec.w;
 }
 
+__device__ __forceinline__ void store_kv_score_tile(
+    float* __restrict__ base, int64_t state_width, const float* kv_row,
+    const float* score_row, const float* ape_row, int offset) {
+  *reinterpret_cast<float4*>(base + offset) =
+      *reinterpret_cast<const float4*>(kv_row + offset);
+  const float4 score_vec = *reinterpret_cast<const float4*>(score_row + offset);
+  const float4 ape_vec = *reinterpret_cast<const float4*>(ape_row + offset);
+  *reinterpret_cast<float4*>(base + state_width + offset) = make_float4(
+      score_vec.x + ape_vec.x, score_vec.y + ape_vec.y, score_vec.z + ape_vec.z,
+      score_vec.w + ape_vec.w);
+}
+
+template <bool kOverlap, int kStateBlockSize>
+__device__ __forceinline__ void save_partial_row(
+    float* __restrict__ state_cache, int64_t state_stride0,
+    int64_t state_stride1, int64_t state_slot, int64_t state_width,
+    const float* kv_row, const float* score_row, const float* ape_row,
+    int tid) {
+  const int64_t block_idx = state_slot / kStateBlockSize;
+  const int64_t pos_in_block = state_slot % kStateBlockSize;
+  float* base = state_cache + block_idx * state_stride0 +
+                pos_in_block * state_stride1;
+  const int offset = tid * 4;
+  store_kv_score_tile(base, state_width, kv_row, score_row, ape_row, offset);
+  if constexpr (kOverlap) {
+    store_kv_score_tile(base, state_width, kv_row, score_row, ape_row,
+                        kHeadDim + offset);
+  }
+}
+
+template <int kCompressRatio, bool kOverlap, int kStateBlockSize>
+__global__ __launch_bounds__(kThreadsPerBlock, 4) void
+deepseek_v4_sparse_save_partial_kernel(
+    float* __restrict__ state_cache, int64_t state_stride0,
+    int64_t state_stride1, const void* __restrict__ positions,
+    int position_kind, const void* __restrict__ state_slot_mapping,
+    int state_slot_kind, int64_t num_tokens, int64_t num_state_blocks,
+    int64_t state_width, const float* __restrict__ kv_states, int64_t kv_stride,
+    const float* __restrict__ score_states, int64_t score_stride,
+    const float* __restrict__ ape, int64_t ape_stride) {
+  const int tid = threadIdx.x;
+  const int64_t token = static_cast<int64_t>(blockIdx.x);
+  if (token >= num_tokens) {
+    return;
+  }
+  const int64_t state_slot =
+      load_index(state_slot_mapping, state_slot_kind, token);
+  if (state_slot < 0 ||
+      state_slot >= num_state_blocks * kStateBlockSize) {
+    return;
+  }
+  const int64_t position = load_index(positions, position_kind, token);
+  const int64_t ape_row = position % kCompressRatio;
+  save_partial_row<kOverlap, kStateBlockSize>(
+      state_cache, state_stride0, state_stride1, state_slot, state_width,
+      kv_states + token * kv_stride, score_states + token * score_stride,
+      ape + ape_row * ape_stride, tid);
+}
+
 template <typename WeightT, int kCompressRatio, bool kOverlap,
           int kStateBlockSize>
 __global__ __launch_bounds__(kThreadsPerBlock, 4) void
@@ -361,6 +420,28 @@ void check_same_device(const torch::Tensor& reference,
               " must be on the same device as state_cache");
 }
 
+template <int kCompressRatio, bool kOverlap, int kStateBlockSize>
+void launch_sparse_save_partial(torch::Tensor& state_cache,
+                                const torch::Tensor& positions,
+                                const torch::Tensor& state_slot_mapping,
+                                int64_t state_width, const float* kv_states,
+                                int64_t kv_stride, const float* score_states,
+                                int64_t score_stride, const float* ape,
+                                int64_t ape_stride, musaStream_t stream) {
+  const int64_t num_tokens = state_slot_mapping.numel();
+  const dim3 block(kThreadsPerBlock);
+  const dim3 grid(static_cast<unsigned int>(num_tokens));
+  deepseek_v4_sparse_save_partial_kernel<kCompressRatio, kOverlap,
+                                         kStateBlockSize>
+      <<<grid, block, 0, stream>>>(
+          static_cast<float*>(state_cache.data_ptr()), state_cache.stride(0),
+          state_cache.stride(1), positions.data_ptr(),
+          index_kind(positions, "positions"), state_slot_mapping.data_ptr(),
+          index_kind(state_slot_mapping, "state_slot_mapping"), num_tokens,
+          state_cache.size(0), state_width, kv_states, kv_stride, score_states,
+          score_stride, ape, ape_stride);
+}
+
 template <typename WeightT, int kCompressRatio, bool kOverlap,
           int kStateBlockSize>
 void launch_sparse_compressor(const torch::Tensor& state_cache,
@@ -401,14 +482,16 @@ void launch_sparse_compressor(const torch::Tensor& state_cache,
 }  // namespace
 
 void deepseek_v4_sparse_compress_cache(
-    const torch::Tensor& state_cache,
-    const torch::Tensor& token_to_req_indices, const torch::Tensor& positions,
-    const torch::Tensor& state_slot_mapping, const torch::Tensor& block_table,
-    const torch::Tensor& rms_norm_weight, const torch::Tensor& cos_sin_cache,
-    torch::Tensor& kv_cache, const torch::Tensor& kv_slot_mapping,
-    double rms_eps, int64_t state_block_size, int64_t state_width,
-    int64_t kv_block_size, int64_t compress_ratio, int64_t token_stride,
-    int64_t scale_dim, int64_t quant_block) {
+    torch::Tensor& state_cache, const torch::Tensor& token_to_req_indices,
+    const torch::Tensor& positions, const torch::Tensor& state_slot_mapping,
+    const torch::Tensor& block_table, const torch::Tensor& rms_norm_weight,
+    const torch::Tensor& cos_sin_cache, torch::Tensor& kv_cache,
+    const torch::Tensor& kv_slot_mapping, double rms_eps,
+    int64_t state_block_size, int64_t state_width, int64_t kv_block_size,
+    int64_t compress_ratio, int64_t token_stride, int64_t scale_dim,
+    int64_t quant_block, const c10::optional<torch::Tensor>& kv_states,
+    const c10::optional<torch::Tensor>& score_states,
+    const c10::optional<torch::Tensor>& ape) {
   TORCH_CHECK(state_cache.scalar_type() == torch::kFloat32,
               "state_cache must be float32");
   TORCH_CHECK(token_stride == kTokenStride, "sparse compressor requires 576-byte tokens");
@@ -484,8 +567,60 @@ void deepseek_v4_sparse_compress_cache(
   check_same_device(state_cache, kv_cache, "kv_cache");
   check_same_device(state_cache, kv_slot_mapping, "kv_slot_mapping");
 
+  const bool fuse_save = kv_states.has_value();
+  TORCH_CHECK(fuse_save == score_states.has_value() &&
+                  fuse_save == ape.has_value(),
+              "kv_states, score_states, and ape must be supplied together");
+  const float* kv_ptr = nullptr;
+  const float* score_ptr = nullptr;
+  const float* ape_ptr = nullptr;
+  int64_t kv_stride = 0;
+  int64_t score_stride = 0;
+  int64_t ape_stride = 0;
+  if (fuse_save) {
+    const torch::Tensor& kv_tensor = kv_states.value();
+    const torch::Tensor& score_tensor = score_states.value();
+    const torch::Tensor& ape_tensor = ape.value();
+    TORCH_CHECK(kv_tensor.scalar_type() == torch::kFloat32 &&
+                    score_tensor.scalar_type() == torch::kFloat32 &&
+                    ape_tensor.scalar_type() == torch::kFloat32,
+                "fused save inputs must be float32");
+    TORCH_CHECK(kv_tensor.dim() == 2 && score_tensor.dim() == 2 &&
+                    kv_tensor.size(0) >= num_tokens &&
+                    score_tensor.size(0) >= num_tokens &&
+                    kv_tensor.size(1) == state_width &&
+                    score_tensor.size(1) == state_width &&
+                    kv_tensor.stride(1) == 1 && score_tensor.stride(1) == 1,
+                "fused save kv/score must be [tokens, state_width]");
+    TORCH_CHECK(ape_tensor.dim() == 2 && ape_tensor.size(0) == compress_ratio &&
+                    ape_tensor.size(1) == state_width &&
+                    ape_tensor.stride(1) == 1,
+                "fused save ape must be [compress_ratio, state_width]");
+    check_same_device(state_cache, kv_tensor, "kv_states");
+    check_same_device(state_cache, score_tensor, "score_states");
+    check_same_device(state_cache, ape_tensor, "ape");
+    kv_ptr = static_cast<const float*>(kv_tensor.data_ptr());
+    score_ptr = static_cast<const float*>(score_tensor.data_ptr());
+    ape_ptr = static_cast<const float*>(ape_tensor.data_ptr());
+    kv_stride = kv_tensor.stride(0);
+    score_stride = score_tensor.stride(0);
+    ape_stride = ape_tensor.stride(0);
+  }
+
   const at::musa::OptionalMUSAGuard device_guard(device_of(state_cache));
   musaStream_t stream = at::musa::getCurrentMUSAStream();
+
+  if (fuse_save) {
+    if (compress_ratio == 4) {
+      launch_sparse_save_partial<4, true, 4>(
+          state_cache, positions, state_slot_mapping, state_width, kv_ptr,
+          kv_stride, score_ptr, score_stride, ape_ptr, ape_stride, stream);
+    } else {
+      launch_sparse_save_partial<128, false, 8>(
+          state_cache, positions, state_slot_mapping, state_width, kv_ptr,
+          kv_stride, score_ptr, score_stride, ape_ptr, ape_stride, stream);
+    }
+  }
 
 #define LAUNCH_SPARSE(WEIGHT_T, RATIO, OVERLAP, BLOCK)                         \
   launch_sparse_compressor<WEIGHT_T, RATIO, OVERLAP, BLOCK>(                   \

@@ -584,6 +584,9 @@ def deepseek_v4_sparse_compress_cache(
     token_stride: int,
     scale_dim: int,
     quant_block: int,
+    kv_states: Optional[torch.Tensor] = None,
+    score_states: Optional[torch.Tensor] = None,
+    ape: Optional[torch.Tensor] = None,
 ) -> None:
     return torch.ops._C_musa_ops.deepseek_v4_sparse_compress_cache(
         state_cache,
@@ -603,6 +606,9 @@ def deepseek_v4_sparse_compress_cache(
         token_stride,
         scale_dim,
         quant_block,
+        kv_states,
+        score_states,
+        ape,
     )
 
 

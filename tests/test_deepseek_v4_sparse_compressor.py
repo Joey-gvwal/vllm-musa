@@ -13,6 +13,10 @@ SERIES_PATCH = (
     ROOT
     / "vllm_musa/patches/series/0163-MUSA-dispatch-DeepSeek-V4-sparse-compressor-to-nativ.patch"
 )
+FUSED_SAVE_PATCH = (
+    ROOT
+    / "vllm_musa/patches/series/0164-MUSA-fuse-DeepSeek-V4-save-partial-into-native-compre.patch"
+)
 
 
 def _bf16_roundtrip(value: float) -> float:
@@ -30,9 +34,12 @@ def test_native_op_is_registered_and_built() -> None:
 
     assert "deepseek_v4_sparse_compressor.mu" in setup
     assert "void deepseek_v4_sparse_compress_cache(" in header
-    assert "deepseek_v4_sparse_compress_cache(Tensor state_cache" in bindings
+    assert "deepseek_v4_sparse_compress_cache(Tensor! state_cache" in bindings
+    assert "Tensor? kv_states=None, Tensor? score_states=None, Tensor? ape=None" in bindings
     assert "def deepseek_v4_sparse_compress_cache(" in custom_ops
+    assert "kv_states: Optional[torch.Tensor] = None" in custom_ops
     assert "deepseek_v4_sparse_compressor_kernel" in kernel
+    assert "deepseek_v4_sparse_save_partial_kernel" in kernel
 
 
 def test_kernel_uses_block_per_token_512d_geometry() -> None:
@@ -54,6 +61,8 @@ def test_kernel_preserves_vllm_pad_boundary_and_page_abi() -> None:
     source = KERNEL.read_text()
 
     assert "state_slot < 0" in source
+    assert "deepseek_v4_sparse_save_partial_kernel" in source
+    assert "launch_sparse_save_partial<4, true, 4>" in source
     assert "(position + 1) % kCompressRatio != 0" in source
     assert "req_idx * block_table_stride + logical_block" in source
     assert "head_offset = row >= kCompressRatio ? kHeadDim : 0" in source
@@ -74,6 +83,22 @@ def test_source_patch_keeps_triton_fallback() -> None:
     assert "if handled:" in patch
     assert "+            return" in patch
     assert "compress_ratio in (4, 128)" in patch
+
+
+def test_fused_save_patch_skips_triton_save_on_native_hit() -> None:
+    patch = FUSED_SAVE_PATCH.read_text()
+    wrapper = WRAPPER.read_text()
+
+    native_call = patch.index("try_musa_deepseek_v4_sparse_compressor(")
+    skip_save = patch.index("if handled:")
+    skip_return = patch.index("+                return")
+    assert native_call < skip_save < skip_return
+    assert "save_partial_states(" not in patch
+    assert "kv_states=kv" in patch
+    assert "score_states=score" in patch
+    assert "ape=self.ape" in patch
+    assert "kv_states: torch.Tensor | None = None" in wrapper
+    assert "kv_states, score_states, and ape must be supplied together" in wrapper
 
 
 def test_wrapper_is_default_on_and_shape_bounded() -> None:

@@ -45,6 +45,9 @@ def _guard_sparse_compressor(
     token_stride: int,
     scale_dim: int,
     quant_block: int,
+    kv_states: torch.Tensor | None = None,
+    score_states: torch.Tensor | None = None,
+    ape: torch.Tensor | None = None,
 ) -> tuple[bool, str]:
     tensors = (
         state_cache,
@@ -175,6 +178,38 @@ def _guard_sparse_compressor(
         )
     if kv_cache.storage_offset() % 4 != 0:
         return False, "kv_cache storage offset must be 4-byte aligned"
+
+    fused = (kv_states, score_states, ape)
+    if all(tensor is None for tensor in fused):
+        return True, ""
+    if any(tensor is None for tensor in fused):
+        return False, "kv_states, score_states, and ape must be supplied together"
+    for name, tensor in (
+        ("kv_states", kv_states),
+        ("score_states", score_states),
+        ("ape", ape),
+    ):
+        if not _is_musa_tensor(tensor) or tensor.device != state_cache.device:
+            return False, f"{name} must be on the same MUSA device as state_cache"
+        if tensor.dtype != torch.float32:
+            return False, f"{name} must be float32, got {tensor.dtype}"
+        if tensor.dim() != 2 or tensor.stride(1) != 1:
+            return False, f"{name} must be a row-contiguous 2D tensor"
+    if kv_states.shape[0] < num_rows or kv_states.shape[1] != int(state_width):
+        return False, (
+            "kv_states must cover every decode row with width "
+            f"{state_width}, got {tuple(kv_states.shape)}"
+        )
+    if score_states.shape[0] < num_rows or score_states.shape[1] != int(state_width):
+        return False, (
+            "score_states must cover every decode row with width "
+            f"{state_width}, got {tuple(score_states.shape)}"
+        )
+    if ape.shape != (int(compress_ratio), int(state_width)):
+        return False, (
+            "ape must have shape "
+            f"[{compress_ratio}, {state_width}], got {tuple(ape.shape)}"
+        )
     return True, ""
 
 
@@ -196,6 +231,9 @@ def try_musa_deepseek_v4_sparse_compressor(
     token_stride: int,
     scale_dim: int,
     quant_block: int,
+    kv_states: torch.Tensor | None = None,
+    score_states: torch.Tensor | None = None,
+    ape: torch.Tensor | None = None,
 ) -> tuple[bool, str]:
     """Run the native decode path or request the Triton shape fallback."""
     supported, reason = _guard_sparse_compressor(
@@ -215,6 +253,9 @@ def try_musa_deepseek_v4_sparse_compressor(
         token_stride,
         scale_dim,
         quant_block,
+        kv_states,
+        score_states,
+        ape,
     )
     if not supported:
         return False, reason
@@ -239,5 +280,8 @@ def try_musa_deepseek_v4_sparse_compressor(
         int(token_stride),
         int(scale_dim),
         int(quant_block),
+        kv_states,
+        score_states,
+        ape,
     )
     return True, "musa_native_sparse_compressor"

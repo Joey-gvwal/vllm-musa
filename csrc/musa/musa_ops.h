@@ -139,7 +139,7 @@ void deepseek_v4_c4_indexer_compress_cache(
     int64_t state_width,
     int64_t kv_block_size);
 void deepseek_v4_sparse_compress_cache(
-    const torch::Tensor& state_cache,
+    torch::Tensor& state_cache,
     const torch::Tensor& token_to_req_indices,
     const torch::Tensor& positions,
     const torch::Tensor& state_slot_mapping,
@@ -155,7 +155,10 @@ void deepseek_v4_sparse_compress_cache(
     int64_t compress_ratio,
     int64_t token_stride,
     int64_t scale_dim,
-    int64_t quant_block);
+    int64_t quant_block,
+    const c10::optional<torch::Tensor>& kv_states,
+    const c10::optional<torch::Tensor>& score_states,
+    const c10::optional<torch::Tensor>& ape);
 std::tuple<torch::Tensor, torch::Tensor> deepseek_v4_fused_q_kv_rmsnorm(
     const torch::Tensor& q,
     const torch::Tensor& kv,
