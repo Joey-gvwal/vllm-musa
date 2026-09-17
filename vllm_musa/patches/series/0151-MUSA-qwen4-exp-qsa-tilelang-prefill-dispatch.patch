@@ -1,11 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wzc-claude <wzc-claude@local>
-Date: Wed, 17 Sep 2026 15:00:00 +0800
+Date: Wed, 17 Sep 2026 15:40:00 +0800
 Subject: [PATCH] MUSA: route QSA prefill to the TileLang sparse attention kernel
 
 Gate the Qwen4Exp QSA prefill path to a TileLang sparse paged GQA kernel
 behind VLLM_MUSA_QSA_TILELANG=1 for the validated shape family (bf16,
-one KV head, head_dim 256, selection width 512).
+one KV head, head_dim 256).
 
 ---
 --- a/vllm/models/qwen4_exp/nvidia/qsa.py
@@ -19,7 +19,24 @@ one KV head, head_dim 256, selection width 512).
  
  import torch
  from torch import nn
-@@ -171,6 +173,30 @@
+@@ -14,6 +16,7 @@
+ from vllm.config.cache import CacheDType
+ from vllm.distributed import get_tensor_model_parallel_world_size
+ from vllm.forward_context import get_forward_context
++from vllm.logger import init_logger
+ from vllm.model_executor.layers.attention.attention import (
+     set_default_quant_scales,
+ )
+@@ -35,6 +38,8 @@
+     direct_register_custom_op,
+     kv_cache_dtype_str_to_dtype,
+ )
++logger = init_logger(__name__)
++
+ from vllm.v1.attention.backend import (
+     AttentionBackend,
+     AttentionCGSupport,
+@@ -171,6 +176,30 @@
          if key_cache.dtype != torch.bfloat16 or query.dtype != torch.bfloat16:
              raise NotImplementedError("Qwen4Exp QSA requires BF16 Q/K/V")
  
@@ -31,12 +48,12 @@ one KV head, head_dim 256, selection width 512).
 +            and key_cache.shape[2] == 1
 +            and self.head_size == 256
 +            and query.shape[1] // key_cache.shape[2] <= 4
-+            and logical_indices.shape[1] - 1 == 512
 +        ):
 +            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn import (
 +                qsa_prefill_attention,
 +            )
 +
++            logger.info_once("QSA prefill routed to the TileLang kernel")
 +            return qsa_prefill_attention(
 +                query[:num_tokens],
 +                key_cache,

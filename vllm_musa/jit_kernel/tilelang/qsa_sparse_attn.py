@@ -1,11 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
-"""TileLang sparse paged GQA attention for the QSA prefill path (MMA).
+"""TileLang sparse paged GQA attention for the QSA prefill path.
 
-Same numerics as qsa_sparse_attn_mma.py; changes for speed:
-- the K/V gather is a flat 2D Parallel loop (head-dim contiguous vector loads,
-  no serial per-token steps);
-- the per-tile row max / row sum use fragment T.reduce_max / T.reduce_sum
-  instead of serial reduction loops.
+One TileLang kernel replaces the ``num_splits=1`` prefill launch of the
+Triton ``_qsa_sparse_paged_gqa_splitk_kernel`` (Qwen3.8-Flash-Next full
+attention layers).  The Triton kernel gathers the K tile in a dim-major
+layout (token as the fastest address axis), which compiles to fully scalar
+paged-cache loads on MUSA and takes ~20 ms per 1261-row prefill call.  This
+kernel gathers K/V tile by tile with per-token head-dim-contiguous vector
+loads (the sparse page addresses are constant along the dim axis), and
+computes QK^T / PV with explicit Parallel-FMA loops: the grouped-query tile
+(group_size=3 heads per TP rank) is smaller than the MUSA MMA M%8
+requirement, and the whole op is memory-bound anyway.
+
+The grouped-query dimension is padded to 4 (``BLOCK_M``), matching the
+Triton kernel's padding: row 3 of the padded tile is zero so its scores are
+finite, and the epilogue never stores the padded head.  All ``Parallel``
+loop extents divide the 128-thread block evenly.
+
+Split-k is out of scope: the dispatch gate only covers the prefill config
+whose ``num_splits`` is 1.
 """
 
 import functools
@@ -21,6 +34,10 @@ from vllm_musa.jit_kernel.tilelang.utils import (
 )
 
 _PASS_CONFIGS = dict(MUSA_COMMON_PASS_CONFIGS)
+# This kernel reuses shared buffers across Parallel loops (write s_idx/s_phys/
+# s_off/s_valid, then gather through them), so the cross-loop thread storage
+# syncs that the common config disables for pure elementwise kernels must
+# stay on; without them the gather races the metadata writes.
 if hasattr(tilelang.PassConfigKey, "TL_DISABLE_THREAD_STORAGE_SYNC"):
     _PASS_CONFIGS[tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC] = False
 for _key, _value in (
@@ -33,6 +50,9 @@ for _key, _value in (
 
 __all__ = ["qsa_prefill_attention"]
 
+# Scores are masked to a large finite negative value instead of -inf so that
+# an all-invalid tile keeps the running max arithmetic well defined
+# (max(-1e30, -1e30) = -1e30, exp2(0) = 1).
 _NEG_INF = -1.0e30
 
 
@@ -45,6 +65,7 @@ _NEG_INF = -1.0e30
 def _qsa_prefill_kernel(
     group_size: int,
     head_dim: int,
+    kv_heads: int,
     topk: int,
     block_n: int,
     page_size: int,
@@ -52,7 +73,8 @@ def _qsa_prefill_kernel(
     dtype: str,
 ):
     num_tiles = (topk + block_n - 1) // block_n
-    block_m = 8  # MMA-aligned grouped-query tile (3 real heads + 5 zeros)
+    block_m = 4  # padded grouped-query tile (group_size <= 4 on the gated path)
+    # log2-scaled softmax so the loop uses exp2 and never requantizes Q.
     softmax_scale_log2 = (head_dim**-0.5) * 1.4426950408889634
     num_rows = T.dynamic("num_rows")
     num_blocks = T.dynamic("num_blocks")
@@ -73,39 +95,44 @@ def _qsa_prefill_kernel(
             req_safe = T.min(T.max(req, 0), num_requests - 1)
             valid_count = indices[row, topk]
 
-            s_q = T.alloc_shared((block_m, head_dim), dtype)
+            s_q = T.alloc_shared((block_m, head_dim), "float32")
             s_k = T.alloc_shared((block_n, head_dim), dtype)
             s_v = T.alloc_shared((block_n, head_dim), dtype)
-            s_pb = T.alloc_shared((block_m, block_n), dtype)
             s_idx = T.alloc_shared((block_n,), "int32")
             s_off = T.alloc_shared((block_n,), "int32")
             s_phys = T.alloc_shared((block_n,), "int32")
             s_valid = T.alloc_shared((block_n,), "float32")
             s_scores = T.alloc_shared((block_m, block_n), "float32")
             s_p = T.alloc_shared((block_m, block_n), "float32")
+            s_acc = T.alloc_shared((block_m, head_dim), "float32")
             s_mrun = T.alloc_shared((block_m,), "float32")
             s_lrun = T.alloc_shared((block_m,), "float32")
             s_alpha = T.alloc_shared((block_m,), "float32")
             s_rowmax = T.alloc_shared((block_m,), "float32")
             s_rowsum = T.alloc_shared((block_m,), "float32")
 
-            acc_frag = T.alloc_fragment((block_m, head_dim), "float32")
-            scores_frag = T.alloc_fragment((block_m, block_n), "float32")
-            rowmax_frag = T.alloc_fragment((block_m,), "float32")
-            rowsum_frag = T.alloc_fragment((block_m,), "float32")
-
             for m, d in T.Parallel(block_m, head_dim):
                 if m < group_size:
-                    s_q[m, d] = q[row, m, d]
+                    s_q[m, d] = T.cast(q[row, m, d], "float32")
                 else:
                     s_q[m, d] = 0.0
+            for m, d in T.Parallel(block_m, head_dim):
+                s_acc[m, d] = 0.0
             for m in T.Parallel(block_m):
                 s_mrun[m] = _NEG_INF
                 s_lrun[m] = 0.0
 
             for tile in T.serial(num_tiles):
                 for i in T.Parallel(block_n):
-                    s_idx[i] = indices[row, tile * block_n + i]
+                    # The packed buffer is TOPK+1 wide (trailing count column);
+                    # the last tile covers columns >= TOPK, so mask the load
+                    # (other=-1 keeps those lanes invalid via the s_idx>=0
+                    # check in the validity chain below).
+                    s_idx[i] = T.if_then_else(
+                        tile * block_n + i < topk,
+                        indices[row, tile * block_n + i],
+                        -1,
+                    )
                 for i in T.Parallel(block_n):
                     tok = T.max(s_idx[i], 0)
                     raw_page = block_table[
@@ -126,23 +153,28 @@ def _qsa_prefill_kernel(
                     s_off[i] = tok % page_size
                     s_phys[i] = T.max(raw_page, 0)
                     s_valid[i] = valid
-                for i, d in T.Parallel(block_n, head_dim):
-                    s_k[i, d] = k_cache[s_phys[i], s_off[i], d]
-                    s_v[i, d] = v_cache[s_phys[i], s_off[i], d]
+                for i in T.serial(block_n):
+                    for d in T.Parallel(head_dim):
+                        s_k[i, d] = k_cache[s_phys[i], s_off[i], d]
+                        s_v[i, d] = v_cache[s_phys[i], s_off[i], d]
 
-                T.clear(scores_frag)
-                T.gemm(s_q, s_k, scores_frag, transpose_B=True)
-                T.copy(scores_frag, s_scores)
+                for m, n in T.Parallel(block_m, block_n):
+                    s_scores[m, n] = 0.0
+                for d in T.serial(head_dim):
+                    for m, n in T.Parallel(block_m, block_n):
+                        s_scores[m, n] += s_q[m, d] * T.cast(s_k[n, d], "float32")
                 for m, n in T.Parallel(block_m, block_n):
                     s_scores[m, n] = T.if_then_else(
                         s_valid[n] > 0.5,
                         s_scores[m, n] * softmax_scale_log2,
                         _NEG_INF,
                     )
-                T.copy(s_scores, scores_frag)
 
-                T.reduce_max(scores_frag, rowmax_frag, dim=1, clear=True)
-                T.copy(rowmax_frag, s_rowmax)
+                for m in T.Parallel(block_m):
+                    s_rowmax[m] = _NEG_INF
+                for n in T.serial(block_n):
+                    for m in T.Parallel(block_m):
+                        s_rowmax[m] = T.max(s_rowmax[m], s_scores[m, n])
                 for m in T.Parallel(block_m):
                     new_max = T.max(s_mrun[m], s_rowmax[m])
                     s_alpha[m] = T.exp2(s_mrun[m] - new_max)
@@ -155,24 +187,26 @@ def _qsa_prefill_kernel(
                         T.exp2(s_scores[m, n] - s_mrun[m]),
                         0.0,
                     )
-                T.copy(s_p, scores_frag)
-                T.reduce_sum(scores_frag, rowsum_frag, dim=1, clear=True)
-                T.copy(rowsum_frag, s_rowsum)
+                for m in T.Parallel(block_m):
+                    s_rowsum[m] = 0.0
+                for n in T.serial(block_n):
+                    for m in T.Parallel(block_m):
+                        s_rowsum[m] += s_p[m, n]
                 for m in T.Parallel(block_m):
                     s_lrun[m] += s_rowsum[m]
-                for m, n in T.Parallel(block_m, block_n):
-                    s_pb[m, n] = T.cast(s_p[m, n], dtype)
 
                 for m, d in T.Parallel(block_m, head_dim):
-                    acc_frag[m, d] = acc_frag[m, d] * s_alpha[m]
-                T.gemm(s_pb, s_v, acc_frag)
+                    s_acc[m, d] = s_acc[m, d] * s_alpha[m]
+                for n in T.serial(block_n):
+                    for m, d in T.Parallel(block_m, head_dim):
+                        s_acc[m, d] += s_p[m, n] * T.cast(s_v[n, d], "float32")
 
             for m, d in T.Parallel(block_m, head_dim):
                 if m < group_size:
                     out[row, m, d] = T.cast(
                         T.if_then_else(
                             s_lrun[m] > 0.0,
-                            acc_frag[m, d] / T.max(s_lrun[m], 1.0e-20),
+                            s_acc[m, d] / T.max(s_lrun[m], 1.0e-20),
                             0.0,
                         ),
                         dtype,
@@ -193,6 +227,14 @@ def qsa_prefill_attention(
     token_to_req: torch.Tensor,
     out: torch.Tensor,
 ) -> torch.Tensor:
+    """Run the TileLang sparse paged GQA kernel for the QSA prefill path.
+
+    Same contract as ``qsa_sparse_paged_attention`` with ``num_splits == 1``:
+    writes the normalized attention output into ``out`` and returns it.
+    The caller gates this on the exact shape family below (bf16, one KV head,
+    page_size 16, selection width 512, group_size <= 4); anything else keeps
+    the Triton path.
+    """
     num_rows = q.shape[0]
     if num_rows == 0:
         return out
@@ -201,11 +243,14 @@ def qsa_prefill_attention(
     topk = logical_indices.shape[1] - 1
     page_size = k_cache.shape[1]
     page_table_width = block_table.shape[1]
+    # The upstream forward canonicalizes the singleton KV-head stride to 0;
+    # TileLang takes dense tensors, so drop the singleton dim (a view).
     k_view = k_cache.squeeze(2)
     v_view = v_cache.squeeze(2)
     kernel = _qsa_prefill_kernel(
         group_size,
         head_dim,
+        1,
         topk,
         64,
         page_size,
