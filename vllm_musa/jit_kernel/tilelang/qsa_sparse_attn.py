@@ -123,16 +123,24 @@ def _qsa_prefill_kernel(
                 s_lrun[m] = 0.0
 
             for tile in T.serial(num_tiles):
-                for i in T.Parallel(block_n):
-                    # The packed buffer is TOPK+1 wide (trailing count column);
-                    # the last tile covers columns >= TOPK, so mask the load
-                    # (other=-1 keeps those lanes invalid via the s_idx>=0
-                    # check in the validity chain below).
-                    s_idx[i] = T.if_then_else(
-                        tile * block_n + i < topk,
-                        indices[row, tile * block_n + i],
-                        -1,
-                    )
+                # Keep the index-load address affine on the fast path: an
+                # address clamp on every tile measurably pessimizes codegen.
+                # Only the last tile of a non-multiple width needs the clamp
+                # (the packed buffer is TOPK+1 wide with a trailing count
+                # column; clamped lanes read the count column and stay
+                # invalid via the column < valid_count check below).
+                if topk % block_n == 0:
+                    for i in T.Parallel(block_n):
+                        s_idx[i] = indices[row, tile * block_n + i]
+                else:
+                    if tile < num_tiles - 1:
+                        for i in T.Parallel(block_n):
+                            s_idx[i] = indices[row, tile * block_n + i]
+                    else:
+                        for i in T.Parallel(block_n):
+                            s_idx[i] = indices[
+                                row, T.min(tile * block_n + i, topk)
+                            ]
                 for i in T.Parallel(block_n):
                     tok = T.max(s_idx[i], 0)
                     raw_page = block_table[
