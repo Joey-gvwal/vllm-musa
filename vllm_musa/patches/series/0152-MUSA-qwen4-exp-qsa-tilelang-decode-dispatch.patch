@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Sun, 20 Sep 2026 21:30:00 +0800
+Subject: [PATCH] MUSA: add the QSA decode TileLang dispatch and select the v2
+ prefill kernel
+
+VLLM_MUSA_QSA_TILELANG=1 routes prefill to the deterministic v2 kernel and
+"legacy" keeps the previous one; VLLM_MUSA_QSA_TILELANG_DECODE=1 routes the
+decode path to the split-k kernel. Both default off.
+
+---
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -176,21 +176,49 @@
+         if key_cache.dtype != torch.bfloat16 or query.dtype != torch.bfloat16:
+             raise NotImplementedError("Qwen4Exp QSA requires BF16 Q/K/V")
+ 
+-        if (
++        tilelang_mode = os.environ.get("VLLM_MUSA_QSA_TILELANG", "")
++        tilelang_ok = (
+             current_platform.is_musa()
+-            and use_prefill_config
+-            and os.environ.get("VLLM_MUSA_QSA_TILELANG") == "1"
+             and query.dtype == torch.bfloat16
+             and key_cache.shape[2] == 1
+             and self.head_size == 256
+             and query.shape[1] // key_cache.shape[2] <= 4
++        )
++
++        if tilelang_ok and use_prefill_config and tilelang_mode in ("1", "legacy"):
++            if tilelang_mode == "legacy":
++                from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn import (
++                    qsa_prefill_attention as qsa_prefill,
++                )
++            else:
++                from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                    qsa_prefill_attention_v2 as qsa_prefill,
++                )
++
++            logger.info_once(
++                "QSA prefill routed to the TileLang kernel (mode=%s)", tilelang_mode
++            )
++            return qsa_prefill(
++                query[:num_tokens],
++                key_cache,
++                value_cache,
++                logical_indices,
++                attn_metadata.block_table,
++                token_to_req,
++                output[:num_tokens],
++            )
++
++        if (
++            tilelang_ok
++            and not use_prefill_config
++            and os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") == "1"
+         ):
+-            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn import (
+-                qsa_prefill_attention,
+-            )
+-
+-            logger.info_once("QSA prefill routed to the TileLang kernel")
+-            return qsa_prefill_attention(
++            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                qsa_decode_attention,
++            )
++
++            logger.info_once("QSA decode routed to the TileLang split-k kernel")
++            return qsa_decode_attention(
+                 query[:num_tokens],
+                 key_cache,
+                 value_cache,
