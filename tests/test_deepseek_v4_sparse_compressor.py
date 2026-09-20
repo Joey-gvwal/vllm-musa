@@ -11,11 +11,11 @@ KERNEL = ROOT / "csrc/musa/attention/deepseek_v4_sparse_compressor.mu"
 WRAPPER = ROOT / "vllm_musa/kernels/deepseek_v4_sparse_compressor.py"
 SERIES_PATCH = (
     ROOT
-    / "vllm_musa/patches/series/0163-MUSA-dispatch-DeepSeek-V4-sparse-compressor-to-nativ.patch"
+    / "vllm_musa/patches/series/0164-MUSA-dispatch-DeepSeek-V4-sparse-compressor-to-nativ.patch"
 )
 FUSED_SAVE_PATCH = (
     ROOT
-    / "vllm_musa/patches/series/0164-MUSA-fuse-DeepSeek-V4-save-partial-into-native-compre.patch"
+    / "vllm_musa/patches/series/0165-MUSA-fuse-DeepSeek-V4-save-partial-into-native-compre.patch"
 )
 
 
