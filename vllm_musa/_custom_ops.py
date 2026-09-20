@@ -517,7 +517,8 @@ def deepseek_v4_qnorm_rope_kv_insert(
     cos_sin_cache: torch.Tensor,
     eps: float,
     cache_block_size: int,
-) -> None:
+    q_head_padded: int = 0,
+) -> torch.Tensor:
     if slot_mapping.shape[0] > q.shape[0]:
         # Graph+MTP warmup can carry padded cache slots while q/kv only hold
         # active rows. The native op stores one KV row per q/kv row.
@@ -531,6 +532,7 @@ def deepseek_v4_qnorm_rope_kv_insert(
         cos_sin_cache,
         eps,
         cache_block_size,
+        q_head_padded,
     )
 
 

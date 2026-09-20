@@ -4,8 +4,8 @@ Date: Wed, 3 Jun 2026 11:47:35 +0000
 Subject: [PATCH] MUSA: vllm.models.deepseek_v4.attention
 
 ---
- vllm/models/deepseek_v4/attention.py | 83 ++++++++++++++++++++++++++--
- 1 file changed, 77 insertions(+), 6 deletions(-)
+ vllm/models/deepseek_v4/attention.py | 79 ++++++++++++++++++++++++++--
+ 1 file changed, 73 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
 index 128debf70c..680dbe091a 100644
@@ -19,7 +19,7 @@ index 128debf70c..680dbe091a 100644
  from vllm.triton_utils import tl, triton
  from vllm.utils.multi_stream_utils import (
      execute_in_parallel,
-@@ -88,6 +89,62 @@ def _fill_short_context_topk_indices(
+@@ -88,6 +89,58 @@ def _fill_short_context_topk_indices(
      )
  
  
@@ -64,7 +64,7 @@ index 128debf70c..680dbe091a 100644
 +    if slot_mapping.shape[0] > q.shape[0]:
 +        active_slot_mapping = slot_mapping[: q.shape[0]].contiguous()
 +
-+    _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
++    return _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
 +        q,
 +        kv,
 +        kv_cache,
@@ -73,16 +73,14 @@ index 128debf70c..680dbe091a 100644
 +        cos_sin_cache,
 +        eps,
 +        block_size,
++        padded_heads,
 +    )
-+    if q.shape[1] < padded_heads:
-+        return F.pad(q, (0, 0, 0, padded_heads - q.shape[1]), value=0.0)
-+    return q
 +
 +
  def _resolve_dsv4_kv_cache_dtype(
      use_fp8_ds_mla_layout: bool,
      kv_cache_dtype: str,
-@@ -536,10 +593,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -536,10 +589,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              compressor = self.compressor
  
              def compressor_kv_score() -> torch.Tensor:
@@ -96,7 +94,7 @@ index 128debf70c..680dbe091a 100644
                  )
  
              aux_fns[0] = compressor_kv_score
-@@ -553,10 +610,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -553,10 +606,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                  return weights
  
              def indexer_compressor_kv_score() -> torch.Tensor:
@@ -110,7 +108,7 @@ index 128debf70c..680dbe091a 100644
                  )
  
              aux_fns[1] = indexer_weights_proj
-@@ -633,6 +690,19 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -633,6 +686,19 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
          cos_sin_cache = self.rotary_emb.cos_sin_cache
          cache_dtype = swa_kv_cache.dtype
  
@@ -130,7 +128,7 @@ index 128debf70c..680dbe091a 100644
          # kv is unchanged; attention reads kv solely via swa_kv_cache.
          if cache_dtype == torch.uint8:
              # fp8_ds_mla UE8M0 paged path. Horizontally fused:
-@@ -883,6 +953,7 @@ class DeepseekV4Indexer(nn.Module):
+@@ -883,6 +949,7 @@ class DeepseekV4Indexer(nn.Module):
              self.topk_indices_buffer,
              skip_k_cache_insert=True,
              use_fp4_cache=self.use_fp4_kv,

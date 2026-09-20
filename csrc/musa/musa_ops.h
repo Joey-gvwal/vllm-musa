@@ -115,7 +115,7 @@ void deepseek_v4_store_sparse_kv(
     torch::Tensor& kv_cache,
     const torch::Tensor& slot_mapping,
     const torch::Tensor& write_mask);
-void deepseek_v4_qnorm_rope_kv_insert(
+torch::Tensor deepseek_v4_qnorm_rope_kv_insert(
     torch::Tensor& q,
     const torch::Tensor& kv,
     torch::Tensor& kv_cache,
@@ -123,7 +123,8 @@ void deepseek_v4_qnorm_rope_kv_insert(
     const torch::Tensor& positions,
     const torch::Tensor& cos_sin_cache,
     double eps,
-    int64_t cache_block_size);
+    int64_t cache_block_size,
+    int64_t q_head_padded);
 void deepseek_v4_c4_indexer_compress_cache(
     const torch::Tensor& state_cache,
     const torch::Tensor& token_to_req_indices,
