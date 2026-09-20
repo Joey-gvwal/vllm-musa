@@ -517,7 +517,8 @@ def deepseek_v4_qnorm_rope_kv_insert(
     cos_sin_cache: torch.Tensor,
     eps: float,
     cache_block_size: int,
-) -> None:
+    q_head_padded: int = 0,
+) -> torch.Tensor:
     if slot_mapping.shape[0] > q.shape[0]:
         # Graph+MTP warmup can carry padded cache slots while q/kv only hold
         # active rows. The native op stores one KV row per q/kv row.
@@ -531,6 +532,7 @@ def deepseek_v4_qnorm_rope_kv_insert(
         cos_sin_cache,
         eps,
         cache_block_size,
+        q_head_padded,
     )
 
 
@@ -563,6 +565,52 @@ def deepseek_v4_c4_indexer_compress_cache(
         state_block_size,
         state_width,
         kv_block_size,
+    )
+
+
+def deepseek_v4_sparse_compress_cache(
+    state_cache: torch.Tensor,
+    token_to_req_indices: torch.Tensor,
+    positions: torch.Tensor,
+    state_slot_mapping: torch.Tensor,
+    block_table: torch.Tensor,
+    rms_norm_weight: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    kv_cache: torch.Tensor,
+    kv_slot_mapping: torch.Tensor,
+    rms_eps: float,
+    state_block_size: int,
+    state_width: int,
+    kv_block_size: int,
+    compress_ratio: int,
+    token_stride: int,
+    scale_dim: int,
+    quant_block: int,
+    kv_states: Optional[torch.Tensor] = None,
+    score_states: Optional[torch.Tensor] = None,
+    ape: Optional[torch.Tensor] = None,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_sparse_compress_cache(
+        state_cache,
+        token_to_req_indices,
+        positions,
+        state_slot_mapping,
+        block_table,
+        rms_norm_weight,
+        cos_sin_cache,
+        kv_cache,
+        kv_slot_mapping,
+        rms_eps,
+        state_block_size,
+        state_width,
+        kv_block_size,
+        compress_ratio,
+        token_stride,
+        scale_dim,
+        quant_block,
+        kv_states,
+        score_states,
+        ape,
     )
 
 

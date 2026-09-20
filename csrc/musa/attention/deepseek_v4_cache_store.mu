@@ -259,25 +259,36 @@ int index_kind(const torch::Tensor& tensor) {
 }
 
 __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
-    __mt_bfloat16* __restrict__ q, const __mt_bfloat16* __restrict__ kv,
-    uint8_t* __restrict__ cache, const void* __restrict__ slots,
-    int slot_kind, const void* __restrict__ positions, int position_kind,
+    const __mt_bfloat16* q_in, __mt_bfloat16* q_out,
+    const __mt_bfloat16* __restrict__ kv, uint8_t* __restrict__ cache,
+    const void* __restrict__ slots, int slot_kind,
+    const void* __restrict__ positions, int position_kind,
     const float* __restrict__ cos_sin_cache, float eps, int64_t num_tokens,
-    int64_t num_heads, int64_t num_slots, int64_t num_blocks,
+    int64_t in_heads, int64_t out_heads, int64_t num_slots, int64_t num_blocks,
     int64_t block_size, int64_t block_stride) {
   const int64_t token = static_cast<int64_t>(blockIdx.x);
   const int64_t head = static_cast<int64_t>(blockIdx.y);
-  if (token >= num_tokens || head >= num_heads) {
+  if (token >= num_tokens || head >= out_heads) {
+    return;
+  }
+
+  const int tid = threadIdx.x;
+  __mt_bfloat16* out_row = q_out + (token * out_heads + head) * kHeadDim;
+  // MUSA: FLASHMLA reads a padded Q; pad heads are zeros written here so
+  // the Python F.pad copy is not needed on the decode path.
+  if (head >= in_heads) {
+    for (int64_t dim = tid; dim < kHeadDim; dim += blockDim.x) {
+      out_row[dim] = __float2bfloat16(0.0f);
+    }
     return;
   }
 
   __shared__ float reduce[kQNormThreads];
-  const int tid = threadIdx.x;
-  __mt_bfloat16* row = q + (token * num_heads + head) * kHeadDim;
+  const __mt_bfloat16* in_row = q_in + (token * in_heads + head) * kHeadDim;
 
   float partial = 0.0f;
   for (int64_t dim = tid; dim < kHeadDim; dim += blockDim.x) {
-    const float value = __bfloat162float(row[dim]);
+    const float value = __bfloat162float(in_row[dim]);
     partial += value * value;
   }
   reduce[tid] = partial;
@@ -292,7 +303,8 @@ __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
 
   const float norm = rsqrtf(reduce[0] / static_cast<float>(kHeadDim) + eps);
   for (int64_t dim = tid; dim < kNopeDim; dim += blockDim.x) {
-    row[dim] = __float2bfloat16(__bfloat162float(row[dim]) * norm);
+    out_row[dim] =
+        __float2bfloat16(__bfloat162float(in_row[dim]) * norm);
   }
 
   const int64_t pos = load_index(positions, position_kind, token);
@@ -301,12 +313,12 @@ __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
   for (int64_t pair = tid; pair < kRopeDim / 2; pair += blockDim.x) {
     const int64_t even_dim = kNopeDim + pair * 2;
     const int64_t odd_dim = even_dim + 1;
-    const float even = __bfloat162float(row[even_dim]) * norm;
-    const float odd = __bfloat162float(row[odd_dim]) * norm;
+    const float even = __bfloat162float(in_row[even_dim]) * norm;
+    const float odd = __bfloat162float(in_row[odd_dim]) * norm;
     const float c = cos_ptr[pair];
     const float s = sin_ptr[pair];
-    row[even_dim] = __float2bfloat16(even * c - odd * s);
-    row[odd_dim] = __float2bfloat16(even * s + odd * c);
+    out_row[even_dim] = __float2bfloat16(even * c - odd * s);
+    out_row[odd_dim] = __float2bfloat16(even * s + odd * c);
   }
 
   const bool kv_pack_block = head == 0 && token < num_slots;
@@ -373,7 +385,7 @@ __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
 
 }  // namespace
 
-void deepseek_v4_qnorm_rope_kv_insert(
+torch::Tensor deepseek_v4_qnorm_rope_kv_insert(
     torch::Tensor& q,
     const torch::Tensor& kv,
     torch::Tensor& kv_cache,
@@ -381,7 +393,8 @@ void deepseek_v4_qnorm_rope_kv_insert(
     const torch::Tensor& positions,
     const torch::Tensor& cos_sin_cache,
     double eps,
-    int64_t cache_block_size) {
+    int64_t cache_block_size,
+    int64_t q_head_padded) {
   TORCH_CHECK(q.scalar_type() == torch::kBFloat16, "q must be bfloat16");
   TORCH_CHECK(kv.scalar_type() == torch::kBFloat16, "kv must be bfloat16");
   TORCH_CHECK(kv_cache.scalar_type() == torch::kUInt8,
@@ -398,6 +411,8 @@ void deepseek_v4_qnorm_rope_kv_insert(
                   q.device() == cos_sin_cache.device(),
               "all tensors must be on the same device");
   TORCH_CHECK(q.dim() == 3 && q.size(2) == kHeadDim, "q shape [N, H, 512]");
+  TORCH_CHECK(q_head_padded == 0 || q_head_padded >= q.size(1),
+              "q_head_padded must be 0 or >= q.size(1)");
   TORCH_CHECK(kv.dim() == 2 && kv.size(1) == kHeadDim,
               "kv shape [N, 512]");
   TORCH_CHECK(kv.size(0) == q.size(0), "q and kv row counts must match");
@@ -418,30 +433,40 @@ void deepseek_v4_qnorm_rope_kv_insert(
       cache_block_size * (kTokenDataBytes + kTokenScaleBytes);
   TORCH_CHECK(kv_cache.stride(0) >= logical_block_bytes,
               "kv_cache block stride is too small");
+  const int64_t in_heads = q.size(1);
+  const int64_t out_heads =
+      q_head_padded > 0 ? q_head_padded : in_heads;
+  torch::Tensor q_out = q;
+  if (out_heads > in_heads) {
+    q_out = torch::empty({q.size(0), out_heads, kHeadDim}, q.options());
+  }
   if (q.size(0) == 0) {
-    return;
+    return q_out;
   }
 
   const at::musa::OptionalMUSAGuard device_guard(device_of(q));
   musaStream_t stream = at::musa::getCurrentMUSAStream();
   const dim3 q_grid(static_cast<unsigned int>(q.size(0)),
-                    static_cast<unsigned int>(q.size(1)));
+                    static_cast<unsigned int>(out_heads));
   const dim3 q_block(kQNormThreads);
   // The fused q-norm/RoPE/KV-pack kernel is the validated DeepSeek-V4 path.
   // Keep the fallback kernels available for source-level reuse, but do not
   // make production behavior depend on an A/B-only process environment flag.
   deepseek_v4_qnorm_rope_kv_pack_fused_kernel<<<q_grid, q_block, 0, stream>>>(
-      static_cast<__mt_bfloat16*>(q.data_ptr()),
+      static_cast<const __mt_bfloat16*>(q.data_ptr()),
+      static_cast<__mt_bfloat16*>(q_out.data_ptr()),
       static_cast<const __mt_bfloat16*>(kv.data_ptr()),
       static_cast<uint8_t*>(kv_cache.data_ptr()), slot_mapping.data_ptr(),
       index_kind(slot_mapping), positions.data_ptr(), index_kind(positions),
       static_cast<const float*>(cos_sin_cache.data_ptr()),
-      static_cast<float>(eps), q.size(0), q.size(1), slot_mapping.numel(),
-      kv_cache.size(0), cache_block_size, kv_cache.stride(0));
+      static_cast<float>(eps), q.size(0), in_heads, out_heads,
+      slot_mapping.numel(), kv_cache.size(0), cache_block_size,
+      kv_cache.stride(0));
   auto err = musaGetLastError();
   TORCH_CHECK(err == musaSuccess,
               "deepseek_v4_qnorm_rope_kv_pack_fused launch failed: ",
               musaGetErrorString(err));
+  return q_out;
 }
 
 void deepseek_v4_store_sparse_kv(

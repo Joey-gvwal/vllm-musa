@@ -210,6 +210,7 @@ VLLM_MUSA_CSRC_SOURCES = [
     "csrc/musa/cache_kernels.mu",
     "csrc/musa/attention/deepseek_v4_cache_store.mu",
     "csrc/musa/attention/deepseek_v4_c4_indexer_compressor.mu",
+    "csrc/musa/attention/deepseek_v4_sparse_compressor.mu",
     "csrc/musa/attention/deepseek_v4_fused_qkv_rmsnorm.mu",
     "csrc/musa/attention/deepseek_v4_cache_utils.mu",
     "csrc/musa/attention/deepseek_v4_indexer_topk.mu",
