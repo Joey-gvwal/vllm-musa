@@ -149,21 +149,18 @@ def _qsa_prefill_kernel(
                             req_safe,
                             T.min(tok // page_size, page_table_width - 1),
                         ]
-                        valid = 1.0
-                        valid = T.if_then_else(req >= 0, valid, 0.0)
-                        valid = T.if_then_else(req < num_requests, valid, 0.0)
-                        valid = T.if_then_else(s_idx[i] >= 0, valid, 0.0)
-                        valid = T.if_then_else(
-                            tile * block_n + i < valid_count, valid, 0.0
+                        ok = (
+                            (req >= 0)
+                            and (req < num_requests)
+                            and (s_idx[i] >= 0)
+                            and (tile * block_n + i < valid_count)
+                            and (tok // page_size < page_table_width)
+                            and (raw_page >= 0)
+                            and (raw_page < num_blocks)
                         )
-                        valid = T.if_then_else(
-                            tok // page_size < page_table_width, valid, 0.0
-                        )
-                        valid = T.if_then_else(raw_page >= 0, valid, 0.0)
-                        valid = T.if_then_else(raw_page < num_blocks, valid, 0.0)
                         s_off[i] = tok % page_size
                         s_phys[i] = T.min(T.max(raw_page, 0), num_blocks - 1)
-                        s_valid[i] = valid
+                        s_valid[i] = T.if_then_else(ok, 1.0, 0.0)
 
                     T.sync_threads()
                     for i, d in T.Parallel(block_n, head_dim):
@@ -293,21 +290,18 @@ def _qsa_decode_kernel(
                             req_safe,
                             T.min(tok // page_size, page_table_width - 1),
                         ]
-                        valid = 1.0
-                        valid = T.if_then_else(req >= 0, valid, 0.0)
-                        valid = T.if_then_else(req < num_requests, valid, 0.0)
-                        valid = T.if_then_else(s_idx[i] >= 0, valid, 0.0)
-                        valid = T.if_then_else(
-                            tile * block_n + i < valid_count, valid, 0.0
+                        ok = (
+                            (req >= 0)
+                            and (req < num_requests)
+                            and (s_idx[i] >= 0)
+                            and (tile * block_n + i < valid_count)
+                            and (tok // page_size < page_table_width)
+                            and (raw_page >= 0)
+                            and (raw_page < num_blocks)
                         )
-                        valid = T.if_then_else(
-                            tok // page_size < page_table_width, valid, 0.0
-                        )
-                        valid = T.if_then_else(raw_page >= 0, valid, 0.0)
-                        valid = T.if_then_else(raw_page < num_blocks, valid, 0.0)
                         s_off[i] = tok % page_size
                         s_phys[i] = T.min(T.max(raw_page, 0), num_blocks - 1)
-                        s_valid[i] = valid
+                        s_valid[i] = T.if_then_else(ok, 1.0, 0.0)
 
                     T.sync_threads()
                     for i, d in T.Parallel(block_n, head_dim):
@@ -427,6 +421,20 @@ def _shape_args(q, k_cache, logical_indices, block_table):
     )
 
 
+def _compile_all(shape_args, num_splits=_DECODE_SPLITS):
+    """Compile every kernel for this signature.
+
+    TileLang compiles on the first call for a given signature and a first call
+    inside a captured graph deadlocks the worker, so the prefill entry point
+    (which always runs outside capture) also compiles the decode pair.
+    The jit wrappers are memoized, so repeat calls are free.
+    """
+    group_size, head_dim, dtype = shape_args[0], shape_args[1], shape_args[6]
+    _qsa_prefill_kernel(*shape_args)
+    _qsa_decode_kernel(*shape_args, num_splits)
+    _qsa_merge_kernel(group_size, head_dim, num_splits, dtype, _THREADS)
+
+
 def qsa_prefill_attention_v2(
     q: torch.Tensor,
     k_cache: torch.Tensor,
@@ -438,9 +446,9 @@ def qsa_prefill_attention_v2(
 ) -> torch.Tensor:
     if q.shape[0] == 0:
         return out
-    kernel = _qsa_prefill_kernel(
-        *_shape_args(q, k_cache, logical_indices, block_table)
-    )
+    shape_args = _shape_args(q, k_cache, logical_indices, block_table)
+    _compile_all(shape_args)
+    kernel = _qsa_prefill_kernel(*shape_args)
     # The upstream forward canonicalizes the singleton KV-head stride to 0;
     # TileLang takes dense tensors, so drop the singleton dim (a view).
     kernel(q, k_cache.squeeze(2), v_cache.squeeze(2), logical_indices,
@@ -477,10 +485,10 @@ def qsa_decode_attention(
         return out
     group_size = q.shape[1] // k_cache.shape[2]
     head_dim = q.shape[2]
+    shape_args = _shape_args(q, k_cache, logical_indices, block_table)
+    _compile_all(shape_args, num_splits)
     partial_o, partial_l = _split_scratch(num_rows, head_dim, q.device, num_splits)
-    split = _qsa_decode_kernel(
-        *_shape_args(q, k_cache, logical_indices, block_table), num_splits
-    )
+    split = _qsa_decode_kernel(*shape_args, num_splits)
     split(q, k_cache.squeeze(2), v_cache.squeeze(2), logical_indices,
           block_table, token_to_req, partial_o, partial_l)
     merge = _qsa_merge_kernel(
@@ -505,14 +513,13 @@ def prewarm_qsa_kernels(
     TileLang compiles on the first call for a given signature; a first call
     inside a captured graph deadlocks the worker.
     """
-    args = (
-        group_size, head_dim, topk, _BLOCK_N, page_size, page_table_width,
-        tilelang_dtype(dtype), _THREADS, _DUP,
+    _compile_all(
+        (
+            group_size, head_dim, topk, _BLOCK_N, page_size, page_table_width,
+            tilelang_dtype(dtype), _THREADS, _DUP,
+        ),
+        num_splits,
     )
-    _qsa_prefill_kernel(*args)
-    _qsa_decode_kernel(*args, num_splits)
-    _qsa_merge_kernel(group_size, head_dim, num_splits, tilelang_dtype(dtype),
-                      _THREADS)
     device = torch.musa.current_device() if hasattr(torch, "musa") else None
     for rows in decode_rows:
         _split_scratch(rows, head_dim, device, num_splits)
