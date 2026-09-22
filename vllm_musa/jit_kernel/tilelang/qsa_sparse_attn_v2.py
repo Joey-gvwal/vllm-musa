@@ -510,8 +510,11 @@ def prewarm_qsa_kernels(
 ) -> None:
     """Compile the kernels and allocate the split-k scratch ahead of capture.
 
-    TileLang compiles on the first call for a given signature; a first call
-    inside a captured graph deadlocks the worker.
+    Both steps must happen outside CUDA-graph capture. The decode path is first
+    reached while the decode graphs are being captured, so without this the JIT
+    build and the split-k scratch land in the graph memory pool: with more than
+    one captured size the scratch aliases another graph's tensors and the merge
+    kernel reads non-finite partials.
     """
     _compile_all(
         (
@@ -520,6 +523,8 @@ def prewarm_qsa_kernels(
         ),
         num_splits,
     )
-    device = torch.musa.current_device() if hasattr(torch, "musa") else None
+    if not hasattr(torch, "musa"):
+        return
+    device = torch.device("musa", torch.musa.current_device())
     for rows in decode_rows:
         _split_scratch(rows, head_dim, device, num_splits)
