@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Tue, 22 Sep 2026 14:05:00 +0800
+Subject: [PATCH] MUSA: keep QSA TileLang on densely paged caches only
+
+The TileLang QSA kernels address the K/V cache as a dense
+(num_blocks, page_size, head_dim) tensor. A packed KV slab strides blocks by
+the slab block, so those kernels would read the wrong pages. Gate them on a
+dense stride and fall back to the Triton kernel otherwise.
+
+---
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -116,6 +116,22 @@
+         return False
+ 
+ 
++
++def _is_dense_paged_cache(cache: torch.Tensor) -> bool:
++    """Whether a paged K/V cache is densely strided across blocks.
++
++    The TileLang QSA kernels address the cache as a dense
++    ``(num_blocks, page_size, head_dim)`` tensor. A packed KV slab strides
++    blocks by the slab block, so those kernels must stay on the Triton path.
++    """
++    paged = cache.squeeze(2)
++    if paged.ndim != 3:
++        return False
++    return paged.stride(1) == paged.shape[2] and paged.stride(0) == (
++        paged.shape[1] * paged.shape[2]
++    )
++
++
+ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
+     """Run paged sparse GQA with the QSA Triton kernel."""
+ 
+@@ -184,6 +200,8 @@
+             and key_cache.shape[2] == 1
+             and self.head_size == 256
+             and query.shape[1] // key_cache.shape[2] <= 4
++            and _is_dense_paged_cache(key_cache)
++            and _is_dense_paged_cache(value_cache)
+         )
+ 
+         if tilelang_ok and use_prefill_config and tilelang_mode in ("1", "legacy"):

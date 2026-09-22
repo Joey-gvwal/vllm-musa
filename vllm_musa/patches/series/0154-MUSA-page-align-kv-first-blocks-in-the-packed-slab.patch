@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Tue, 22 Sep 2026 14:00:00 +0800
+Subject: [PATCH] MUSA: page-align KV-first blocks in the packed KV slab
+
+In the packed layout every cache group lays its pages over the same block
+slab, so correctness rests on a block ID being owned by one group at a time.
+A KV-first cache shape such as (2, num_blocks, ...) broke that: the view
+strided the kv dimension by one whole slab block and the block dimension by
+one page, so block b covered neither page b nor a page of its own group, and
+its writes landed in the pages other groups held in different slab blocks.
+
+Build the view page-first for those shapes and swap the dimensions back, so
+block b covers page b again. Block-first shapes are unchanged.
+
+---
+--- a/vllm/v1/worker/gpu/attn_utils.py
++++ b/vllm/v1/worker/gpu/attn_utils.py
+@@ -298,14 +298,35 @@
+         packed_kv_cache = kv_raw_tensor.view(-1, block_stride)[
+             :, offset : offset + page_bytes
+         ].view(dtype)
+-        inner_shape = permuted_kv_cache_shape[1:]
++        if permuted_kv_cache_shape[0] == num_blocks:
++            page_shape = permuted_kv_cache_shape
++            kv_first = False
++        else:
++            # A KV-first layout such as ``(2, num_blocks, ...)`` would stride
++            # the block dimension by one page and the kv dimension by one whole
++            # slab block, so block ``b`` would not cover page ``b`` and would
++            # resolve the bytes another cache group holds in a different slab
++            # block. Build the view page-first and swap the dims back.
++            assert permuted_kv_cache_shape[1] == num_blocks, (
++                "Packed KV pages need the block dimension first or second (got "
++                f"shape {permuted_kv_cache_shape} with num_blocks={num_blocks})."
++            )
++            page_shape = (
++                num_blocks,
++                permuted_kv_cache_shape[0],
++                *permuted_kv_cache_shape[2:],
++            )
++            kv_first = True
++        inner_shape = page_shape[1:]
+         inner_strides = [1] * len(inner_shape)
+         for i in range(len(inner_shape) - 2, -1, -1):
+             inner_strides[i] = inner_strides[i + 1] * inner_shape[i + 1]
+         kv_cache = packed_kv_cache.as_strided(
+-            permuted_kv_cache_shape,
++            page_shape,
+             (packed_kv_cache.stride(0), *inner_strides),
+         )
++        if kv_first:
++            kv_cache = kv_cache.transpose(0, 1)
+     elif kv_cache_spec.page_size_padded is not None:
+         # Use a strided view to skip the padding between physical pages.
+         #
