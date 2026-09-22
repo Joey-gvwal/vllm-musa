@@ -37,10 +37,14 @@ _PASS_CONFIGS = dict(MUSA_COMMON_PASS_CONFIGS)
 # pure elementwise kernels must stay on.
 if hasattr(tilelang.PassConfigKey, "TL_DISABLE_THREAD_STORAGE_SYNC"):
     _PASS_CONFIGS[tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC] = False
+# A page of the packed KV slab is megabytes apart from the next, so a physical
+# block index times that stride leaves the 2 GiB a 32-bit byte offset can reach
+# and wraps to an address below the cache. Global buffer indices must be 64-bit;
+# TileLang keeps the shared-memory indices 32-bit either way.
 for _key, _value in (
     ("TL_DISABLE_SAFE_COPY_PREDICATION", True),
     ("TL_DISABLE_SAFE_ROBUST_COPY_PREDICATION", True),
-    ("TL_CONFIG_INDEX_BITWIDTH", 32),
+    ("TL_CONFIG_INDEX_BITWIDTH", 64),
 ):
     if hasattr(tilelang.PassConfigKey, _key):
         _PASS_CONFIGS[getattr(tilelang.PassConfigKey, _key)] = _value
