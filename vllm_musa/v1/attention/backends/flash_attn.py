@@ -67,6 +67,27 @@ if is_flash_attn_varlen_func_available():
 logger = init_logger(__name__)
 
 
+def reject_per_sequence_causal(attn_metadata: Any) -> None:
+    """Refuse the per-request causal mask MATE's FA3 wrapper cannot express.
+
+    FA4 takes ``dynamic_causal=`` beside the scalar ``causal``; ``mate`` declares
+    ``causal: bool`` and MUSA has no FA4, so a per-request flag tensor cannot be
+    honoured here and has to fail loudly instead of landing in a bool parameter.
+    Diffusion models pass exactly that tensor and run on TRITON_ATTN, whose
+    unified attention op implements the per-sequence causal path.
+
+    Takes the metadata rather than the flag because ``forward`` is also called
+    with ``attn_metadata=None`` on the profiling path below.
+    """
+    causal = getattr(attn_metadata, "causal", None)
+    if isinstance(causal, torch.Tensor):
+        raise NotImplementedError(
+            "Per-sequence causal (dynamic_causal) requires FlashAttention v4, "
+            "which MUSA does not provide; diffusion models must use the "
+            "TRITON_ATTN backend"
+        )
+
+
 def _is_musa_qwen_text_generation_architecture(model_config: Any) -> bool:
     return resolve_optimization_contract(model_config=model_config).prefers(
         OptimizationFeature.QWEN_FA3_SCHEDULER
@@ -251,6 +272,16 @@ class MUSAFlashAttentionBackend(AttentionBackend):
         # handled correctly. A model whose mm-prefix needed an arbitrary partial 2D
         # mask (not causal/window/chunk) would be wrong on this path — none is
         # currently known or tested; revisit if such a model is served on FLASH_ATTN.
+        return True
+
+    @classmethod
+    def supports_sliding_window(cls) -> bool:
+        # mate's FA3 wrapper takes window_size=, and this impl resolves it per
+        # LAYER (self.sliding_window -> sliding_window_size on the decode/prefill/
+        # split paths), so interleaved sliding/full models mix freely; only the AOT
+        # scheduler needs one window for all layers and it disables itself when the
+        # model mixes them. Answering False here rejects FLASH_ATTN for windowed
+        # models outright.
         return True
 
     @classmethod
@@ -1074,6 +1105,8 @@ class FlashAttentionImpl(AttentionImpl):
               {q,k,v}_descale to be (num_sequences, num_kv_heads).
               We use torch's .expand() to avoid duplicating values
         """
+        reject_per_sequence_causal(attn_metadata)
+
         assert output is not None, "Output tensor must be provided."
         assert (
             self.vllm_flash_attn_version is not None
