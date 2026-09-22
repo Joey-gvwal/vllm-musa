@@ -2,7 +2,8 @@
 """TileLang sparse paged GQA for the QSA prefill and decode paths.
 
 Both stages gather K/V tile by tile with per-token head-dim-contiguous vector
-loads (the sparse page addresses are constant along the dim axis) and compute
+loads (the sparse page addresses are constant along the dim axis; the block
+stride comes off the tensor, so a packed KV slab works) and compute
 QK^T / PV with T.gemm; the grouped-query tile is padded to 8 rows to satisfy the
 MUSA MMA M%8 requirement. The online softmax stays in fragments.
 
@@ -85,12 +86,24 @@ def _qsa_prefill_kernel(
     num_rows = T.dynamic("num_rows")
     num_blocks = T.dynamic("num_blocks")
     num_requests = T.dynamic("num_requests")
+    # The paged cache may be a window into a packed KV slab, so the block
+    # stride is read off the tensor instead of assumed to be one page.
+    k_block_stride = T.dynamic("k_block_stride")
+    v_block_stride = T.dynamic("v_block_stride")
 
     @T.prim_func
     def qsa_prefill(
         q: T.Tensor((num_rows, group_size, head_dim), dtype),
-        k_cache: T.Tensor((num_blocks, page_size, head_dim), dtype),
-        v_cache: T.Tensor((num_blocks, page_size, head_dim), dtype),
+        k_cache: T.StridedTensor(
+            (num_blocks, page_size, head_dim),
+            (k_block_stride, head_dim, 1),
+            dtype,
+        ),
+        v_cache: T.StridedTensor(
+            (num_blocks, page_size, head_dim),
+            (v_block_stride, head_dim, 1),
+            dtype,
+        ),
         indices: T.Tensor((num_rows, topk + 1), "int32"),
         block_table: T.Tensor((num_requests, page_table_width), "int32"),
         token_to_req: T.Tensor((num_rows,), "int32"),
@@ -230,12 +243,24 @@ def _qsa_decode_kernel(
     num_rows = T.dynamic("num_rows")
     num_blocks = T.dynamic("num_blocks")
     num_requests = T.dynamic("num_requests")
+    # The paged cache may be a window into a packed KV slab, so the block
+    # stride is read off the tensor instead of assumed to be one page.
+    k_block_stride = T.dynamic("k_block_stride")
+    v_block_stride = T.dynamic("v_block_stride")
 
     @T.prim_func
     def qsa_decode(
         q: T.Tensor((num_rows, group_size, head_dim), dtype),
-        k_cache: T.Tensor((num_blocks, page_size, head_dim), dtype),
-        v_cache: T.Tensor((num_blocks, page_size, head_dim), dtype),
+        k_cache: T.StridedTensor(
+            (num_blocks, page_size, head_dim),
+            (k_block_stride, head_dim, 1),
+            dtype,
+        ),
+        v_cache: T.StridedTensor(
+            (num_blocks, page_size, head_dim),
+            (v_block_stride, head_dim, 1),
+            dtype,
+        ),
         indices: T.Tensor((num_rows, topk + 1), "int32"),
         block_table: T.Tensor((num_requests, page_table_width), "int32"),
         token_to_req: T.Tensor((num_rows,), "int32"),

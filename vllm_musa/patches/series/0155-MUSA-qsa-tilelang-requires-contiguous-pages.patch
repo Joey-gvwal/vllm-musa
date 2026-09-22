@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Tue, 22 Sep 2026 16:00:00 +0800
+Subject: [PATCH] MUSA: keep QSA TileLang on caches whose pages are contiguous
+
+The TileLang QSA kernels read the block stride off the tensor, so a packed KV
+slab works, but they still need every page laid out as (page_size, head_dim)
+with no gaps. Gate them on that and fall back to the Triton kernel otherwise.
+
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -116,6 +116,19 @@
+         return False
+ 
+ 
++def _is_page_contiguous_cache(cache: torch.Tensor) -> bool:
++    """Whether each page of a paged K/V cache is contiguous.
++
++    The TileLang QSA kernels read the block stride off the tensor, so a packed
++    KV slab is fine, but they still require every page to be laid out as
++    ``(page_size, head_dim)`` with no gaps.
++    """
++    paged = cache.squeeze(2)
++    if paged.ndim != 3:
++        return False
++    return paged.stride(2) == 1 and paged.stride(1) == paged.shape[2]
++
++
+ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
+     """Run paged sparse GQA with the QSA Triton kernel."""
+ 
+@@ -184,6 +197,8 @@
+             and key_cache.shape[2] == 1
+             and self.head_size == 256
+             and query.shape[1] // key_cache.shape[2] <= 4
++            and _is_page_contiguous_cache(key_cache)
++            and _is_page_contiguous_cache(value_cache)
+         )
+ 
+         if tilelang_ok and use_prefill_config and tilelang_mode in ("1", "legacy"):
