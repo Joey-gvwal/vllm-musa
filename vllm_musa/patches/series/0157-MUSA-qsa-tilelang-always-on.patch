@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Wed, 23 Sep 2026 17:20:00 +0800
+Subject: [PATCH] MUSA: make the QSA TileLang kernels the only supported path
+
+The prefill and decode TileLang kernels were behind VLLM_MUSA_QSA_TILELANG and
+VLLM_MUSA_QSA_TILELANG_DECODE while their paged-cache addressing was being
+validated. Both dispatches and the pre-capture prewarm now run whenever the
+shape family allows it.
+
+The tilelang_ok capability gate is unchanged, so an unsupported dtype, head
+count, head size or non-contiguous page layout still takes the Triton sparse
+paged attention path.
+
+---
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -6,8 +6,6 @@
+ 
+ from typing import ClassVar, cast
+ 
+-import os
+-
+ import torch
+ from torch import nn
+ 
+@@ -190,7 +188,6 @@
+         if key_cache.dtype != torch.bfloat16 or query.dtype != torch.bfloat16:
+             raise NotImplementedError("Qwen4Exp QSA requires BF16 Q/K/V")
+ 
+-        tilelang_mode = os.environ.get("VLLM_MUSA_QSA_TILELANG", "")
+         tilelang_ok = (
+             current_platform.is_musa()
+             and query.dtype == torch.bfloat16
+@@ -201,19 +198,12 @@
+             and _is_page_contiguous_cache(value_cache)
+         )
+ 
+-        if tilelang_ok and use_prefill_config and tilelang_mode in ("1", "legacy"):
+-            if tilelang_mode == "legacy":
+-                from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn import (
+-                    qsa_prefill_attention as qsa_prefill,
+-                )
+-            else:
+-                from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
+-                    qsa_prefill_attention_v2 as qsa_prefill,
+-                )
+-
+-            logger.info_once(
+-                "QSA prefill routed to the TileLang kernel (mode=%s)", tilelang_mode
++        if tilelang_ok and use_prefill_config:
++            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                qsa_prefill_attention_v2 as qsa_prefill,
+             )
++
++            logger.info_once("QSA prefill routed to the TileLang kernel")
+             return qsa_prefill(
+                 query[:num_tokens],
+                 key_cache,
+@@ -224,11 +214,7 @@
+                 output[:num_tokens],
+             )
+ 
+-        if (
+-            tilelang_ok
+-            and not use_prefill_config
+-            and os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") == "1"
+-        ):
++        if tilelang_ok and not use_prefill_config:
+             from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
+                 qsa_decode_attention,
+             )
+@@ -430,10 +416,6 @@
+         """
+         if not current_platform.is_musa():
+             return
+-        if os.environ.get("VLLM_MUSA_QSA_TILELANG", "") not in ("1", "legacy") and (
+-            os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") != "1"
+-        ):
+-            return
+         try:
+             from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
+                 prewarm_qsa_kernels,
