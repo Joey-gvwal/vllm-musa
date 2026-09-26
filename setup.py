@@ -153,7 +153,7 @@ VLLM_CSRC_SOURCES = [
     # skipped + impl-stripped in torch_bindings.cpp (cat-2 patch).
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v1.cu"),
     # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v2.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/cuda_view.cu"),
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cuda_view.cu"),
     str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"),
 ]
 

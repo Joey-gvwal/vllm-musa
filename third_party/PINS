@@ -6,8 +6,8 @@
 # Human-readable release label plus the immutable source commit used by builds.
 # releases/v0.28.0 is pinned to the exact commit validated by this branch; never
 # build from the moving release branch alone.
-VLLM_TAG=v0.28.0
-VLLM_COMMIT=2cf0a6915ce544dc493a0990f2ea38d81601128a
+VLLM_TAG=v0.30.0
+VLLM_COMMIT=ced6857afa0ea7b2e3f0846a62e1394e90f15607
 # FlashInfer is intentionally DECOUPLED from upstream vLLM's choice. This is the
 # validated sampling/norm source revision; bump it consciously, not in lockstep
 # with VLLM_TAG/VLLM_COMMIT.
