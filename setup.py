@@ -159,8 +159,6 @@ VLLM_CSRC_SOURCES = [
 
 VLLM_STABLE_CSRC_SOURCES = [
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/torch_bindings.cpp"),
-    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu"),
-    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/moe_align_sum_kernels.cu"),
     # v0.28 registers _C_cuda_utils from the stable bindings, so its
     # implementation must be linked into _C_stable_libtorch as upstream does.
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cuda_utils_kernels.cu"),
