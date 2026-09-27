@@ -862,7 +862,7 @@ index de0c505..33be566 100644
    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index a7ee87b..549949b 100644
+index a7ee87b..dcdbea4 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
 @@ -268,7 +268,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
@@ -918,7 +918,24 @@ index a7ee87b..549949b 100644
  
  // Kimi SITU gated activation. `linear_beta <= 0` means "unset" (up passed
  // through), matching SituAndMul(linear_beta=None) on the Python side.
-@@ -1373,7 +1381,8 @@ __global__ void activation_kernel(
+@@ -1059,6 +1067,7 @@ void situ_and_mul(torch::stable::Tensor& out,    // [..., d]
+       });
+ }
+ 
++#ifndef USE_MUSA  // masked activation ops are CUDA-only on the MUSA path
+ void masked_situ_and_mul(torch::stable::Tensor& out,    // [E, T, d]
+                          torch::stable::Tensor& input,  // [E, T, 2 * d]
+                          const torch::stable::Tensor& expert_num_tokens,
+@@ -1194,6 +1203,8 @@ void masked_moe_activation(
+ // Fused SITU activation and block-FP8 quantization for Humming w2.
+ // `num_valid_tokens` is the int32 DeepEP token count (psum[-1]); rows = it *
+ // `topk`, so padding is excluded on-device and skipped rows receive scale 1.
++#endif  // !USE_MUSA
++
+ void situ_and_mul_quant(torch::stable::Tensor& out,    // [..., d]  (fp8)
+                         torch::stable::Tensor& scale,  // [..., 1 or d/128]
+                         torch::stable::Tensor& input,  // [..., 2 * d]
+@@ -1373,7 +1384,8 @@ __global__ void activation_kernel(
      dim3 block(std::min(d / vec_size, 1024));                                  \
      if (CUDA_VERSION >= 12090 && cc_major >= 10 && num_tokens > 128) {         \
        VLLM_STABLE_DISPATCH_FLOATING_TYPES(dtype, "activation_kernel", [&] {    \
