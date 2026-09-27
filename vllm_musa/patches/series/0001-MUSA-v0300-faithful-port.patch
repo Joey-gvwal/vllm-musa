@@ -2651,6 +2651,36 @@ index fbb0721..5611587 100644
      }
    }
  }
+diff --git a/csrc/libtorch_stable/moe/torch_bindings.cpp b/csrc/libtorch_stable/moe/torch_bindings.cpp
+index c0e966b..f5cb920 100644
+--- a/csrc/libtorch_stable/moe/torch_bindings.cpp
++++ b/csrc/libtorch_stable/moe/torch_bindings.cpp
+@@ -66,6 +66,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+       "                     Tensor !lora_ids,"
+       "                     Tensor? maybe_expert_map) -> () ");
+ #ifndef USE_ROCM
++#ifndef USE_MUSA
+   m.def(
+       "moe_wna16_gemm(Tensor input, Tensor! output, Tensor b_qweight, "
+       "Tensor b_scales, Tensor? b_qzeros, "
+@@ -73,6 +74,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+       "Tensor expert_ids, Tensor num_tokens_post_pad, "
+       "int top_k, int BLOCK_SIZE_M, int BLOCK_SIZE_N, int BLOCK_SIZE_K, "
+       "int bit) -> Tensor");
++#endif
+ 
+   m.def(
+       "moe_wna16_marlin_gemm(Tensor! a, Tensor? c_or_none,"
+@@ -139,7 +141,9 @@ STABLE_TORCH_LIBRARY_IMPL(_moe_C, CUDA, m) {
+          TORCH_BOX(&batched_moe_align_block_size));
+   m.impl("moe_lora_align_block_size", TORCH_BOX(&moe_lora_align_block_size));
+ #ifndef USE_ROCM
++#ifndef USE_MUSA
+   m.impl("moe_wna16_gemm", TORCH_BOX(&moe_wna16_gemm));
++#endif
+   m.impl("shuffle_rows", TORCH_BOX(&shuffle_rows));
+   m.impl("grouped_topk", TORCH_BOX(&grouped_topk));
+ #endif
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
 index 0000000..fcd5c5d
