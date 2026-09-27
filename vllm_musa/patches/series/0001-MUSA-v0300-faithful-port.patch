@@ -1,5 +1,37 @@
+diff --git a/.claude/skills/ci-fails-buildkite b/.claude/skills/ci-fails-buildkite
+deleted file mode 120000
+index db179cf70..000000000
+--- a/.claude/skills/ci-fails-buildkite
++++ /dev/null
+@@ -1 +0,0 @@
+-../../.agents/skills/ci-fails-buildkite
+\ No newline at end of file
+diff --git a/.claude/skills/debug-ima b/.claude/skills/debug-ima
+deleted file mode 120000
+index 6a1dbb461..000000000
+--- a/.claude/skills/debug-ima
++++ /dev/null
+@@ -1 +0,0 @@
+-../../.agents/skills/debug-ima
+\ No newline at end of file
+diff --git a/.claude/skills/kernel-microbenchmark b/.claude/skills/kernel-microbenchmark
+deleted file mode 120000
+index c0233605e..000000000
+--- a/.claude/skills/kernel-microbenchmark
++++ /dev/null
+@@ -1 +0,0 @@
+-../../.agents/skills/kernel-microbenchmark
+\ No newline at end of file
+diff --git a/.claude/skills/triton-kernel-writing b/.claude/skills/triton-kernel-writing
+deleted file mode 120000
+index 39e7b6be5..000000000
+--- a/.claude/skills/triton-kernel-writing
++++ /dev/null
+@@ -1 +0,0 @@
+-../../.agents/skills/triton-kernel-writing
+\ No newline at end of file
 diff --git a/csrc/cuda_compat.h b/csrc/cuda_compat.h
-index d7d589d..3893d6a 100644
+index d7d589db6..3893d6a97 100644
 --- a/csrc/cuda_compat.h
 +++ b/csrc/cuda_compat.h
 @@ -69,7 +69,7 @@ struct Utils {
@@ -13,7 +45,7 @@ index d7d589d..3893d6a 100644
      hipFuncSetAttribute(FUNC, hipFuncAttributeMaxDynamicSharedMemorySize, VAL)
 diff --git a/csrc/cuda_view.cu b/csrc/cuda_view.cu
 new file mode 100644
-index 0000000..9d27348
+index 000000000..9d27348bb
 --- /dev/null
 +++ b/csrc/cuda_view.cu
 @@ -0,0 +1,57 @@
@@ -75,7 +107,7 @@ index 0000000..9d27348
 +                          contiguous_cpu.options().device(torch::kCUDA));
 +}
 diff --git a/csrc/custom_all_reduce.cuh b/csrc/custom_all_reduce.cuh
-index 385a0e0..1cf56b6 100644
+index 385a0e0ae..1cf56b6ad 100644
 --- a/csrc/custom_all_reduce.cuh
 +++ b/csrc/custom_all_reduce.cuh
 @@ -1,25 +1,292 @@
@@ -839,7 +871,7 @@ index 385a0e0..1cf56b6 100644
    }
  };
 diff --git a/csrc/dispatch_utils.h b/csrc/dispatch_utils.h
-index de0c505..33be566 100644
+index de0c505b7..33be56698 100644
 --- a/csrc/dispatch_utils.h
 +++ b/csrc/dispatch_utils.h
 @@ -11,6 +11,18 @@
@@ -862,7 +894,7 @@ index de0c505..33be566 100644
    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index a7ee87b..c5de37f 100644
+index a7ee87b35..c5de37f97 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
 @@ -268,7 +268,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
@@ -947,7 +979,7 @@ index a7ee87b..c5de37f 100644
                                           input.const_data_ptr<scalar_t>(), d); \
        });                                                                      \
 diff --git a/csrc/libtorch_stable/attention/merge_attn_states.cu b/csrc/libtorch_stable/attention/merge_attn_states.cu
-index cc89397..067acb4 100644
+index cc89397f6..067acb4dd 100644
 --- a/csrc/libtorch_stable/attention/merge_attn_states.cu
 +++ b/csrc/libtorch_stable/attention/merge_attn_states.cu
 @@ -1,14 +1,14 @@
@@ -1117,7 +1149,7 @@ index cc89397..067acb4 100644
                             CALL_MERGE_ATTN_STATES_LAUNCHER);
  }
 diff --git a/csrc/libtorch_stable/custom_all_reduce.cu b/csrc/libtorch_stable/custom_all_reduce.cu
-index 07fca99..df98c2f 100644
+index 07fca99dd..df98c2f02 100644
 --- a/csrc/libtorch_stable/custom_all_reduce.cu
 +++ b/csrc/libtorch_stable/custom_all_reduce.cu
 @@ -1,11 +1,7 @@
@@ -1406,7 +1438,7 @@ index 07fca99..df98c2f 100644
 +  AT_CUDA_CHECK(cudaFree(reinterpret_cast<void*>(buffer)));
  }
 diff --git a/csrc/libtorch_stable/mamba/selective_scan_fwd.cu b/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
-index c17b06a..b35a4b2 100644
+index c17b06a79..b35a4b2b6 100644
 --- a/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
 +++ b/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
 @@ -1,9 +1,18 @@
@@ -1846,7 +1878,7 @@ index c17b06a..b35a4b2 100644
          selective_scan_fwd_cuda<input_t, weight_t, state_t>(params, stream);
      });
 diff --git a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
-index fbb0721..5611587 100644
+index fbb07216d..561158794 100644
 --- a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 @@ -20,14 +20,13 @@
@@ -1879,7 +1911,7 @@ index fbb0721..5611587 100644
    }
  }
 diff --git a/csrc/libtorch_stable/moe/torch_bindings.cpp b/csrc/libtorch_stable/moe/torch_bindings.cpp
-index c0e966b..f5cb920 100644
+index c0e966b2b..cf705dfd7 100644
 --- a/csrc/libtorch_stable/moe/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/moe/torch_bindings.cpp
 @@ -66,6 +66,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
@@ -1898,19 +1930,55 @@ index c0e966b..f5cb920 100644
  
    m.def(
        "moe_wna16_marlin_gemm(Tensor! a, Tensor? c_or_none,"
-@@ -139,7 +141,9 @@ STABLE_TORCH_LIBRARY_IMPL(_moe_C, CUDA, m) {
+@@ -115,7 +117,8 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+       "moe_permute_sort_workspace_size(int num_expanded_rows, int n_expert) -> "
+       "int");
+ 
+-  // Row shuffle for MoE
++  // Row shuffle for MoE is only used by the CUDA CUTLASS MoE path.
++#ifndef USE_MUSA
+   m.def(
+       "shuffle_rows(Tensor input_tensor, Tensor dst2src_map, Tensor! "
+       "output_tensor) -> ()");
+@@ -127,6 +130,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+       "routed_scaling_factor, Tensor bias, int scoring_func) -> (Tensor, "
+       "Tensor)");
+ #endif
++#endif
+ }
+ 
+ STABLE_TORCH_LIBRARY_IMPL(_moe_C, CUDA, m) {
+@@ -139,14 +143,19 @@ STABLE_TORCH_LIBRARY_IMPL(_moe_C, CUDA, m) {
           TORCH_BOX(&batched_moe_align_block_size));
    m.impl("moe_lora_align_block_size", TORCH_BOX(&moe_lora_align_block_size));
  #ifndef USE_ROCM
 +#ifndef USE_MUSA
    m.impl("moe_wna16_gemm", TORCH_BOX(&moe_wna16_gemm));
 +#endif
++#ifndef USE_MUSA
    m.impl("shuffle_rows", TORCH_BOX(&shuffle_rows));
    m.impl("grouped_topk", TORCH_BOX(&grouped_topk));
  #endif
++#endif
+ }
+ 
+ #ifndef USE_ROCM
+-// Primitive-only ops have no tensor to dispatch on.
++// Primitive-only ops are implemented by CUDA-only MoE sources.
++#ifndef USE_MUSA
+ STABLE_TORCH_LIBRARY_IMPL(_moe_C, CompositeExplicitAutograd, m) {
+   m.impl("moe_permute_unpermute_supported",
+          TORCH_BOX(&moe_permute_unpermute_supported));
+@@ -154,5 +163,6 @@ STABLE_TORCH_LIBRARY_IMPL(_moe_C, CompositeExplicitAutograd, m) {
+          TORCH_BOX(&moe_permute_sort_workspace_size));
+ }
+ #endif
++#endif
+ 
+ REGISTER_EXTENSION(_moe_C_stable_libtorch)
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
-index 0000000..fcd5c5d
+index 000000000..fcd5c5de2
 --- /dev/null
 +++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 @@ -0,0 +1,317 @@
@@ -2232,7 +2300,7 @@ index 0000000..fcd5c5d
 +  m.impl("merge_attn_states", &merge_attn_states);
 +}
 diff --git a/csrc/libtorch_stable/ops.h b/csrc/libtorch_stable/ops.h
-index e19f49d..c17cfe0 100644
+index e19f49d60..c17cfe05e 100644
 --- a/csrc/libtorch_stable/ops.h
 +++ b/csrc/libtorch_stable/ops.h
 @@ -11,8 +11,14 @@
@@ -2251,7 +2319,7 @@ index e19f49d..c17cfe0 100644
    // Get the raw data pointer
    void* data_ptr = tensor.mutable_data_ptr();
 diff --git a/csrc/libtorch_stable/quantization/activation_kernels.cu b/csrc/libtorch_stable/quantization/activation_kernels.cu
-index 822a419..2afdd15 100644
+index 822a41969..2afdd15fb 100644
 --- a/csrc/libtorch_stable/quantization/activation_kernels.cu
 +++ b/csrc/libtorch_stable/quantization/activation_kernels.cu
 @@ -117,15 +117,18 @@ __device__ __forceinline__ float2 silu2(float2 x) {
@@ -2335,7 +2403,7 @@ index 822a419..2afdd15 100644
    // fixed GROUP_SIZE of 128.
    static constexpr int GROUP_SIZE = 128;
 diff --git a/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu b/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
-index 56dd470..b722eb1 100644
+index 56dd47038..b722eb19e 100644
 --- a/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
 +++ b/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
 @@ -142,8 +142,10 @@ void rms_norm_dynamic_per_token_quant_dispatch(
@@ -2365,7 +2433,7 @@ index 56dd470..b722eb1 100644
    STD_TORCH_CHECK(hidden_size % 4 == 0,
                    "Hidden size must be divisible by 4 for vectorized access");
 diff --git a/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh b/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
-index a81a0b9..72d046c 100644
+index a81a0b9fe..72d046cad 100644
 --- a/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
 +++ b/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
 @@ -13,7 +13,9 @@ namespace vllm {
@@ -2380,7 +2448,7 @@ index a81a0b9..72d046c 100644
        static_cast<float>(std::numeric_limits<int8_t>::min());
    static const float i8_max =
 diff --git a/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu b/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu
-index e620c18..be1c7cf 100644
+index e620c1818..be1c7cfd9 100644
 --- a/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu
 +++ b/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu
 @@ -8,7 +8,9 @@
@@ -2415,7 +2483,7 @@ index e620c18..be1c7cf 100644
        static_cast<int32_t>(std::numeric_limits<int8_t>::min());
    static constexpr auto i8_max =
 diff --git a/csrc/libtorch_stable/topk.cu b/csrc/libtorch_stable/topk.cu
-index b3e1a86..e774969 100644
+index b3e1a8623..e774969e2 100644
 --- a/csrc/libtorch_stable/topk.cu
 +++ b/csrc/libtorch_stable/topk.cu
 @@ -1,54 +1,53 @@
@@ -2659,7 +2727,7 @@ index b3e1a86..e774969 100644
  #endif
  }
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
-index 54548df..7ac6fe1 100644
+index 54548dfd0..7ac6fe1a1 100644
 --- a/csrc/libtorch_stable/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
 @@ -181,10 +181,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
@@ -2846,7 +2914,7 @@ index 54548df..7ac6fe1 100644
 +#endif
  REGISTER_EXTENSION(_C_stable_libtorch)
 diff --git a/csrc/libtorch_stable/torch_utils.h b/csrc/libtorch_stable/torch_utils.h
-index f023467..cb47291 100644
+index f02346739..cb4729196 100644
 --- a/csrc/libtorch_stable/torch_utils.h
 +++ b/csrc/libtorch_stable/torch_utils.h
 @@ -14,6 +14,10 @@
@@ -2942,7 +3010,7 @@ index f023467..cb47291 100644
 +  return reinterpret_cast<mublasHandle_t>(blas_handle_ptr);
  }
 diff --git a/csrc/libtorch_stable/type_convert.cuh b/csrc/libtorch_stable/type_convert.cuh
-index 8093c4b..2526fa6 100644
+index 8093c4bc8..2526fa637 100644
 --- a/csrc/libtorch_stable/type_convert.cuh
 +++ b/csrc/libtorch_stable/type_convert.cuh
 @@ -47,7 +47,7 @@ struct _typeConvert<float> {
@@ -2975,7 +3043,7 @@ index 8093c4b..2526fa6 100644
  
  /* Vector POD struct to generate vectorized and packed FP16/BF16 ops
 diff --git a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
-index 11a9b08..7301019 100644
+index 11a9b0818..730101918 100644
 --- a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 +++ b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 @@ -1,7 +1,6 @@
@@ -3041,7 +3109,7 @@ index 11a9b08..7301019 100644
  
  }  // namespace fp8
 diff --git a/csrc/torch_bindings.cpp b/csrc/torch_bindings.cpp
-index bcf0ce3..a4e5b2c 100644
+index bcf0ce3e1..a4e5b2ca4 100644
 --- a/csrc/torch_bindings.cpp
 +++ b/csrc/torch_bindings.cpp
 @@ -1,9 +1,9 @@
@@ -3205,2059 +3273,9 @@ index bcf0ce3..a4e5b2c 100644
 +}
  
  REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
-diff --git a/setup.py b/setup.py
-index 13692f3..2513364 100644
---- a/setup.py
-+++ b/setup.py
-@@ -1,1551 +1,548 @@
- # SPDX-License-Identifier: Apache-2.0
- # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- 
--import ctypes
--import importlib.util
--import json
--import logging
- import os
--import re
-+import platform
- import shutil
- import subprocess
- import sys
--import sysconfig
-+import time
-+from importlib.metadata import PackageNotFoundError, distribution
- from pathlib import Path
--from shutil import which
- 
-+# Activate MUSA patches before importing the torch ecosystem.
-+import torchada  # noqa: F401
- import torch
--from packaging.version import Version, parse
--from setuptools import Extension, setup
--from setuptools.command.build_ext import build_ext
--from setuptools_rust.build import build_rust
--from setuptools_scm import get_version
--from torch.utils.cpp_extension import CUDA_HOME, ROCM_HOME
--
--
--def load_module_from_path(module_name, path):
--    spec = importlib.util.spec_from_file_location(module_name, path)
--    module = importlib.util.module_from_spec(spec)
--    sys.modules[module_name] = module
--    spec.loader.exec_module(module)
--    return module
--
--
--ROOT_DIR = Path(__file__).parent
--logger = logging.getLogger(__name__)
--
--PRECOMPILED_RUST_FRONTEND_PATH = ROOT_DIR / "vllm" / "vllm-rs"
--# setuptools-rust installs PyO3 artifacts as `<module>.<ext-suffix>`, where the
--# suffix ends with `.so` on Linux and macOS alike (e.g. `_rust_foo.abi3.so`).
--PRECOMPILED_RUST_EXTENSION_MEMBER_REGEX = re.compile(r"vllm/_rust_[^/]*\.so$")
--
--# cannot import envs directly because it depends on vllm,
--#  which is not installed yet
--envs = load_module_from_path("envs", os.path.join(ROOT_DIR, "vllm", "envs.py"))
--rust_build = load_module_from_path(
--    "rust_build", os.path.join(ROOT_DIR, "tools", "build_rust.py")
--)
--
--VLLM_TARGET_DEVICE = envs.VLLM_TARGET_DEVICE
--USE_PRECOMPILED_EXTENSIONS = envs.VLLM_USE_PRECOMPILED
--# VLLM_USE_PRECOMPILED implies precompiled rust frontend too.
--USE_PRECOMPILED_RUST_FRONTEND = (
--    envs.VLLM_USE_PRECOMPILED or envs.VLLM_USE_PRECOMPILED_RUST
--)
--
--
--def should_require_rust_frontend() -> bool:
--    value = os.getenv("VLLM_REQUIRE_RUST_FRONTEND", "")
--    return value.lower() not in ("", "0", "false", "no")
--
--
--def get_precompiled_rust_extension_paths() -> list[Path]:
--    return sorted((ROOT_DIR / "vllm").glob("_rust_*.so"))
--
--
--def get_missing_precompiled_rust_extension_modules() -> list[str]:
--    present = {
--        path.name.split(".", 1)[0] for path in get_precompiled_rust_extension_paths()
--    }
--    return [
--        module_name
--        for module_name in rust_build.rust_py_extension_module_names()
--        if module_name not in present
--    ]
--
--
--def has_precompiled_rust_extensions() -> bool:
--    return not get_missing_precompiled_rust_extension_modules()
--
--
--def is_metadata_only_build() -> bool:
--    return bool({"egg_info", "dist_info"}.intersection(sys.argv[1:]))
--
--
--if sys.platform.startswith("darwin") and VLLM_TARGET_DEVICE != "cpu":
--    logger.warning("VLLM_TARGET_DEVICE automatically set to `cpu` due to macOS")
--    VLLM_TARGET_DEVICE = "cpu"
--elif not (sys.platform.startswith("linux") or sys.platform.startswith("darwin")):
--    logger.warning(
--        "vLLM only supports Linux platform (including WSL) and MacOS."
--        "Building on %s, "
--        "so vLLM may not be able to run correctly",
--        sys.platform,
--    )
--    VLLM_TARGET_DEVICE = "empty"
--elif sys.platform.startswith("linux") and os.getenv("VLLM_TARGET_DEVICE") is None:
--    if torch.version.hip is not None:
--        VLLM_TARGET_DEVICE = "rocm"
--        logger.info("Auto-detected ROCm")
--    elif torch.version.xpu is not None:
--        VLLM_TARGET_DEVICE = "xpu"
--        logger.info("Auto-detected XPU")
--    elif torch.version.cuda is not None:
--        VLLM_TARGET_DEVICE = "cuda"
--        logger.info("Auto-detected CUDA")
--    else:
--        VLLM_TARGET_DEVICE = "cpu"
--
--
--def is_sccache_available() -> bool:
--    return which("sccache") is not None and not bool(
--        int(os.getenv("VLLM_DISABLE_SCCACHE", "0"))
--    )
--
--
--def is_ccache_available() -> bool:
--    return which("ccache") is not None
--
--
--def is_ninja_available() -> bool:
--    return which("ninja") is not None
- 
-+root = Path(__file__).parent.resolve()
-+sys.path.insert(0, str(root))
-+
-+from setuptools import setup
-+from torch.utils.cpp_extension import BuildExtension, CUDAExtension
-+
-+from build_utils.ccache import configure_compiler_cache  # noqa: E402
-+
-+third_party = Path("third_party")
-+arch = platform.machine().lower()
-+
-+
-+def _read_pins():
-+    """Read third_party/PINS (KEY=VALUE; py3.10 has no tomllib). Shared with
-+    Makefile.sync so the build and patch-gen pins can't desync."""
-+    pins = {}
-+    pins_path = root / "third_party" / "PINS"
-+    for line in pins_path.read_text().splitlines():
-+        line = line.strip()
-+        if not line or line.startswith("#") or "=" not in line:
-+            continue
-+        key, _, value = line.partition("=")
-+        pins[key.strip()] = value.split("#", 1)[0].strip()
-+    return pins
-+
-+
-+_PINS = _read_pins()
-+
-+
-+def _read_requirements(filename, seen=None):
-+    """Read pip requirements files with local -r includes."""
-+    requirements_dir = root / "requirements"
-+    path = requirements_dir / filename
-+    seen = set() if seen is None else seen
-+    if path in seen:
-+        return []
-+    seen.add(path)
-+
-+    requirements = []
-+    for raw_line in path.read_text().splitlines():
-+        line = raw_line.strip()
-+        if not line or line.startswith("#"):
-+            continue
-+        if " #" in line:
-+            line = line.split(" #", 1)[0].strip()
-+        if line.startswith("--"):
-+            continue
-+        if line.startswith("-r "):
-+            requirements.extend(_read_requirements(line.split(maxsplit=1)[1], seen))
-+        else:
-+            requirements.append(line)
-+    return requirements
- 
--def is_freethreaded():
--    return bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
- 
-+configure_compiler_cache(root)
- 
--def should_bundle_tcmalloc() -> bool:
--    import platform
-+# Detect editable install (pip install -e .) or develop mode
-+_is_editable_install = (
-+    "develop" in sys.argv
-+    or "editable_wheel" in sys.argv
-+    or any("--editable" in arg or "-e" in arg for arg in sys.argv)
-+)
- 
--    return (
--        VLLM_TARGET_DEVICE == "cpu"
--        and sys.platform.startswith("linux")
--        and platform.machine() in ("aarch64", "x86_64", "s390x")
--    )
-+if _is_editable_install:
-+    Path("vllm").mkdir(exist_ok=True)
- 
- 
--def find_tcmalloc() -> Path | None:
-+def develop_dynamic_library(package_name, source_dir="./", target_override=None):
-+    """Copy the built vllm.* .so into the editable vLLM clone -- setuptools writes
-+    them to repo/vllm/ or build/lib*/vllm/, not the clone, so without this
-+    `import vllm._C` breaks. No-op until the clone + .so exist."""
-     try:
--        # get all shared libs the dynamic loader knows about
--        output = subprocess.check_output(
--            ["ldconfig", "-p"],
--            text=True,
--            stderr=subprocess.DEVNULL,
--        )
--    except Exception:
--        return None
--
--    # search for libtcmalloc and libtcmalloc_minimal
--    for library_pattern in (
--        r"\blibtcmalloc_minimal\.so\.(\d+)\b",
--        r"\blibtcmalloc\.so\.(\d+)\b",
--    ):
--        candidates: list[tuple[int, Path]] = []
--        for line in output.splitlines():
--            match = re.search(library_pattern, line)
--            if match is None or "=>" not in line:
--                continue
--            candidate = Path(line.split("=>")[1].strip())
--            if candidate.exists():
--                candidates.append((int(match.group(1)), candidate))
--
--        if candidates:
--            # if multiple candidates are found, pick the one with the highest
--            # version number
--            return max(candidates, key=lambda item: item[0])[1]
--
--    return None
--
--
--def bundle_tcmalloc(build_lib: str) -> None:
--    tcmalloc_library = find_tcmalloc()
--    if tcmalloc_library is None:
--        logger.warning(
--            "Failed to locate tcmalloc. For best performance, "
--            "please install tcmalloc (e.g. `sudo apt-get "
--            "install -y --no-install-recommends libtcmalloc-minimal4`)"
--        )
--        return
--
--    bundle_dir = os.path.join(build_lib, "vllm", "libs")
--    os.makedirs(bundle_dir, exist_ok=True)
--    bundle_path = os.path.join(bundle_dir, tcmalloc_library.name)
--    shutil.copy2(tcmalloc_library, bundle_path)
--    logger.info("Bundled tcmalloc into wheel: %s", bundle_path)
--
--
--class CMakeExtension(Extension):
--    def __init__(self, name: str, cmake_lists_dir: str = ".", **kwa) -> None:
--        super().__init__(name, sources=[], py_limited_api=not is_freethreaded(), **kwa)
--        self.cmake_lists_dir = os.path.abspath(cmake_lists_dir)
--
--
--class cmake_build_ext(build_ext):
--    # A dict of extension directories that have been configured.
--    did_config: dict[str, bool] = {}
--
--    #
--    # Determine number of compilation jobs and optionally nvcc compile threads.
--    #
--    def compute_num_jobs(self):
--        # `num_jobs` is either the value of the MAX_JOBS environment variable
--        # (if defined) or the number of CPUs available.
--        num_jobs = envs.MAX_JOBS
--        if num_jobs is not None:
--            num_jobs = int(num_jobs)
--            logger.info("Using MAX_JOBS=%d as the number of jobs.", num_jobs)
-+        if target_override is not None:
-+            target_dir = Path(target_override)
-         else:
--            try:
--                # os.sched_getaffinity() isn't universally available, so fall
--                #  back to os.cpu_count() if we get an error here.
--                num_jobs = len(os.sched_getaffinity(0))
--            except AttributeError:
--                num_jobs = os.cpu_count()
--
--        nvcc_threads = None
--        if _is_cuda() and CUDA_HOME is not None:
--            try:
--                nvcc_version = get_nvcc_cuda_version()
--                if nvcc_version >= Version("11.2"):
--                    # `nvcc_threads` is either the value of the NVCC_THREADS
--                    # environment variable (if defined) or 1.
--                    # when it is set, we reduce `num_jobs` to avoid
--                    # overloading the system.
--                    nvcc_threads = envs.NVCC_THREADS
--                    if nvcc_threads is not None:
--                        nvcc_threads = int(nvcc_threads)
--                        logger.info(
--                            "Using NVCC_THREADS=%d as the number of nvcc threads.",
--                            nvcc_threads,
--                        )
--                    else:
--                        nvcc_threads = 1
--                    num_jobs = max(1, num_jobs // nvcc_threads)
--            except Exception as e:
--                logger.warning("Failed to get NVCC version: %s", e)
--
--        return num_jobs, nvcc_threads
--
--    #
--    # Perform cmake configuration for a single extension.
--    #
--    def configure(self, ext: CMakeExtension) -> None:
--        # If we've already configured using the CMakeLists.txt for
--        # this extension, exit early.
--        if ext.cmake_lists_dir in cmake_build_ext.did_config:
-+            target_dir = Path(distribution(package_name).locate_file(package_name))
-+        if not target_dir.is_dir():
-             return
--
--        cmake_build_ext.did_config[ext.cmake_lists_dir] = True
--
--        # Select the build type.
--        # Note: optimization level + debug info are set by the build type
--        default_cfg = "Debug" if self.debug else "RelWithDebInfo"
--        cfg = envs.CMAKE_BUILD_TYPE or default_cfg
--
--        cmake_args = [
--            "-DCMAKE_BUILD_TYPE={}".format(cfg),
--            "-DVLLM_TARGET_DEVICE={}".format(VLLM_TARGET_DEVICE),
--        ]
--
--        verbose = envs.VERBOSE
--        if verbose:
--            cmake_args += ["-DCMAKE_VERBOSE_MAKEFILE=ON"]
--
--        if is_sccache_available():
--            cmake_args += [
--                "-DCMAKE_C_COMPILER_LAUNCHER=sccache",
--                "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache",
--                "-DCMAKE_CUDA_COMPILER_LAUNCHER=sccache",
--                "-DCMAKE_HIP_COMPILER_LAUNCHER=sccache",
--            ]
--        elif is_ccache_available():
--            cmake_args += [
--                "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
--                "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
--                "-DCMAKE_CUDA_COMPILER_LAUNCHER=ccache",
--                "-DCMAKE_HIP_COMPILER_LAUNCHER=ccache",
--            ]
--
--        # Pass the python executable to cmake so it can find an exact
--        # match.
--        cmake_args += ["-DVLLM_PYTHON_EXECUTABLE={}".format(sys.executable)]
--
--        # Pass the python path to cmake so it can reuse the build dependencies
--        # on subsequent calls to python.
--        cmake_args += ["-DVLLM_PYTHON_PATH={}".format(":".join(sys.path))]
--
--        # Override the base directory for FetchContent downloads to $ROOT/.deps
--        # This allows sharing dependencies between profiles,
--        # and plays more nicely with sccache.
--        # To override this, set the FETCHCONTENT_BASE_DIR environment variable.
--        fc_base_dir = os.path.join(ROOT_DIR, ".deps")
--        fc_base_dir = os.environ.get("FETCHCONTENT_BASE_DIR", fc_base_dir)
--        cmake_args += ["-DFETCHCONTENT_BASE_DIR={}".format(fc_base_dir)]
--
--        #
--        # Setup parallelism and build tool
--        #
--        num_jobs, nvcc_threads = self.compute_num_jobs()
--
--        if nvcc_threads:
--            cmake_args += ["-DNVCC_THREADS={}".format(nvcc_threads)]
--
--        if is_ninja_available():
--            build_tool = ["-G", "Ninja"]
--            cmake_args += [
--                "-DCMAKE_JOB_POOL_COMPILE:STRING=compile",
--                "-DCMAKE_JOB_POOLS:STRING=compile={}".format(num_jobs),
--            ]
--        else:
--            # Default build tool to whatever cmake picks.
--            build_tool = []
--        # Make sure we use the nvcc from CUDA_HOME
--        if _is_cuda() and CUDA_HOME is not None:
--            cmake_args += [f"-DCMAKE_CUDA_COMPILER={CUDA_HOME}/bin/nvcc"]
--        elif _is_hip() and ROCM_HOME is not None:
--            cmake_args += [f"-DROCM_PATH={ROCM_HOME}"]
--
--        other_cmake_args = os.environ.get("CMAKE_ARGS")
--        if other_cmake_args:
--            cmake_args += other_cmake_args.split()
--
--        subprocess.check_call(
--            ["cmake", ext.cmake_lists_dir, *build_tool, *cmake_args],
--            cwd=self.build_temp,
-+        src_dir = Path(source_dir)
-+        candidates = sorted(
-+            (
-+                d
-+                for d in (src_dir / "vllm", *src_dir.glob("build/lib*/vllm"))
-+                if d.is_dir() and d.resolve() != target_dir.resolve()
-+            ),
-+            key=lambda d: d.stat().st_mtime,
-+            reverse=True,
-         )
-+        for src in candidates:
-+            sos = list(src.glob("*.so"))
-+            if sos:
-+                for so in sos:
-+                    shutil.copy2(so, target_dir)
-+                break
-+    except PackageNotFoundError:
-+        print(f"vLLM is not installed '{package_name}'")
-+
-+
-+class _RepoInfo:
-+    """Configuration for a third-party git repository."""
-+
-+    def __init__(self, name, git_repository, git_tag, git_shallow=False):
-+        self.name = name
-+        self.git_repository = git_repository
-+        self.git_tag = git_tag
-+        self.git_shallow = git_shallow
-+        self.source_dir = third_party / name
-+
-+
-+_VLLM_REPO = _RepoInfo(
-+    name="vllm",
-+    git_repository="https://github.com/vllm-project/vllm.git",
-+    git_tag=_PINS.get("VLLM_COMMIT", _PINS["VLLM_TAG"]),
-+    git_shallow=False,
-+)
- 
--    def build_extensions(self) -> None:
--        # Ensure that CMake is present and working
--        try:
--            subprocess.check_output(["cmake", "--version"])
--        except OSError as e:
--            raise RuntimeError("Cannot find CMake executable") from e
--
--        # Create build directory if it does not exist.
--        if not os.path.exists(self.build_temp):
--            os.makedirs(self.build_temp)
--
--        targets = []
--
--        def target_name(s: str) -> str:
--            return s.removeprefix("vllm.").removeprefix("vllm_flash_attn.")
--
--        # Build all the extensions
--        for ext in self.extensions:
--            self.configure(ext)
--            targets.append(target_name(ext.name))
--
--        num_jobs, _ = self.compute_num_jobs()
--
--        build_args = [
--            "--build",
--            ".",
--            f"-j={num_jobs}",
--            *[f"--target={name}" for name in targets],
--        ]
--
--        subprocess.check_call(["cmake", *build_args], cwd=self.build_temp)
--
--        # Install the libraries
--        for ext in self.extensions:
--            # Install the extension into the proper location
--            outdir = Path(self.get_ext_fullpath(ext.name)).parent.absolute()
--
--            # Skip if the install directory is the same as the build directory
--            if outdir == self.build_temp:
--                continue
--
--            # CMake appends the extension prefix to the install path,
--            # and outdir already contains that prefix, so we need to remove it.
--            prefix = outdir
--            for _ in range(ext.name.count(".")):
--                prefix = prefix.parent
--
--            # prefix here should actually be the same for all components
--            install_args = [
--                "cmake",
--                "--install",
--                ".",
--                "--prefix",
--                prefix,
--                "--component",
--                target_name(ext.name),
--            ]
--            subprocess.check_call(install_args, cwd=self.build_temp)
--
--    def run(self):
--        # First, run the standard build_ext command to compile the extensions
--        super().run()
--
--        # bundle tcmalloc into CPU wheels for best OOB perf
--        if should_bundle_tcmalloc():
--            bundle_tcmalloc(self.build_lib)
--
--        # copy vllm/vllm_flash_attn/**/*.py from self.build_lib to current
--        # directory so that they can be included in the editable build
--        import glob
--
--        files = glob.glob(
--            os.path.join(self.build_lib, "vllm", "vllm_flash_attn", "**", "*.py"),
--            recursive=True,
--        )
--        for file in files:
--            dst_file = os.path.join(
--                "vllm/vllm_flash_attn", file.split("vllm/vllm_flash_attn/")[-1]
--            )
--            print(f"Copying {file} to {dst_file}")
--            os.makedirs(os.path.dirname(dst_file), exist_ok=True)
--            self.copy_file(file, dst_file)
--
--        if _is_cuda() or _is_hip():
--            # copy vllm/third_party/triton_kernels/**/*.py from self.build_lib
--            # to current directory so that they can be included in the editable
--            # build
--            print(
--                f"Copying {self.build_lib}/vllm/third_party/triton_kernels "
--                "to vllm/third_party/triton_kernels"
--            )
--            shutil.copytree(
--                f"{self.build_lib}/vllm/third_party/triton_kernels",
--                "vllm/third_party/triton_kernels",
--                dirs_exist_ok=True,
--            )
--
--        if _is_cuda():
--            # copy vendored deep_gemm package from build_lib to source tree
--            # for editable installs
--            deep_gemm_build = os.path.join(
--                self.build_lib, "vllm", "third_party", "deep_gemm"
--            )
--            if os.path.exists(deep_gemm_build):
--                print(f"Copying {deep_gemm_build} to vllm/third_party/deep_gemm")
--                shutil.copytree(
--                    deep_gemm_build,
--                    "vllm/third_party/deep_gemm",
--                    dirs_exist_ok=True,
--                )
--
--            # copy vendored fmha_sm100 package from build_lib to source tree
--            # for editable installs
--            fmha_sm100_build = os.path.join(
--                self.build_lib, "vllm", "third_party", "fmha_sm100"
--            )
--            if os.path.exists(fmha_sm100_build):
--                print(f"Copying {fmha_sm100_build} to vllm/third_party/fmha_sm100")
--                shutil.copytree(
--                    fmha_sm100_build,
--                    "vllm/third_party/fmha_sm100",
--                    dirs_exist_ok=True,
--                )
--
--            tml_fa4_build = os.path.join(
--                self.build_lib, "vllm", "third_party", "tml_fa4"
--            )
--            if os.path.exists(tml_fa4_build):
--                print(f"Copying {tml_fa4_build} to vllm/third_party/tml_fa4")
--                shutil.copytree(
--                    tml_fa4_build,
--                    "vllm/third_party/tml_fa4",
--                    dirs_exist_ok=True,
--                )
--
--
--class precompiled_build_ext(build_ext):
--    """Disables extension building when using precompiled binaries."""
--
--    def run(self) -> None:
--        return
--
--    def build_extensions(self) -> None:
--        print("Skipping build_ext: using precompiled extensions.")
--        return
--
--
--class precompiled_build_rust(build_rust):
--    """Skips local Rust builds when all precompiled Rust artifacts are present."""
--
--    def run(self) -> None:
--        missing = []
--        if not PRECOMPILED_RUST_FRONTEND_PATH.exists():
--            missing.append(str(PRECOMPILED_RUST_FRONTEND_PATH))
--        missing_rust_extensions = get_missing_precompiled_rust_extension_modules()
--        if missing_rust_extensions:
--            missing.extend(
--                str(ROOT_DIR / "vllm" / f"{module_name}*.so")
--                for module_name in missing_rust_extensions
--            )
--
--        if not missing:
--            logger.info(
--                "Skipping local Rust build: using precompiled %s and %s",
--                PRECOMPILED_RUST_FRONTEND_PATH,
--                get_precompiled_rust_extension_paths(),
--            )
--            return
--
--        logger.warning(
--            "Precompiled wheel did not provide all Rust artifacts (%s); "
--            "falling back to local Rust build.",
--            ", ".join(missing),
--        )
--        super().run()
--
--
--class precompiled_wheel_utils:
--    """Extracts libraries and other files from an existing wheel."""
-+_FLASHINFER_REPO = _RepoInfo(
-+    name="flashinfer",
-+    git_repository="https://github.com/flashinfer-ai/flashinfer.git",
-+    git_tag=_PINS["FLASHINFER_COMMIT"],
-+    git_shallow=False,
-+)
- 
--    @staticmethod
--    def fetch_metadata_for_variant(
--        commit: str,
--        variant: str | None,
--        *,
--        rocm: bool = False,
--    ) -> tuple[list[dict], str]:
--        """
--        Fetches metadata for a specific variant of the precompiled wheel.
--
--        For non-ROCm, fetches vllm metadata.
--
--        For ROCm, discovers all first-level packages and combines their
--        metadata into a single list.
--        """
--        import json
--        from html.parser import HTMLParser
--        from urllib.request import urlopen
--
--        variant_dir = f"{variant}/" if variant is not None else ""
--
--        if not rocm:
--            # Keep original behavior
--            repo_url = f"https://wheels.vllm.ai/{commit}/{variant_dir}vllm/"
--            meta_url = repo_url + "metadata.json"
--            print(f"Trying to fetch nightly build metadata from {meta_url}")
--            with urlopen(meta_url) as resp:
--                wheels = json.loads(resp.read().decode("utf-8"))
--
--            return wheels, repo_url
--
--        # ROCm: discover all packages under the variant directory.
--        repo_url = f"https://wheels.vllm.ai/rocm/{commit}/{variant_dir}"
--
--        class LinkParser(HTMLParser):
--            def __init__(self):
--                super().__init__()
--                self.links: list[str] = []
--
--            def handle_starttag(self, tag, attrs):
--                if tag == "a":
--                    href = dict(attrs).get("href")
--                    if href:
--                        self.links.append(href)
--
--        with urlopen(repo_url) as resp:
--            parser = LinkParser()
--            parser.feed(resp.read().decode("utf-8"))
--
--        packages = [
--            href.rstrip("/")
--            for href in parser.links
--            if href.endswith("/")
--            and href not in ("../", "./", "/")
--            and "/" not in href.rstrip("/")
--        ]
-+INCLUDE_DIRS = [
-+    root / "csrc",
-+    root / _VLLM_REPO.source_dir / "csrc",
-+    root / _FLASHINFER_REPO.source_dir / "include",
-+    root / _FLASHINFER_REPO.source_dir / "csrc",
-+]
-+
-+# =============================================================================
-+# C/C++ Source Files for Extension Modules
-+# =============================================================================
-+
-+VLLM_CSRC_SOURCES = [
-+    # paged_attention_v1/v2: CUDA-only, unused on MUSA (mate FlashAttention);
-+    # skipped + impl-stripped in torch_bindings.cpp (cat-2 patch).
-+    # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v1.cu"),
-+    # str(_VLLM_REPO.source_dir / "csrc/attention/paged_attention_v2.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/cuda_view.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/torch_bindings.cpp"),
-+]
-+
-+VLLM_STABLE_CSRC_SOURCES = [
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/torch_bindings.cpp"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/grouped_topk_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/moe_align_sum_kernels.cu"),
-+    # v0.28 registers _C_cuda_utils from the stable bindings, so its
-+    # implementation must be linked into _C_stable_libtorch as upstream does.
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cuda_utils_kernels.cu"),
-+    # gptq q_gemm: GPTQ is unused by the FP8/bf16 model matrix and its CUDA half2
-+    # path does not port cleanly to mcc; its gptq_gemm/gptq_shuffle impls are
-+    # dropped from the stable bindings to match.
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/activation_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/layernorm_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/pos_encoding_kernels.cu"),
-+    str(_VLLM_REPO.source_dir
-+        / "csrc/libtorch_stable/quantization/w8a8/fp8/per_token_group_quant.cu"),
-+    str(_VLLM_REPO.source_dir
-+        / "csrc/libtorch_stable/quantization/w8a8/int8/per_token_group_quant.cu"),
-+    # Scaled FP8/INT8 quant kernels (dynamic_scaled_fp8_quant,
-+    # dynamic_per_token_scaled_fp8_quant, static/dynamic_scaled_int8_quant): the
-+    # dynamic paths back _custom_ops.scaled_fp8_quant / scaled_int8_quant, used by
-+    # FP8/INT8 activation quantization. static_scaled_fp8_quant is also built here
-+    # but stays CUDA-only (its int[] group_shape arg is unboxable on the stable ABI).
-+    str(_VLLM_REPO.source_dir
-+        / "csrc/libtorch_stable/quantization/w8a8/fp8/common.cu"),
-+    str(_VLLM_REPO.source_dir
-+        / "csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu"),
-+    # Relocated from csrc/* into csrc/libtorch_stable/* by the v0.24.0 stable-ABI
-+    # consolidation; compiled into the stable extension at their new paths.
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/mamba/selective_scan_fwd.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cache_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/cache_kernels_fused.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/musa_cache_ops_reg.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/attention/merge_attn_states.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/sampler.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/topk.cu"),
-+    str(_VLLM_REPO.source_dir
-+        / "csrc/libtorch_stable/quantization/fused_kernels/fused_silu_mul_block_quant.cu"),
-+    # Layernorm+quant fusion kernels (rms_norm_static_fp8_quant,
-+    # fused_add_rms_norm_static_fp8_quant, rms_norm_dynamic_per_token_quant,
-+    # rms_norm_per_block_quant): emitted by the rms_quant_fusion compile pass.
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/layernorm_quant_kernels.cu"),
-+    str(_VLLM_REPO.source_dir
-+        / "csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/quantization/activation_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/custom_all_reduce.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/minimax_reduce_rms_kernel.cu"),
-+]
-+
-+VLLM_MUSA_CSRC_SOURCES = [
-+    "csrc/musa/torch_bindings.cpp",
-+    "csrc/musa/gemv.mu",
-+    "csrc/musa/fused_add_rmsnorm.mu",
-+    "csrc/musa/cache_kernels.mu",
-+    "csrc/musa/attention/deepseek_v4_cache_store.mu",
-+    "csrc/musa/attention/deepseek_v4_c4_indexer_compressor.mu",
-+    "csrc/musa/attention/deepseek_v4_sparse_compressor.mu",
-+    "csrc/musa/attention/deepseek_v4_fused_qkv_rmsnorm.mu",
-+    "csrc/musa/attention/deepseek_v4_cache_utils.mu",
-+    "csrc/musa/attention/deepseek_v4_indexer_topk.mu",
-+    "csrc/musa/attention/glm52_indexer_topk.mu",
-+    "csrc/musa/attention/deepseek_v4_sparse_flashmla.mu",
-+    "csrc/musa/attention/deepseek_v4_inv_rope_fp8_quant.mu",
-+    "csrc/musa/mhc/deepseek_v4_mhc_pre.mu",
-+    "csrc/musa/moe/deepseek_v4_topk_softplus_sqrt.mu",
-+    "csrc/musa/quantization/silu_and_mul_per_token_group_fp8_quant.cu",
-+    "csrc/musa/quantization/fused_add_rms_norm_per_token_group_fp8_quant.cu",
-+    "csrc/musa/quantization/per_token_group_quant_8bit_vec.cu",
-+    "csrc/musa/sampler.mu",
-+    "csrc/musa/min_p_sampler.mu",
-+    "csrc/musa/top_k_renorm.mu",
-+    str(_FLASHINFER_REPO.source_dir / "csrc/norm.cu"),
-+    str(_FLASHINFER_REPO.source_dir / "csrc/renorm.cu"),
-+    str(_FLASHINFER_REPO.source_dir / "csrc/sampling.cu"),
-+]
-+
-+VLLM_MOE_CSRC_SOURCES = [
-+    # Relocated from csrc/moe/* into csrc/libtorch_stable/moe/* by the v0.24.0
-+    # stable-ABI consolidation. On MUSA these are built as a regular (at::Tensor)
-+    # extension: the kernels are converted off the stable ABI (the stable path
-+    # needs torch::stable::sum_out with an int[] dim that torch_musa 2.9 cannot
-+    # box), the bindings are a regular TORCH_LIBRARY, and moe_ops.h is at::Tensor.
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/moe_align_sum_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/topk_softmax_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu"),
-+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/torch_bindings.cpp"),
-+]
-+
-+# =============================================================================
-+# Compiler and Linker Configuration
-+# =============================================================================
-+
-+CXX_FLAGS = ["force_mcc"]
-+LINK_LIBRARIES = ["c10", "torch", "torch_python", "musart"]
-+EXTRA_LINK_ARGS = [
-+    "-Wl,-rpath,$ORIGIN/../../torch/lib",
-+    f"-L/usr/lib/{arch}-linux-gnu",
-+    "-lmublasLt",
-+]
-+
-+# Detect MTGPU target architecture
-+DEFAULT_MTGPU_TARGET = "mp_31"
-+MTGPU_TARGET = os.environ.get("MTGPU_TARGET")
-+
-+if MTGPU_TARGET:
-+    print(f"Using MTGPU_TARGET from environment: {MTGPU_TARGET}")
-+else:
-+    MTGPU_TARGET = DEFAULT_MTGPU_TARGET
- 
--        wheels: list[dict] = []
-+if "MTGPU_TARGET" not in os.environ and torch.musa.is_available():
-+    try:
-+        device_props = torch.musa.get_device_properties(0)
-+        MTGPU_TARGET = f"mp_{device_props.major}{device_props.minor}"
-+    except Exception as e:
-+        print(f"Warning: Failed to detect GPU properties: {e}")
-+elif "MTGPU_TARGET" not in os.environ:
-+    print(f"Warning: torch.musa not available. Using default target: {MTGPU_TARGET}")
-+
-+SUPPORTED_MTGPU_TARGETS = ["mp_22", "mp_31"]
-+if MTGPU_TARGET not in SUPPORTED_MTGPU_TARGETS:
-+    print(
-+        f"Warning: Unsupported GPU architecture '{MTGPU_TARGET}'. "
-+        f"Expected one of: {SUPPORTED_MTGPU_TARGETS}"
-+    )
-+    sys.exit(1)
-+
-+MCC_FLAGS = [
-+    "-DNDEBUG",
-+    "-O3",
-+    "-fPIC",
-+    "-std=c++17",
-+    "-x",
-+    "musa",
-+    "-mtgpu",
-+    "-Od3",
-+    "-ffast-math",
-+    "-fmusa-flush-denormals-to-zero",
-+    "-fno-strict-aliasing",
-+    "-fno-signed-zeros",
-+    "-DUSE_MUSA",
-+]
-+
-+if MTGPU_TARGET == "mp_31":
-+    MCC_FLAGS.append("-DENABLE_FP8")
-+
-+COMPILE_ARGS = {
-+    "mcc": MCC_FLAGS,
-+    "cxx": CXX_FLAGS,
-+}
- 
--        for package in packages:
--            meta_url = f"{repo_url}{package}/metadata.json"
--            print(f"Trying to fetch nightly build metadata from {meta_url}")
--            with urlopen(meta_url) as resp:
--                package_wheels = json.loads(resp.read().decode("utf-8"))
--            wheels.extend(package_wheels)
--        return wheels, repo_url
-+# The libtorch-stable kernels need torchada's stable-ABI compat: force-include
-+# the TORCH_BOX boxer header, define CUDA_VERSION=0 (the sm100/Blackwell fast
-+# paths compile out on MUSA), and link torch_cpu (the AOTI stable-ABI shims live
-+# in libtorch_cpu.so). torchada's include_paths() auto-appends the stable_compat
-+# include dir, and its import patches torch_musa's stable::Tensor accessors.
-+from torchada.utils.cpp_extension import (
-+    stable_compat_box_header as _ta_stable_box,
-+    stable_compat_include_dir as _ta_stable_inc,
-+)
- 
--    @staticmethod
--    def is_rocm_system() -> bool:
--        """Detect ROCm without relying on torch (for build environment)."""
--        if os.getenv("ROCM_PATH"):
--            return True
--        if os.path.isdir("/opt/rocm"):
--            return True
--        if which("rocminfo") is not None:
--            return True
--        try:
--            import torch
--
--            return torch.version.hip is not None
--        except ImportError:
--            return False
-+_STABLE_BOX_HEADER = _ta_stable_box()
-+# Explicitly add torchada's stable_compat include dir (the include_paths()
-+# auto-append does not reach the torch_musa MUSAExtension compile path).
-+STABLE_INCLUDE_DIRS = INCLUDE_DIRS + [_ta_stable_inc()]
-+STABLE_COMPILE_ARGS = {
-+    "mcc": MCC_FLAGS + ["-DCUDA_VERSION=0", "-include", _STABLE_BOX_HEADER],
-+    "cxx": CXX_FLAGS + ["-include", _STABLE_BOX_HEADER],
-+}
-+STABLE_LINK_LIBRARIES = LINK_LIBRARIES + ["torch_cpu"]
-+
-+# =============================================================================
-+# Extension Modules
-+# =============================================================================
-+
-+EXT_MODULES = [
-+    CUDAExtension(
-+        name="vllm._C",
-+        sources=VLLM_CSRC_SOURCES,
-+        include_dirs=INCLUDE_DIRS,
-+        extra_compile_args=COMPILE_ARGS,
-+        libraries=LINK_LIBRARIES,
-+        extra_link_args=EXTRA_LINK_ARGS,
-+        py_limited_api=False,
-+    ),
-+    CUDAExtension(
-+        name="vllm._C_stable_libtorch",
-+        sources=VLLM_STABLE_CSRC_SOURCES,
-+        include_dirs=STABLE_INCLUDE_DIRS,
-+        extra_compile_args=STABLE_COMPILE_ARGS,
-+        libraries=STABLE_LINK_LIBRARIES,
-+        extra_link_args=EXTRA_LINK_ARGS,
-+        py_limited_api=False,
-+    ),
-+    CUDAExtension(
-+        name="vllm_musa._C",
-+        sources=VLLM_MUSA_CSRC_SOURCES,
-+        include_dirs=INCLUDE_DIRS,
-+        extra_compile_args=COMPILE_ARGS,
-+        libraries=LINK_LIBRARIES,
-+        extra_link_args=EXTRA_LINK_ARGS,
-+        py_limited_api=False,
-+    ),
-+    CUDAExtension(
-+        name="vllm._moe_C",
-+        sources=VLLM_MOE_CSRC_SOURCES,
-+        include_dirs=INCLUDE_DIRS,
-+        extra_compile_args=COMPILE_ARGS,
-+        libraries=LINK_LIBRARIES,
-+        extra_link_args=EXTRA_LINK_ARGS,
-+        py_limited_api=False,
-+    ),
-+]
-+
-+
-+class _CustomBuildExt(BuildExtension):
-+    """Custom build extension that clones third-party repositories before building."""
- 
-     @staticmethod
--    def detect_system_cuda_variant() -> str:
--        """Auto-detect CUDA variant from torch, nvidia-smi, or env default."""
--
--        # Map CUDA major version to hosted wheel variants on wheels.vllm.ai
--        supported = {12: "cu129", 13: "cu130"}
--
--        # Respect explicitly set VLLM_MAIN_CUDA_VERSION
--        if envs.is_set("VLLM_MAIN_CUDA_VERSION"):
--            v = envs.VLLM_MAIN_CUDA_VERSION
--            print(f"Using VLLM_MAIN_CUDA_VERSION={v}")
--            return "cu" + v.replace(".", "")[:3]
--
--        # Try torch.version.cuda
--        cuda_version = None
--        try:
--            import torch
--
--            cuda_version = torch.version.cuda
--        except Exception:
--            pass
--
--        # Try nvidia-smi
--        if not cuda_version:
-+    def _git_check_call_with_retries(cmd, cwd=None, cleanup_path=None):
-+        attempts = int(os.environ.get("VLLM_MUSA_GIT_RETRY_ATTEMPTS", "8"))
-+        delay_s = int(os.environ.get("VLLM_MUSA_GIT_RETRY_DELAY_S", "10"))
-+        for attempt in range(1, attempts + 1):
-             try:
--                out = subprocess.run(
--                    ["nvidia-smi"], capture_output=True, text=True, timeout=10
-+                subprocess.check_call(cmd, cwd=cwd)
-+                return
-+            except subprocess.CalledProcessError:
-+                if cleanup_path is not None:
-+                    shutil.rmtree(cleanup_path, ignore_errors=True)
-+                if attempt == attempts:
-+                    raise
-+                sleep_s = delay_s * attempt
-+                print(
-+                    f"Git command failed (attempt {attempt}/{attempts}); "
-+                    f"retrying in {sleep_s}s: {' '.join(map(str, cmd))}",
-+                    flush=True,
-                 )
--                if m := re.search(r"CUDA Version:\s*(\d+\.\d+)", out.stdout):
--                    cuda_version = m.group(1)
--            except Exception:
--                pass
--
--        # Fall back to default
--        if not cuda_version:
--            cuda_version = envs.VLLM_MAIN_CUDA_VERSION
--
--        # Map to supported variant
--        major = int(cuda_version.split(".")[0])
--        variant = supported.get(major, supported[max(supported)])
--        print(f"Detected CUDA {cuda_version}, using variant {variant}")
--        return variant
--
--    @staticmethod
--    def rocm_version_to_variant(rocm_version: str) -> str:
--        """Convert a ROCm version string to a wheel variant, e.g. 7.2.3 -> rocm723."""
--        return "rocm" + rocm_version.replace(".", "")
--
--    @staticmethod
--    def detect_system_rocm_variant() -> str | None:
--        """Auto-detect the ROCm wheel variant from the installed ROCm stack."""
--        rocm_version = get_rocm_version()
--        if not rocm_version:
--            try:
--                import torch
--
--                rocm_version = torch.version.hip
--            except Exception:
--                pass
--        if not rocm_version:
--            return None
--        variant = precompiled_wheel_utils.rocm_version_to_variant(rocm_version)
--        print(f"Detected ROCm {rocm_version}, using variant {variant}")
--        return variant
-+                time.sleep(sleep_s)
- 
-     @staticmethod
--    def fetch_available_rocm_variants(commit: str) -> list[str]:
--        """List ROCm wheel variants published for a commit on wheels.vllm.ai."""
--        from urllib.request import urlopen
--
--        index_url = f"https://wheels.vllm.ai/rocm/{commit}/"
--        print(f"Fetching available ROCm variants from {index_url}")
--        try:
--            with urlopen(index_url) as resp:
--                html = resp.read().decode("utf-8")
--        except Exception as e:
--            logger.warning(
--                "Failed to fetch ROCm variant index for commit %s: %s", commit, e
-+    def _clone_and_checkout(repo_path, repo_url, git_tag, git_shallow):
-+        """Clone a git repository and checkout a specific tag/commit."""
-+        repo_path.parent.mkdir(exist_ok=True)
-+        if not repo_path.exists():
-+            clone_cmd = ["git", "clone"]
-+            if git_shallow:
-+                clone_cmd += ["--depth", "1"]
-+            clone_cmd += [repo_url, str(repo_path)]
-+            _CustomBuildExt._git_check_call_with_retries(
-+                clone_cmd, cleanup_path=repo_path
-+            )
-+            subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
-+        else:
-+            _CustomBuildExt._git_check_call_with_retries(
-+                ["git", "fetch", "--all"], cwd=repo_path
-             )
--            return []
--        variants = sorted(set(re.findall(r"rocm\d+", html)))
--        print(f"Available ROCm variants for commit {commit}: {variants}")
--        return variants
-+            subprocess.check_call(["git", "checkout", git_tag], cwd=repo_path)
-+        subprocess.check_call(["git", "reset", "--hard", git_tag], cwd=repo_path)
-+        subprocess.check_call(["git", "clean", "-fdx"], cwd=repo_path)
- 
-     @staticmethod
--    def resolve_rocm_wheel_variant(
--        commit: str, variant_override: str | None
--    ) -> str | None:
--        """Resolve a ROCm wheel variant for a commit from wheels.vllm.ai."""
--        env_variant = precompiled_wheel_utils.detect_system_rocm_variant()
--        available = precompiled_wheel_utils.fetch_available_rocm_variants(commit)
--
--        if variant_override is not None:
--            if env_variant and variant_override != env_variant:
--                logger.warning(
--                    "VLLM_PRECOMPILED_WHEEL_VARIANT=%s does not match the "
--                    "detected environment ROCm variant %s; refusing to use a "
--                    "different ROCm patch wheel",
--                    variant_override,
--                    env_variant,
--                )
--                return None
--            if available and variant_override not in available:
--                logger.warning(
--                    "Requested ROCm variant %s is not available for commit %s "
--                    "(available: %s)",
--                    variant_override,
--                    commit,
--                    available,
--                )
--                return None
--            return variant_override
-+    def _install_vllm(repo_path):
-+        """Install the cloned + patched vLLM (editable) against the existing torch."""
-+        source_dir = Path(repo_path)
-+
-+        env = os.environ.copy()
-+        env["VLLM_TARGET_DEVICE"] = "empty"
-+
-+        # The exact upstream release commit is pinned in third_party/PINS, but
-+        # its local Git object set may not contain the corresponding tag.
-+        # Always provide the pinned release version so setuptools-scm does not
-+        # derive a stale development version from the nearest available tag.
-+        env.setdefault("VLLM_VERSION_OVERRIDE", "0.28.0")
-+
-+        # always editable; compat (path-based .pth) -- the default PEP 660 finder
-+        # mis-resolves vLLM's submodules and loses to a system vLLM.
-+        vllm_install_cmd = [
-+            sys.executable,
-+            "-m",
-+            "pip",
-+            "install",
-+            "-e",
-+            str(source_dir),
-+            "--config-settings",
-+            "editable_mode=compat",
-+            "--no-build-isolation",
-+            # MUSA: install against the in-container torch_musa. Without --no-deps
-+            # pip resolves transitive deps (compressed-tensors -> torch>=2.10) and
-+            # downloads the CUDA torch wheel, clobbering torch_musa.
-+            "--no-deps",
-+            "-v",
-+        ]
- 
--        if env_variant is None:
--            if available:
--                print(
--                    "Could not detect ROCm version from the environment; "
--                    f"available variants for commit {commit}: {available}"
--                )
--            return None
-+        steps = [
-+            {
-+                "name": "Install vllm use existing torch",
-+                "cmd": f"cd {source_dir} && python use_existing_torch.py",
-+                "shell": True,
-+                "env": None,
-+            },
-+            {
-+                "name": "Install vllm build requirements",
-+                "cmd": [
-+                    sys.executable,
-+                    "-m",
-+                    "pip",
-+                    "install",
-+                    "-r",
-+                    str(source_dir / "requirements" / "build" / "cuda.txt"),
-+                ],
-+                "shell": False,
-+                "env": None,
-+            },
-+            {
-+                "name": "Install vllm (editable)",
-+                "cmd": vllm_install_cmd,
-+                "shell": False,
-+                "env": env,
-+            },
-+        ]
- 
--        if env_variant in available:
--            return env_variant
-+        for step in steps:
-+            print(f"{step['name']}")
- 
--        logger.warning(
--            "Environment ROCm variant %s is not available for commit %s "
--            "(available: %s). Precompiled wheels may not be compatible.",
--            env_variant,
--            commit,
--            available,
--        )
--        return None
-+            if step["shell"]:
-+                print(f"Command: {step['cmd']}")
-+                subprocess.check_call(step["cmd"], shell=True, env=step["env"])
-+            else:
-+                print(f"Command: {' '.join(step['cmd'])}")
-+                subprocess.check_call(step["cmd"], env=step["env"])
- 
-     @staticmethod
--    def warn_if_rocm_torch_version_mismatch(
--        wheels: list[dict], repo_url: str, arch: str
--    ) -> None:
--        """Warn if installed torch differs from the custom ROCm build on
--        wheels.vllm.ai and suggest the correct install command."""
--        try:
--            installed = torch.__version__
--        except Exception:
-+    def _apply_musa_patch_series(repo_path):
-+        """Apply the vLLM-MUSA diff series to the clone at build time (the only
-+        source-patch mechanism). ``strict`` fails loudly on drift -- regenerate
-+        via ``make -f Makefile.sync``."""
-+        if os.environ.get("VLLM_MUSA_NO_BUILD_PATCH", "0") == "1":
-             return
--
--        def _wheel_version(pkg: str) -> str | None:
--            for w in wheels:
--                if w.get("package_name") == pkg and arch in w.get("platform_tag", ""):
--                    v = w["version"]
--                    if w.get("variant") and "+" not in v:
--                        v = f"{v}+{w['variant']}"
--                    return v
--            return None
--
--        expected = _wheel_version("torch")
--        if expected is None or installed == expected:
-+        repo = Path(repo_path)
-+        series = Path(root) / "vllm_musa" / "patches" / "series"
-+        if not repo.is_dir() or not series.is_dir():
-             return
-+        import importlib.util as _ilu
- 
--        pkgs = f"torch=={expected}"
--        triton_ver = _wheel_version("triton")
--        if triton_ver:
--            pkgs += f" triton=={triton_ver}"
--
--        logger.warning(
--            "Installed PyTorch %s does not match the custom build %s "
--            "shipped with vLLM ROCm wheels. The ABI may differ from "
--            "official releases. If you hit extension load errors, "
--            "reinstall from the vLLM index:\n"
--            "  pip install %s --extra-index-url %s\n"
--            "  uv pip install %s --extra-index-url %s "
--            "--index-strategy unsafe-best-match",
--            installed,
--            expected,
--            pkgs,
--            repo_url,
--            pkgs,
--            repo_url,
--        )
--
--    @staticmethod
--    def find_local_rocm_wheel() -> str | None:
--        """Search for a local vllm wheel in common locations."""
--        import glob
--
--        for pattern in ["/vllm-workspace/dist/vllm-*.whl", "./dist/vllm-*.whl"]:
--            wheels = glob.glob(pattern)
--            if wheels:
--                return sorted(wheels)[-1]
--        return None
--
--    @staticmethod
--    def fetch_wheel_from_pypi_index(index_url: str, package: str = "vllm") -> str:
--        """Fetch the latest wheel URL from a PyPI-style simple index."""
--        import platform
--        from html.parser import HTMLParser
--        from urllib.parse import urljoin
--        from urllib.request import urlopen
--
--        arch = platform.machine()
--
--        class WheelLinkParser(HTMLParser):
--            def __init__(self):
--                super().__init__()
--                self.wheels = []
--
--            def handle_starttag(self, tag, attrs):
--                if tag == "a":
--                    for name, value in attrs:
--                        if name == "href" and value.endswith(".whl"):
--                            self.wheels.append(value)
--
--        simple_url = f"{index_url.rstrip('/')}/{package}/"
--        print(f"Fetching wheel list from {simple_url}")
--        with urlopen(simple_url) as resp:
--            html = resp.read().decode("utf-8")
--
--        parser = WheelLinkParser()
--        parser.feed(html)
--
--        for wheel in reversed(parser.wheels):
--            if arch in wheel:
--                if wheel.startswith("http"):
--                    return wheel
--                return urljoin(simple_url, wheel)
--
--        raise ValueError(f"No compatible wheel found for {arch} at {simple_url}")
--
--    @staticmethod
--    def determine_wheel_url_rocm() -> tuple[str, str | None]:
--        """Determine the precompiled wheel for ROCm."""
--        # Search for local wheel first
--        local_wheel = precompiled_wheel_utils.find_local_rocm_wheel()
--        if local_wheel is not None:
--            print(f"Found local ROCm wheel: {local_wheel}")
--            return local_wheel, None
--
--        import platform
--
--        arch = platform.machine()
--        commit = os.getenv("VLLM_PRECOMPILED_WHEEL_COMMIT", "").lower()
--        if not commit or len(commit) != 40:
--            print(
--                f"VLLM_PRECOMPILED_WHEEL_COMMIT not valid: {commit}"
--                ", trying to fetch base commit in main branch"
--            )
--            commit = precompiled_wheel_utils.get_base_commit_in_main_branch()
--        variant = precompiled_wheel_utils.resolve_rocm_wheel_variant(
--            commit, os.getenv("VLLM_PRECOMPILED_WHEEL_VARIANT", None)
--        )
--        print(f"Using precompiled ROCm wheel commit {commit} with variant {variant}")
--        wheels, repo_url = None, None
--        if variant is not None:
--            try:
--                wheels, repo_url = precompiled_wheel_utils.fetch_metadata_for_variant(
--                    commit, variant, rocm=True
--                )
--                precompiled_wheel_utils.warn_if_rocm_torch_version_mismatch(
--                    wheels, repo_url, arch
--                )
--            except Exception as e:
--                logger.warning(
--                    "Failed to fetch ROCm wheel metadata for variant %s: %s",
--                    variant,
--                    e,
--                )
--        if wheels is not None and repo_url is not None:
--            from urllib.parse import urljoin
--
--            for wheel in wheels:
--                if wheel.get("package_name") == "vllm" and arch in wheel.get(
--                    "platform_tag", ""
--                ):
--                    print(f"Found precompiled wheel metadata: {wheel}")
--                    if "path" not in wheel:
--                        raise ValueError(f"Wheel metadata missing path: {wheel}")
--                    wheel_url = urljoin(f"{repo_url}vllm/", wheel["path"])
--                    download_filename = wheel.get("filename")
--                    print(f"Using precompiled wheel URL: {wheel_url}")
--                    return wheel_url, download_filename
--            logger.warning(
--                "No precompiled vllm wheel found for architecture %s "
--                "from repo %s. All available wheels: %s",
--                arch,
--                repo_url,
--                wheels,
--            )
--
--        # Fall back to AMD's PyPI index
--        index_url = os.getenv(
--            "VLLM_ROCM_WHEEL_INDEX", "https://pypi.amd.com/vllm-rocm/simple"
--        )
--        print(f"Fetching ROCm precompiled wheel from {index_url}")
--        wheel_url = precompiled_wheel_utils.fetch_wheel_from_pypi_index(index_url)
--        download_filename = wheel_url.split("/")[-1].split("#")[0]
--        print(f"Using ROCm precompiled wheel: {wheel_url}")
--        return wheel_url, download_filename
-+        ba_path = Path(root) / "vllm_musa" / "patches" / "build_apply.py"
-+        spec = _ilu.spec_from_file_location("_musa_build_apply", ba_path)
-+        ba = _ilu.module_from_spec(spec)
-+        spec.loader.exec_module(ba)
-+        for name, status in ba.apply_patch_series(repo, series, strict=True):
-+            print(f"MUSA build patch: {status:16} {name}")
- 
--    @staticmethod
--    def determine_wheel_url() -> tuple[str, str | None]:
--        """
--        Try to determine the precompiled wheel URL or path to use.
--        The order of preference is:
--        1. user-specified wheel location (can be either local or remote, via
--           VLLM_PRECOMPILED_WHEEL_LOCATION)
--        2. user-specified variant (VLLM_PRECOMPILED_WHEEL_VARIANT) from nightly repo
--           or CUDA variant selected from VLLM_MAIN_CUDA_VERSION, torch, or nvidia-smi
--
--        If downloading from the nightly repo, the commit can be specified via
--        VLLM_PRECOMPILED_WHEEL_COMMIT; otherwise, the head commit in the main branch
--        is used.
--        """
--        wheel_location = os.getenv("VLLM_PRECOMPILED_WHEEL_LOCATION", None)
--        if wheel_location is not None:
--            print(f"Using user-specified precompiled wheel location: {wheel_location}")
--            return wheel_location, None
-+    def run(self):
-+        if os.environ.get("SKIP_THIRD_PARTY", "0") == "1":
-+            print("Skipping third-party repositories cloning (SKIP_THIRD_PARTY=1)")
-         else:
--            # ROCm: resolve wheels from wheels.vllm.ai with environment-matched variant
--            if precompiled_wheel_utils.is_rocm_system():
--                return precompiled_wheel_utils.determine_wheel_url_rocm()
--
--            import platform
--
--            arch = platform.machine()
--            # try to fetch the wheel metadata from the nightly wheel repo,
--            # detecting CUDA variant from system if not specified
--            variant = os.getenv("VLLM_PRECOMPILED_WHEEL_VARIANT", None)
--            if variant is None:
--                variant = precompiled_wheel_utils.detect_system_cuda_variant()
--            commit = os.getenv("VLLM_PRECOMPILED_WHEEL_COMMIT", "").lower()
--            if not commit or len(commit) != 40:
--                print(
--                    f"VLLM_PRECOMPILED_WHEEL_COMMIT not valid: {commit}"
--                    ", trying to fetch base commit in main branch"
--                )
--                commit = precompiled_wheel_utils.get_base_commit_in_main_branch()
--            print(f"Using precompiled wheel commit {commit} with variant {variant}")
--            download_filename = None
--            try:
--                wheels, repo_url = precompiled_wheel_utils.fetch_metadata_for_variant(
--                    commit, variant
--                )
--            except Exception as e:
--                raise RuntimeError(
--                    "Failed to fetch precompiled wheel metadata for CUDA "
--                    f"variant {variant!r} at commit {commit}. The "
--                    "root/default variant is not used as a fallback because "
--                    "its CUDA compatibility with the selected variant cannot "
--                    "be verified. Provide a compatible wheel with "
--                    "VLLM_PRECOMPILED_WHEEL_LOCATION or disable "
--                    "VLLM_USE_PRECOMPILED to build from source."
--                ) from e
--            # The metadata.json has the following format:
--            # see .buildkite/scripts/generate-nightly-index.py for details
--            """[{
--    "package_name": "vllm",
--    "version": "0.11.2.dev278+gdbc3d9991",
--    "build_tag": null,
--    "python_tag": "cp38",
--    "abi_tag": "abi3",
--    "platform_tag": "manylinux1_x86_64",
--    "variant": null,
--    "filename": "vllm-0.11.2.dev278+gdbc3d9991-cp38-abi3-manylinux1_x86_64.whl",
--    "path": "../vllm-0.11.2.dev278%2Bgdbc3d9991-cp38-abi3-manylinux1_x86_64.whl"
--    },
--    ...]"""
--            from urllib.parse import urljoin
--
--            for wheel in wheels:
--                # TODO: maybe check more compatibility later? (python_tag, abi_tag, etc)
--                if wheel.get("package_name") == "vllm" and arch in wheel.get(
--                    "platform_tag", ""
--                ):
--                    print(f"Found precompiled wheel metadata: {wheel}")
--                    if "path" not in wheel:
--                        raise ValueError(f"Wheel metadata missing path: {wheel}")
--                    wheel_url = urljoin(repo_url, wheel["path"])
--                    download_filename = wheel.get("filename")
--                    print(f"Using precompiled wheel URL: {wheel_url}")
--                    break
--            else:
--                raise ValueError(
--                    f"No precompiled vllm wheel found for architecture {arch} "
--                    f"from repo {repo_url}. All available wheels: {wheels}"
--                )
--
--        return wheel_url, download_filename
--
--    @staticmethod
--    def extract_precompiled_and_patch_package(
--        wheel_url_or_path: str,
--        download_filename: str | None,
--        *,
--        extract_extensions: bool,
--        extract_rust_frontend: bool,
--    ) -> dict:
--        import tempfile
--        import zipfile
--
--        temp_dir = None
--        try:
--            if not os.path.isfile(wheel_url_or_path):
--                # use provided filename first, then derive from URL
--                wheel_filename = download_filename or wheel_url_or_path.split("/")[-1]
--                temp_dir = tempfile.mkdtemp(prefix="vllm-wheels")
--                wheel_path = os.path.join(temp_dir, wheel_filename)
--                print(f"Downloading wheel from {wheel_url_or_path} to {wheel_path}")
--                from urllib.request import urlretrieve
--
--                urlretrieve(wheel_url_or_path, filename=wheel_path)
--            else:
--                wheel_path = wheel_url_or_path
--                print(f"Using existing wheel at {wheel_path}")
--
--            package_data_patch = {}
--
--            with zipfile.ZipFile(wheel_path) as wheel:
--                exact_members = set()
--                if extract_extensions:
--                    exact_members.update(
--                        {
--                            "vllm/_C.abi3.so",
--                            "vllm/_C_stable_libtorch.abi3.so",
--                            "vllm/_moe_C_stable_libtorch.abi3.so",
--                            "vllm/_qutlass_C.abi3.so",
--                            "vllm/_flashmla_C.abi3.so",
--                            "vllm/_flashmla_extension_C.abi3.so",
--                            "vllm/_flashkda_C.abi3.so",
--                            "vllm/_sparse_flashmla_C.abi3.so",
--                            "vllm/_deepselect_C.abi3.so",
--                            "vllm/vllm_flash_attn/_vllm_fa2_C.abi3.so",
--                            "vllm/vllm_flash_attn/_vllm_fa3_C.abi3.so",
--                            "vllm/cumem_allocator.abi3.so",
--                            "vllm/spinloop.abi3.so",
--                            "vllm/fs_io_C.abi3.so",
--                            # ROCm-specific libraries
--                            "vllm/_rocm_C.abi3.so",
--                        }
--                    )
--                if extract_rust_frontend:
--                    exact_members.add("vllm/vllm-rs")
--
--                flash_attn_regex = re.compile(
--                    r"vllm/vllm_flash_attn/(?:[^/.][^/]*/)*(?!\.)[^/]*\.py"
--                )
--                # __init__.py and flash_attn_interface.py are source-controlled
--                # in vllm and should not be overwritten (matches cmake exclusions)
--                flash_attn_files_to_skip = {
--                    "vllm/vllm_flash_attn/__init__.py",
--                    "vllm/vllm_flash_attn/flash_attn_interface.py",
--                }
--                triton_kernels_regex = re.compile(
--                    r"vllm/third_party/triton_kernels/(?:[^/.][^/]*/)*(?!\.)[^/]*\.py"
--                )
--                flashmla_regex = re.compile(
--                    r"vllm/third_party/flashmla/(?:[^/.][^/]*/)*(?!\.)[^/]*\.py"
--                )
--                # DeepGEMM: extract all files (.py, .so, .cuh, .h, .hpp, etc.)
--                deep_gemm_regex = re.compile(r"vllm/third_party/deep_gemm/.*")
--                fmha_sm100_regex = re.compile(r"vllm/third_party/fmha_sm100/.*")
--                tml_fa4_regex = re.compile(r"vllm/third_party/tml_fa4/.*")
--                file_members = []
--                for member in wheel.filelist:
--                    if member.filename in exact_members:
--                        file_members.append(member)
--                        continue
--                    if (
--                        extract_rust_frontend
--                        and PRECOMPILED_RUST_EXTENSION_MEMBER_REGEX.match(
--                            member.filename
--                        )
--                    ):
--                        file_members.append(member)
--                        continue
--
--                    if not extract_extensions:
--                        continue
--
--                    if (
--                        (
--                            flash_attn_regex.match(member.filename)
--                            and member.filename not in flash_attn_files_to_skip
--                        )
--                        or triton_kernels_regex.match(member.filename)
--                        or flashmla_regex.match(member.filename)
--                        or deep_gemm_regex.match(member.filename)
--                        or tml_fa4_regex.match(member.filename)
--                        or fmha_sm100_regex.match(member.filename)
--                    ):
--                        file_members.append(member)
--
--                for file in file_members:
--                    print(f"[extract] {file.filename}")
--                    target_path = os.path.join(".", file.filename)
--                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
--                    with (
--                        wheel.open(file.filename) as src,
--                        open(target_path, "wb") as dst,
--                    ):
--                        shutil.copyfileobj(src, dst)
--                    mode = file.external_attr >> 16
--                    if mode:
--                        os.chmod(target_path, mode)
--
--                    pkg = os.path.dirname(file.filename).replace("/", ".")
--                    package_data_patch.setdefault(pkg, []).append(
--                        os.path.basename(file.filename)
--                    )
--
--            return package_data_patch
--        finally:
--            if temp_dir is not None:
--                print(f"Removing temporary directory {temp_dir}")
--                shutil.rmtree(temp_dir)
--
--    @staticmethod
--    def get_base_commit_in_main_branch() -> str:
--        try:
--            # Get the latest commit hash of the upstream main branch.
--            curl_cmd = [
--                "curl",
--                "-s",
--                "https://api.github.com/repos/vllm-project/vllm/commits/main",
--            ]
--            github_token = os.getenv("GH_TOKEN", os.getenv("GITHUB_TOKEN"))
--            if github_token:
--                curl_cmd += [
--                    "-H",
--                    f"Authorization: token {github_token}",
--                ]
--            resp_json = subprocess.check_output(curl_cmd).decode("utf-8")
--            upstream_main_commit = json.loads(resp_json)["sha"]
--            print(f"Upstream main branch latest commit: {upstream_main_commit}")
--
--            # In Docker build context, .git may be immutable or missing.
--            if envs.VLLM_DOCKER_BUILD_CONTEXT:
--                return upstream_main_commit
--
--            # Check if the upstream_main_commit exists in the local repo
--            try:
--                subprocess.check_output(
--                    ["git", "cat-file", "-e", f"{upstream_main_commit}"]
--                )
--            except subprocess.CalledProcessError:
--                # If not present, fetch it from the remote repository.
--                # Note that this does not update any local branches,
--                # but ensures that this commit ref and its history are
--                # available in our local repo.
--                subprocess.check_call(
--                    ["git", "fetch", "https://github.com/vllm-project/vllm", "main"]
--                )
--
--            # Then get the commit hash of the current branch that is the same as
--            # the upstream main commit.
--            current_branch = (
--                subprocess.check_output(["git", "branch", "--show-current"])
--                .decode("utf-8")
--                .strip()
--            )
--
--            base_commit = (
--                subprocess.check_output(
--                    ["git", "merge-base", f"{upstream_main_commit}", current_branch]
--                )
--                .decode("utf-8")
--                .strip()
-+            print("Cloning third-party repositories...")
-+            self._clone_and_checkout(
-+                _VLLM_REPO.source_dir,
-+                _VLLM_REPO.git_repository,
-+                _VLLM_REPO.git_tag,
-+                _VLLM_REPO.git_shallow,
-             )
--            return base_commit
--        except ValueError as err:
--            raise ValueError(err) from None
--        except Exception as err:
--            logger.warning(
--                "Failed to get the base commit in the main branch. "
--                "Using the nightly wheel. The libraries in this "
--                "wheel may not be compatible with your dev branch: %s",
--                err,
--            )
--            return "nightly"
--
--
--def _no_device() -> bool:
--    return VLLM_TARGET_DEVICE == "empty"
--
--
--def _is_cuda() -> bool:
--    has_cuda = torch.version.cuda is not None
--    return VLLM_TARGET_DEVICE == "cuda" and has_cuda and not _is_tpu()
--
--
--def _is_hip() -> bool:
--    return (
--        VLLM_TARGET_DEVICE == "cuda" or VLLM_TARGET_DEVICE == "rocm"
--    ) and torch.version.hip is not None
--
--
--def _is_tpu() -> bool:
--    return VLLM_TARGET_DEVICE == "tpu"
--
--
--def _is_cpu() -> bool:
--    return VLLM_TARGET_DEVICE == "cpu"
--
--
--def _is_xpu() -> bool:
--    return VLLM_TARGET_DEVICE == "xpu"
--
--
--def _build_custom_ops() -> bool:
--    return _is_cuda() or _is_hip()
--
--
--def get_rocm_version():
--    # Get the Rocm version from the ROCM_HOME/bin/librocm-core.so
--    # see https://github.com/ROCm/rocm-core/blob/d11f5c20d500f729c393680a01fa902ebf92094b/rocm_version.cpp#L21
--    try:
--        if ROCM_HOME is None:
--            return None
--        librocm_core_file = Path(ROCM_HOME) / "lib" / "librocm-core.so"
--        if not librocm_core_file.is_file():
--            return None
--        librocm_core = ctypes.CDLL(librocm_core_file)
--        VerErrors = ctypes.c_uint32
--        get_rocm_core_version = librocm_core.getROCmVersion
--        get_rocm_core_version.restype = VerErrors
--        get_rocm_core_version.argtypes = [
--            ctypes.POINTER(ctypes.c_uint32),
--            ctypes.POINTER(ctypes.c_uint32),
--            ctypes.POINTER(ctypes.c_uint32),
--        ]
--        major = ctypes.c_uint32()
--        minor = ctypes.c_uint32()
--        patch = ctypes.c_uint32()
--
--        if (
--            get_rocm_core_version(
--                ctypes.byref(major), ctypes.byref(minor), ctypes.byref(patch)
-+            self._clone_and_checkout(
-+                _FLASHINFER_REPO.source_dir,
-+                _FLASHINFER_REPO.git_repository,
-+                _FLASHINFER_REPO.git_tag,
-+                _FLASHINFER_REPO.git_shallow,
-             )
--            == 0
--        ):
--            return f"{major.value}.{minor.value}.{patch.value}"
--        return None
--    except Exception:
--        return None
--
--
--def get_nvcc_cuda_version() -> Version:
--    """Get the CUDA version from nvcc.
--
--    Adapted from https://github.com/NVIDIA/apex/blob/8b7a1ff183741dd8f9b87e7bafd04cfde99cea28/setup.py
--    """
--    assert CUDA_HOME is not None, "CUDA_HOME is not set"
--    nvcc_output = subprocess.check_output(
--        [CUDA_HOME + "/bin/nvcc", "-V"], universal_newlines=True
--    )
--    output = nvcc_output.split()
--    release_idx = output.index("release") + 1
--    nvcc_cuda_version = parse(output[release_idx].split(",")[0])
--    return nvcc_cuda_version
--
--
--def get_vllm_version() -> str:
--    # Allow overriding the version. This is useful to build platform-specific
--    # wheels (e.g. CPU, TPU) without modifying the source.
--    if env_version := os.getenv("VLLM_VERSION_OVERRIDE"):
--        print(f"Overriding VLLM version with {env_version} from VLLM_VERSION_OVERRIDE")
--        os.environ["SETUPTOOLS_SCM_PRETEND_VERSION"] = env_version
--        return get_version(write_to="vllm/_version.py")
--
--    version = get_version(write_to="vllm/_version.py")
--    sep = "+" if "+" not in version else "."  # dev versions might contain +
--
--    if _no_device():
--        if envs.VLLM_TARGET_DEVICE == "empty":
--            version += f"{sep}empty"
--    elif _is_cuda():
--        if USE_PRECOMPILED_EXTENSIONS and not envs.VLLM_SKIP_PRECOMPILED_VERSION_SUFFIX:
--            version += f"{sep}precompiled"
--        else:
--            cuda_version = str(get_nvcc_cuda_version())
--            if cuda_version != envs.VLLM_MAIN_CUDA_VERSION:
--                cuda_version_str = cuda_version.replace(".", "")[:3]
--                # skip this for source tarball, required for pypi
--                if "sdist" not in sys.argv:
--                    version += f"{sep}cu{cuda_version_str}"
--    elif _is_hip():
--        # Get the Rocm Version
--        rocm_version = get_rocm_version() or torch.version.hip
--        if rocm_version and rocm_version != envs.VLLM_MAIN_CUDA_VERSION:
--            version += f"{sep}rocm{rocm_version.replace('.', '')[:3]}"
--    elif _is_tpu():
--        version += f"{sep}tpu"
--    elif _is_cpu():
--        # Check the local VLLM_TARGET_DEVICE (may be set by auto-detect above),
--        # not envs.VLLM_TARGET_DEVICE, so CPU-only hosts still get `+cpu`.
--        if VLLM_TARGET_DEVICE == "cpu":
--            version += f"{sep}cpu"
--    elif _is_xpu():
--        version += f"{sep}xpu"
--    else:
--        raise RuntimeError("Unknown runtime environment")
--
--    return version
--
--
--def get_requirements() -> list[str]:
--    """Get Python package dependencies from requirements.txt."""
--    requirements_dir = ROOT_DIR / "requirements"
--
--    def _read_requirements(filename: str) -> list[str]:
--        with open(requirements_dir / filename) as f:
--            requirements = f.read().strip().split("\n")
--        resolved_requirements = []
--        for line in requirements:
--            if line.startswith("-r "):
--                resolved_requirements += _read_requirements(line.split()[1])
--            elif (
--                not line.startswith("--")
--                and not line.startswith("#")
--                and line.strip() != ""
--            ):
--                resolved_requirements.append(line)
--        return resolved_requirements
--
--    if _no_device():
--        requirements = _read_requirements("common.txt")
--    elif _is_cuda():
--        requirements = _read_requirements("cuda.txt")
--        cuda_major, cuda_minor = torch.version.cuda.split(".")
--        modified_requirements = []
--        for req in requirements:
--            if "vllm-flash-attn" in req and cuda_major != "12":
--                # vllm-flash-attn is built only for CUDA 12.x.
--                # Skip for other versions.
--                continue
--            if "flashinfer-cubin" in req:
--                # Not on PyPI since 0.6.14 (only https://flashinfer.ai/whl), so
--                # it cannot be a wheel dependency; flashinfer falls back to
--                # fetching cubins at runtime when the package is absent.
--                continue
--            if "nvidia-cutlass-dsl[cu13]" in req and cuda_major == "12":
--                # [cu13] extra is the default; strip it on CUDA 12 builds.
--                req = req.replace("nvidia-cutlass-dsl[cu13]", "nvidia-cutlass-dsl")
--            if "humming-kernels[cu13]" in req and cuda_major == "12":
--                req = req.replace("humming-kernels[cu13]", "humming-kernels[cu12]")
--            modified_requirements.append(req)
--        requirements = modified_requirements
--    elif _is_hip():
--        requirements = _read_requirements("rocm.txt")
--    elif _is_tpu():
--        requirements = _read_requirements("tpu.txt")
--    elif _is_cpu():
--        requirements = _read_requirements("cpu.txt")
--    elif _is_xpu():
--        requirements = _read_requirements("xpu.txt")
--    else:
--        raise ValueError("Unsupported platform, please use CUDA, ROCm, or CPU.")
--    return requirements
--
--
--ext_modules = []
--
--if _is_cuda() or _is_hip():
--    ext_modules.append(CMakeExtension(name="vllm.cumem_allocator"))
--    # Optional since this doesn't get built (produce an .so file). This is just
--    # copying the relevant .py files from the source repository.
--    ext_modules.append(CMakeExtension(name="vllm.triton_kernels", optional=True))
--
--if not _is_xpu() and sys.version_info >= (3, 11):
--    ext_modules.append(CMakeExtension(name="vllm.spinloop"))
--    ext_modules.append(CMakeExtension(name="vllm.fs_io_C"))
--
--if _is_hip():
--    ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
--
--if _is_cuda():
--    ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa2_C"))
--    if USE_PRECOMPILED_EXTENSIONS or (
--        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.3")
--    ):
--        # FA3 requires CUDA 12.3 or later
--        ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa3_C"))
--    # FA4 CuteDSL - Python-only component for FA4's cute DSL support
--    # Optional since this doesn't produce a .so file, just copies Python files
--    ext_modules.append(
--        CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa4_cutedsl_C", optional=True)
--    )
--    if USE_PRECOMPILED_EXTENSIONS or (
--        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.9")
--    ):
--        # FlashMLA requires CUDA 12.9 or later
--        # Optional since this doesn't get built (produce an .so file) when
--        # not targeting a hopper system
--        ext_modules.append(CMakeExtension(name="vllm._flashmla_C", optional=True))
--        ext_modules.append(
--            CMakeExtension(name="vllm._flashmla_extension_C", optional=True)
--        )
--        # DeepSelect requires CUDA 12.9 or later (SM100a/SM103a only)
--        # Optional since it won't build on unsupported architectures
--        ext_modules.append(CMakeExtension(name="vllm._deepselect_C", optional=True))
--    if USE_PRECOMPILED_EXTENSIONS or (
--        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.0")
--    ):
--        ext_modules.append(CMakeExtension(name="vllm._flashkda_C", optional=True))
--    if envs.VLLM_USE_PRECOMPILED or (
--        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.3")
--    ):
--        # DeepGEMM requires CUDA 12.3+ (SM90/SM100)
--        # Optional since it won't build on unsupported architectures
--        ext_modules.append(CMakeExtension(name="vllm._deep_gemm_C", optional=True))
--        ext_modules.append(CMakeExtension(name="vllm._qutlass_C", optional=True))
--    # fmha_sm100 is a Python/CuTe-DSL package installed into vllm.third_party.
--    ext_modules.append(CMakeExtension(name="vllm.fmha_sm100", optional=True))
--    # tml-fa4 is copied into an isolated vllm.third_party package.
--    ext_modules.append(CMakeExtension(name="vllm.tml_fa4", optional=True))
--
--if _is_cpu():
--    import platform
--
--    if platform.machine() in ("x86_64", "AMD64"):
--        ext_modules.append(CMakeExtension(name="vllm._C"))
--        ext_modules.append(CMakeExtension(name="vllm._C_AVX512"))
--        ext_modules.append(CMakeExtension(name="vllm._C_AVX2"))
--    else:
--        ext_modules.append(CMakeExtension(name="vllm._C"))
--
--if _build_custom_ops():
--    if _is_hip():
--        ext_modules.append(CMakeExtension(name="vllm._C"))
--    if _is_cuda() or _is_hip():
--        ext_modules.append(CMakeExtension(name="vllm._C_stable_libtorch"))
--        ext_modules.append(CMakeExtension(name="vllm._moe_C_stable_libtorch"))
--
--package_data = {
--    "vllm": [
--        "py.typed",
--        "libs/*.so*",
--        "model_executor/layers/fused_moe/configs/*.json",
--        "model_executor/layers/quantization/utils/configs/*.json",
--        "entrypoints/serve/instrumentator/static/*.js",
--        "entrypoints/serve/instrumentator/static/*.css",
--        "distributed/kv_transfer/kv_connector/v1/hf3fs/utils/*.cpp",
--        # Built-in multimodal chat template fallbacks (registry.py)
--        "transformers_utils/chat_templates/*.jinja",
--        "third_party/flash_linear_attention/LICENSE",
--        # DeepGEMM JIT include headers (vendored via cmake)
--        "third_party/deep_gemm/include/**/*.cuh",
--        "third_party/deep_gemm/include/**/*.h",
--        "third_party/deep_gemm/include/**/*.hpp",
--        # fmha_sm100 sparse CuTe-DSL helper kernels (vendored via cmake)
--        "third_party/fmha_sm100/csrc/**/*.cu",
--        "third_party/fmha_sm100/csrc/**/*.h",
--        "third_party/fmha_sm100/csrc/**/*.jinja",
--        "third_party/fmha_sm100/csrc/**/*.cu.jinja",
--        "third_party/fmha_sm100/cute/**/*.cu",
--        "third_party/fmha_sm100/cutlass/include/**/*.h",
--        "third_party/fmha_sm100/cutlass/include/**/*.hpp",
--        "third_party/fmha_sm100/cutlass/tools/util/include/**/*.h",
--        "third_party/fmha_sm100/cutlass/tools/util/include/**/*.hpp",
--    ]
--}
--
--
--def add_vllm_package_data(filename: str) -> None:
--    vllm_files = package_data.setdefault("vllm", [])
--    if filename not in vllm_files:
--        vllm_files.append(filename)
-+            print("Third-party repositories ready.")
- 
-+        # patch the clone BEFORE installing, so the installed vLLM is pre-patched.
-+        self._apply_musa_patch_series(_VLLM_REPO.source_dir)
- 
--# PEP 517 invokes setup.py for metadata before invoking the actual build.
--if USE_PRECOMPILED_RUST_FRONTEND and not is_metadata_only_build():
--    wheel_url, download_filename = precompiled_wheel_utils.determine_wheel_url()
--    patch = precompiled_wheel_utils.extract_precompiled_and_patch_package(
--        wheel_url,
--        download_filename,
--        extract_extensions=USE_PRECOMPILED_EXTENSIONS,
--        extract_rust_frontend=True,
--    )
--    for pkg, files in patch.items():
--        package_data.setdefault(pkg, []).extend(files)
--
--# If the rust frontend binary is already present in the source tree (e.g.,
--# pre-built in a separate Docker build stage), ship it as-is.
--if PRECOMPILED_RUST_FRONTEND_PATH.exists():
--    add_vllm_package_data("vllm-rs")
--for rust_extension_path in get_precompiled_rust_extension_paths():
--    add_vllm_package_data(rust_extension_path.name)
-+        self._install_vllm(_VLLM_REPO.source_dir)
- 
--if _no_device():
--    ext_modules = []
-+        super().run()
- 
--if not ext_modules:
--    cmdclass = {}
--else:
--    cmdclass = {
--        "build_ext": precompiled_build_ext
--        if USE_PRECOMPILED_EXTENSIONS
--        else cmake_build_ext,
--    }
--if (
--    USE_PRECOMPILED_RUST_FRONTEND
--    or PRECOMPILED_RUST_FRONTEND_PATH.exists()
--    or has_precompiled_rust_extensions()
--):
--    cmdclass["build_rust"] = precompiled_build_rust
--
--# Resolve the Python version first because get_vllm_version() may set
--# SETUPTOOLS_SCM_PRETEND_VERSION, which the Rust version should inherit.
--vllm_version = get_vllm_version()
--rust_build.prepare_build_environment()
--
--# Rust artifacts, built via setuptools-rust and installed into the package
--# directory alongside the Python modules.
--rust_extensions = rust_build.rust_extensions(
--    optional=not should_require_rust_frontend()
--)
- 
- setup(
--    # static metadata should rather go in pyproject.toml
--    version=vllm_version,
--    ext_modules=ext_modules,
--    rust_extensions=rust_extensions,
--    install_requires=get_requirements(),
--    extras_require={
--        # AMD Zen CPU optimizations via zentorch
--        "zen": ["zentorch==2.13.0.0"],
--        "bench": ["pandas", "matplotlib", "seaborn", "datasets", "scipy", "plotly"],
--        "tensorizer": ["tensorizer==2.10.1"],
--        "fastsafetensors": ["fastsafetensors >= 0.3.3"],
--        "instanttensor": ["instanttensor >= 0.1.9"],
--        "runai": ["runai-model-streamer[s3,gcs,azure] >= 0.15.7"],
--        "audio": [
--            "av",
--            "scipy",
--            "soundfile",
--            "soxr",
--            "mistral_common[audio]",
--        ],  # Required for audio processing
--        "video": [],  # Kept for backwards compatibility
--        # NVIDIA DeepStream (NVDEC) GPU video-decode backend. Linux x86-64
--        # only; also needs system GStreamer + libv4l (see docs).
--        "deepstream": ["nvidia-deepstream-videodecode-cu13>=9.0.2"],
--        "flashinfer": [],  # Kept for backwards compatibility
--        "b12x": ["b12x==1.3.0"],
--        # Optional deps for Helion kernel development
--        # NOTE: When updating helion version, also update CI files:
--        #   - .buildkite/test_areas/kernels.yaml
--        #   - .buildkite/test-amd.yaml
--        "helion": ["helion==1.4.0"],
--        # Optional deps for gRPC server (vllm serve --grpc)
--        "grpc": ["smg-grpc-servicer[vllm] >= 0.5.2"],
--        # Optional deps for OpenTelemetry tracing
--        "otel": [
--            "opentelemetry-sdk>=1.26.0",
--            "opentelemetry-api>=1.26.0",
--            "opentelemetry-exporter-otlp>=1.26.0",
--            "opentelemetry-semantic-conventions-ai>=0.4.1",
--        ],
--        # extra quantization plugin
--        "extra-quant": ["vllm-gguf-plugin>=0.0.2"],
--    },
--    cmdclass=cmdclass,
--    package_data=package_data,
-+    ext_modules=EXT_MODULES,
-+    cmdclass={"build_ext": _CustomBuildExt.with_options(use_ninja=True)},
-+    include_package_data=False,
-+    # Runtime dependencies live in requirements/musa.txt so Docker and package
-+    # metadata share one source. MUSA-private pins, including torch/torch_musa,
-+    # are kept in requirements/musa_private.txt.
-+    install_requires=_read_requirements("musa.txt"),
- )
-+
-+# place the built vllm.* extensions into the editable vLLM clone (see the function).
-+develop_dynamic_library("vllm", target_override=_VLLM_REPO.source_dir / "vllm")
 diff --git a/tests/kernels/ir/test_gated_qkv.py b/tests/kernels/ir/test_gated_qkv.py
 new file mode 100644
-index 0000000..96919a3
+index 000000000..96919a35b
 --- /dev/null
 +++ b/tests/kernels/ir/test_gated_qkv.py
 @@ -0,0 +1,159 @@
@@ -5421,7 +3439,7 @@ index 0000000..96919a3
 +    with pytest.raises(ValueError, match="packed_qkv last dimension"):
 +        native(*args)
 diff --git a/tests/test_config.py b/tests/test_config.py
-index f75592f..f0818b4 100644
+index f75592f08..f0818b43d 100644
 --- a/tests/test_config.py
 +++ b/tests/test_config.py
 @@ -3415,6 +3415,7 @@ def test_ir_op_priority_default():
@@ -5441,7 +3459,7 @@ index f75592f..f0818b4 100644
  
  @pytest.mark.parametrize("mode", [CompilationMode.NONE, CompilationMode.VLLM_COMPILE])
 diff --git a/tests/tokenizers_/test_registry.py b/tests/tokenizers_/test_registry.py
-index b7201c1..53dee37 100644
+index b7201c1cf..53dee37c0 100644
 --- a/tests/tokenizers_/test_registry.py
 +++ b/tests/tokenizers_/test_registry.py
 @@ -3,7 +3,7 @@
@@ -5486,7 +3504,7 @@ index b7201c1..53dee37 100644
 +    assert tokenizer is fake_tokenizer
 +    load_fast.assert_called_once()
 diff --git a/tests/utils_/test_mem_utils.py b/tests/utils_/test_mem_utils.py
-index 19690d1..c96b747 100644
+index 19690d1f3..c96b74795 100644
 --- a/tests/utils_/test_mem_utils.py
 +++ b/tests/utils_/test_mem_utils.py
 @@ -5,11 +5,33 @@ from unittest.mock import MagicMock, patch
@@ -5525,7 +3543,7 @@ index 19690d1..c96b747 100644
  def test_memory_profiling():
      # Fake out some model loading + inference memory usage to test profiling
 diff --git a/tests/v1/attention/test_gdn_metadata_builder.py b/tests/v1/attention/test_gdn_metadata_builder.py
-index 221f933..2368cec 100644
+index 221f933d8..2368cec1a 100644
 --- a/tests/v1/attention/test_gdn_metadata_builder.py
 +++ b/tests/v1/attention/test_gdn_metadata_builder.py
 @@ -221,3 +221,22 @@ def test_full_cudagraph_spec_metadata_uses_request_count():
@@ -5552,7 +3570,7 @@ index 221f933..2368cec 100644
 +    )
 +    assert common._num_computed_tokens_cache is None
 diff --git a/tests/v1/sample/test_rejection_sampler.py b/tests/v1/sample/test_rejection_sampler.py
-index b02e53a..e2e9b83 100644
+index b02e53af8..e2e9b83fd 100644
 --- a/tests/v1/sample/test_rejection_sampler.py
 +++ b/tests/v1/sample/test_rejection_sampler.py
 @@ -14,6 +14,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
@@ -5625,7 +3643,7 @@ index b02e53a..e2e9b83 100644
  def test_frequency_penalties(rejection_sampler):
      """Test rejection sampling with frequency penalties"""
 diff --git a/vllm/compilation/backends.py b/vllm/compilation/backends.py
-index 439a87e..8745d27 100644
+index 439a87e15..8745d273d 100644
 --- a/vllm/compilation/backends.py
 +++ b/vllm/compilation/backends.py
 @@ -11,7 +11,7 @@ import pprint
@@ -5666,7 +3684,7 @@ index 439a87e..8745d27 100644
              VllmSerializableFunction,
          )
 diff --git a/vllm/compilation/caching.py b/vllm/compilation/caching.py
-index 94456fc..e205f57 100644
+index 94456fc18..e205f5735 100644
 --- a/vllm/compilation/caching.py
 +++ b/vllm/compilation/caching.py
 @@ -12,7 +12,16 @@ from unittest.mock import patch
@@ -5697,7 +3715,7 @@ index 94456fc..e205f57 100644
      @classmethod
      def deserialize_graph_module(
 diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
-index 4a65376..abeaaf4 100644
+index 4a65376ca..abeaaf4c2 100644
 --- a/vllm/compilation/passes/pass_manager.py
 +++ b/vllm/compilation/passes/pass_manager.py
 @@ -48,10 +48,15 @@ if current_platform.is_cuda_alike():
@@ -5728,7 +3746,7 @@ index 4a65376..abeaaf4 100644
                  if rocm_aiter_ops.is_enabled():
                      self.passes += [RocmAiterAllReduceFusionPass(config)]
 diff --git a/vllm/compilation/piecewise_backend.py b/vllm/compilation/piecewise_backend.py
-index b647e0d..d89472d 100644
+index b647e0d85..d89472d13 100644
 --- a/vllm/compilation/piecewise_backend.py
 +++ b/vllm/compilation/piecewise_backend.py
 @@ -6,6 +6,7 @@ import io
@@ -5754,7 +3772,7 @@ index b647e0d..d89472d 100644
  
                  f = io.BytesIO()
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
-index 0ac5bf4..1dc117f 100644
+index 0ac5bf439..1dc117f89 100644
 --- a/vllm/config/kernel.py
 +++ b/vllm/config/kernel.py
 @@ -32,6 +32,7 @@ class IrOpPriorityConfig:
@@ -5766,7 +3784,7 @@ index 0ac5bf4..1dc117f 100644
  
      gelu_and_mul_sparse: list[str] = Field(default_factory=list)
 diff --git a/vllm/config/model.py b/vllm/config/model.py
-index 89978c3..332861d 100644
+index 89978c35d..332861d9d 100644
 --- a/vllm/config/model.py
 +++ b/vllm/config/model.py
 @@ -1014,8 +1014,13 @@ class ModelConfig:
@@ -5786,7 +3804,7 @@ index 89978c3..332861d 100644
          if self.runner != "auto":
              runner = self.runner
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index 8e08469..a4cfdf6 100644
+index 8e0846982..a4cfdf6f1 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
 @@ -696,7 +696,8 @@ class VllmConfig:
@@ -5800,7 +3818,7 @@ index 8e08469..a4cfdf6 100644
              if any(arch in ROCM_DEFAULT_MRV1_ARCHITECTURES for arch in architectures):
                  logger.warning_once(
 diff --git a/vllm/distributed/device_communicators/all2all.py b/vllm/distributed/device_communicators/all2all.py
-index 080e7fe..96f08f1 100644
+index 080e7feef..96f08f1f2 100644
 --- a/vllm/distributed/device_communicators/all2all.py
 +++ b/vllm/distributed/device_communicators/all2all.py
 @@ -203,11 +203,23 @@ class DeepEPAll2AllManagerBase(All2AllManagerBase):
@@ -5846,7 +3864,7 @@ index 080e7fe..96f08f1 100644
          )
          return kwargs
 diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
-index 4afc28f..6e510bd 100644
+index 4afc28f65..6e510bd0a 100644
 --- a/vllm/distributed/device_communicators/cuda_communicator.py
 +++ b/vllm/distributed/device_communicators/cuda_communicator.py
 @@ -142,13 +142,37 @@ class CudaCommunicator(DeviceCommunicatorBase):
@@ -5895,7 +3913,7 @@ index 4afc28f..6e510bd 100644
          # AITER custom all-gather/reduce-scatter DP-attention dispatch/combine
          if (
 diff --git a/vllm/distributed/device_communicators/custom_all_reduce.py b/vllm/distributed/device_communicators/custom_all_reduce.py
-index 6c15a98..37d929a 100644
+index 6c15a9827..37d929a4d 100644
 --- a/vllm/distributed/device_communicators/custom_all_reduce.py
 +++ b/vllm/distributed/device_communicators/custom_all_reduce.py
 @@ -122,7 +122,7 @@ class CustomAllreduce:
@@ -5916,7 +3934,7 @@ index 6c15a98..37d929a 100644
          ):
              logger.warning(
 diff --git a/vllm/distributed/kv_transfer/kv_connector/utils.py b/vllm/distributed/kv_transfer/kv_connector/utils.py
-index 93552d5..bae93ef 100644
+index 93552d51b..bae93efbf 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/utils.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/utils.py
 @@ -22,10 +22,12 @@ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
@@ -5933,7 +3951,7 @@ index 93552d5..bae93ef 100644
  logger = init_logger(__name__)
  
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
-index 4451f05..48dd286 100644
+index 4451f0566..48dd2869c 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
 @@ -1113,7 +1113,9 @@ class MooncakeConnectorWorker:
@@ -5948,7 +3966,7 @@ index 4451f05..48dd286 100644
              self._sender_executor.shutdown(wait=False)
              if self.sender_loop.is_running():
 diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
-index dc3022a..7cdf931 100644
+index dc3022a16..7cdf9310e 100644
 --- a/vllm/distributed/parallel_state.py
 +++ b/vllm/distributed/parallel_state.py
 @@ -1871,7 +1871,7 @@ def init_distributed_environment(
@@ -5986,7 +4004,7 @@ index dc3022a..7cdf931 100644
              tp_pp_cpu_group = torch.distributed.new_group(
                  backend="gloo", timeout=timeout
 diff --git a/vllm/ir/ops/__init__.py b/vllm/ir/ops/__init__.py
-index 13e2b7d..aeaf063 100644
+index 13e2b7dda..aeaf063d7 100644
 --- a/vllm/ir/ops/__init__.py
 +++ b/vllm/ir/ops/__init__.py
 @@ -1,6 +1,7 @@
@@ -6000,7 +4018,7 @@ index 13e2b7d..aeaf063 100644
 +__all__ = ["rms_norm", "fused_add_rms_norm", "gelu_and_mul_sparse", "gated_qkv_rms_norm_rope"]
 diff --git a/vllm/ir/ops/gated_qkv.py b/vllm/ir/ops/gated_qkv.py
 new file mode 100644
-index 0000000..a293942
+index 000000000..a293942fb
 --- /dev/null
 +++ b/vllm/ir/ops/gated_qkv.py
 @@ -0,0 +1,218 @@
@@ -6223,7 +4241,7 @@ index 0000000..a293942
 +        weight_offset,
 +    )
 diff --git a/vllm/ir/tolerances.py b/vllm/ir/tolerances.py
-index a794a93..0108aa5 100644
+index a794a9397..0108aa590 100644
 --- a/vllm/ir/tolerances.py
 +++ b/vllm/ir/tolerances.py
 @@ -29,7 +29,7 @@ DEFAULT_TOLERANCES: ToleranceSpec = {
@@ -6236,7 +4254,7 @@ index a794a93..0108aa5 100644
      # rtol=0 because relative error is meaningless for small integers.
      torch.int8: {"atol": 1, "rtol": 0},
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index d3c41f9..2825846 100644
+index d3c41f97d..2825846ef 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
 @@ -675,7 +675,34 @@ def choose_scaled_mm_linear_kernel(
@@ -6276,7 +4294,7 @@ index d3c41f9..2825846 100644
      # Apply --linear-backend filtering when set.
      platform_kernels = _resolve_backend_kernels(
 diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
-index cea186e..27336e5 100644
+index cea186e49..27336e58c 100644
 --- a/vllm/model_executor/kernels/mhc/tilelang.py
 +++ b/vllm/model_executor/kernels/mhc/tilelang.py
 @@ -577,6 +577,26 @@ def mhc_pre_tilelang(
@@ -6385,7 +4403,7 @@ index cea186e..27336e5 100644
          _MHC_FUSED_TILELANG_KERNEL,
          _MHC_POST_TILELANG_KERNEL,
 diff --git a/vllm/model_executor/layers/attention/attention.py b/vllm/model_executor/layers/attention/attention.py
-index a001c8c..003f8ad 100644
+index a001c8c29..003f8ad0d 100644
 --- a/vllm/model_executor/layers/attention/attention.py
 +++ b/vllm/model_executor/layers/attention/attention.py
 @@ -492,6 +492,7 @@ class Attention(nn.Module, AttentionLayerBase):
@@ -6430,7 +4448,7 @@ index a001c8c..003f8ad 100644
                  kv_cache_dummy_dep = torch.ops.vllm.unified_kv_cache_update(
                      key, value, encoded
 diff --git a/vllm/model_executor/layers/fused_moe/activation.py b/vllm/model_executor/layers/fused_moe/activation.py
-index d83301b..660080a 100644
+index d83301bed..660080a24 100644
 --- a/vllm/model_executor/layers/fused_moe/activation.py
 +++ b/vllm/model_executor/layers/fused_moe/activation.py
 @@ -351,6 +351,12 @@ def apply_moe_activation(
@@ -6447,7 +4465,7 @@ index d83301b..660080a 100644
              torch.ops._C.silu_and_mul(output, input)
      elif activation == MoEActivation.GELU:
 diff --git a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
-index 211364d..f0179e4 100644
+index 211364d24..f0179e4a0 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 @@ -355,9 +355,12 @@ class DeepGemmExperts(mk.FusedMoEExpertsModular):
@@ -6479,7 +4497,7 @@ index 211364d..f0179e4 100644
                  expert_ids,
                  **gemm_kwargs,
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index dc619b2..85ce473 100644
+index dc619b2b1..85ce47371 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
 @@ -33,6 +33,7 @@ from vllm.model_executor.layers.fused_moe.utils import (
@@ -6738,7 +4756,7 @@ index dc619b2..85ce473 100644
  
      return out_hidden_states
 diff --git a/vllm/model_executor/layers/fused_moe/routed_experts.py b/vllm/model_executor/layers/fused_moe/routed_experts.py
-index 2dafb6c..0305a53 100644
+index 2dafb6c49..0305a535c 100644
 --- a/vllm/model_executor/layers/fused_moe/routed_experts.py
 +++ b/vllm/model_executor/layers/fused_moe/routed_experts.py
 @@ -456,6 +456,39 @@ class RoutedExperts(PluggableLayer):
@@ -6846,7 +4864,7 @@ index 2dafb6c..0305a53 100644
          hidden_dim = self._get_hidden_dim(shard_dim, expert_data.ndim)
          expert_data = self._narrow_expert_data_for_padding(
 diff --git a/vllm/model_executor/layers/fused_moe/router/gate_linear.py b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
-index 1f086b4..c752666 100644
+index 1f086b448..c75266615 100644
 --- a/vllm/model_executor/layers/fused_moe/router/gate_linear.py
 +++ b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
 @@ -165,6 +165,28 @@ class GateLinear(ReplicatedLinear):
@@ -6879,7 +4897,7 @@ index 1f086b4..c752666 100644
          if self.allow_ll_bf16_gemm and x.shape[0] <= 16 and x.dtype == torch.bfloat16:
              from vllm.model_executor.kernels.linear.cute_dsl.ll_bf16 import (
 diff --git a/vllm/model_executor/layers/layernorm.py b/vllm/model_executor/layers/layernorm.py
-index cded9da..5746c14 100644
+index cded9daf1..5746c1481 100644
 --- a/vllm/model_executor/layers/layernorm.py
 +++ b/vllm/model_executor/layers/layernorm.py
 @@ -157,7 +157,9 @@ class GemmaRMSNorm(CustomOp):
@@ -6894,7 +4912,7 @@ index cded9da..5746c14 100644
      def forward_cuda(
          self,
 diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
-index 694bb6b..c351963 100644
+index 694bb6b03..c35196331 100644
 --- a/vllm/model_executor/layers/logits_processor.py
 +++ b/vllm/model_executor/layers/logits_processor.py
 @@ -10,7 +10,10 @@ import torch.nn.functional as F
@@ -7018,7 +5036,7 @@ index 694bb6b..c351963 100644
          num_pad = lm_head.shard_indices.num_org_vocab_padding
          if num_pad > 0:
 diff --git a/vllm/model_executor/layers/mamba/abstract.py b/vllm/model_executor/layers/mamba/abstract.py
-index 10ed7d0..a13b8ab 100644
+index 10ed7d05f..a13b8ab1a 100644
 --- a/vllm/model_executor/layers/mamba/abstract.py
 +++ b/vllm/model_executor/layers/mamba/abstract.py
 @@ -26,12 +26,24 @@ class MambaBase(AttentionLayerBase):
@@ -7048,7 +5066,7 @@ index 10ed7d0..a13b8ab 100644
          states: list[torch.Tensor] = []
          offset = 0
 diff --git a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
-index bd554ed..33514fe 100644
+index bd554ede5..33514fe15 100644
 --- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
 +++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
 @@ -14,8 +14,50 @@ from vllm.triton_utils import tl, triton
@@ -7197,7 +5215,7 @@ index bd554ed..33514fe 100644
          D_HAS_HDIM=D.dim() == 2 if D is not None else True,
          HAS_Z=z is not None,
 diff --git a/vllm/model_executor/layers/mhc.py b/vllm/model_executor/layers/mhc.py
-index 73993fb..3d24941 100644
+index 73993fbc9..3d24941e5 100644
 --- a/vllm/model_executor/layers/mhc.py
 +++ b/vllm/model_executor/layers/mhc.py
 @@ -222,6 +222,22 @@ class MHCPreOp(CustomOp):
@@ -7275,7 +5293,7 @@ index 73993fb..3d24941 100644
          residual_cur = mhc_kernels.mhc_post_torch(
              x, residual, post_layer_mix, comb_res_mix
 diff --git a/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py b/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
-index afae19c..37dd63e 100644
+index afae19c75..37dd63eca 100644
 --- a/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
 +++ b/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
 @@ -13,7 +13,15 @@ import torch
@@ -7308,7 +5326,7 @@ index afae19c..37dd63e 100644
          assert comm_size > 0, "comm_size must be positive"
  
 diff --git a/vllm/model_executor/layers/quantization/fp8.py b/vllm/model_executor/layers/quantization/fp8.py
-index d8bef73..1ada5f0 100644
+index d8bef7347..1ada5f0e2 100644
 --- a/vllm/model_executor/layers/quantization/fp8.py
 +++ b/vllm/model_executor/layers/quantization/fp8.py
 @@ -146,7 +146,7 @@ class Fp8Config(QuantizationConfig):
@@ -7321,7 +5339,7 @@ index d8bef73..1ada5f0 100644
      @classmethod
      def get_config_filenames(cls) -> list[str]:
 diff --git a/vllm/model_executor/layers/quantization/modelopt.py b/vllm/model_executor/layers/quantization/modelopt.py
-index e3e8b37..6de64f4 100644
+index e3e8b3736..6de64f48a 100644
 --- a/vllm/model_executor/layers/quantization/modelopt.py
 +++ b/vllm/model_executor/layers/quantization/modelopt.py
 @@ -437,7 +437,7 @@ class ModelOptFp8Config(ModelOptQuantConfigBase):
@@ -7334,7 +5352,7 @@ index e3e8b37..6de64f4 100644
      @classmethod
      def override_quantization_method(
 diff --git a/vllm/model_executor/layers/quantization/utils/fp8_utils.py b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
-index e42f43b..c6144ae 100644
+index e42f43b39..c6144ae40 100644
 --- a/vllm/model_executor/layers/quantization/utils/fp8_utils.py
 +++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
 @@ -551,6 +551,19 @@ def _per_token_group_quant_fp8_colmajor(
@@ -7384,7 +5402,7 @@ index e42f43b..c6144ae 100644
          torch.ops._C.per_token_group_fp8_quant(
              x,
 diff --git a/vllm/model_executor/layers/rotary_embedding/mrope.py b/vllm/model_executor/layers/rotary_embedding/mrope.py
-index a7fe51c..171ba72 100644
+index a7fe51c46..171ba72b2 100644
 --- a/vllm/model_executor/layers/rotary_embedding/mrope.py
 +++ b/vllm/model_executor/layers/rotary_embedding/mrope.py
 @@ -228,12 +228,11 @@ def apply_interleaved_rope(x: torch.Tensor, mrope_section: list[int]) -> torch.T
@@ -7406,7 +5424,7 @@ index a7fe51c..171ba72 100644
  
  class MRotaryEmbedding(RotaryEmbeddingBase):
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 3290290..10abf3d 100644
+index 32902901c..10abf3d8d 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,15 +2,22 @@
@@ -9116,7 +7134,7 @@ index 3290290..10abf3d 100644
          self,
          hidden_states: torch.Tensor,
 diff --git a/vllm/model_executor/models/deepseek_ocr.py b/vllm/model_executor/models/deepseek_ocr.py
-index 1144987..536a28e 100644
+index 114498764..536a28ed1 100644
 --- a/vllm/model_executor/models/deepseek_ocr.py
 +++ b/vllm/model_executor/models/deepseek_ocr.py
 @@ -78,6 +78,11 @@ from .deepseek_vl2 import MlpProjector
@@ -9167,7 +7185,7 @@ index 1144987..536a28e 100644
          local_features_2 = self.vision_model(patches, local_features_1)
          features = torch.cat(
 diff --git a/vllm/model_executor/models/qwen3_moe.py b/vllm/model_executor/models/qwen3_moe.py
-index 5df982d..cd69e72 100644
+index 5df982d74..cd69e7246 100644
 --- a/vllm/model_executor/models/qwen3_moe.py
 +++ b/vllm/model_executor/models/qwen3_moe.py
 @@ -53,6 +53,14 @@ from vllm.model_executor.layers.linear import (
@@ -9186,7 +7204,7 @@ index 5df982d..cd69e72 100644
      ParallelLMHead,
      VocabParallelEmbedding,
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index 495650e..42503f2 100644
+index 495650eb1..42503f229 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -8,6 +8,8 @@ from itertools import islice
@@ -9530,7 +7548,7 @@ index 495650e..42503f2 100644
          return output
  
 diff --git a/vllm/model_executor/models/qwen3_vl.py b/vllm/model_executor/models/qwen3_vl.py
-index 644fd13..c6c3ebe 100644
+index 644fd134a..c6c3ebe7d 100644
 --- a/vllm/model_executor/models/qwen3_vl.py
 +++ b/vllm/model_executor/models/qwen3_vl.py
 @@ -24,7 +24,8 @@
@@ -9796,7 +7814,7 @@ index 644fd13..c6c3ebe 100644
  
          deepstack_feature_lists = []
 diff --git a/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py b/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
-index 91ae7c4..46bb8f4 100644
+index 91ae7c44c..46bb8f44a 100644
 --- a/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
 +++ b/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
 @@ -259,6 +259,17 @@ def deepseek_v4_sparse_mla_attention_warmup(worker: "Worker") -> None:
@@ -9818,7 +7836,7 @@ index 91ae7c4..46bb8f4 100644
      mixed_tokens = _clamp_warmup_tokens(_SPARSE_MLA_MIXED_WARMUP_TOKENS, max_tokens)
      if mixed_tokens <= 0:
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index bcb2dd7..a510243 100644
+index bcb2dd779..a510243df 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
 @@ -99,118 +99,47 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
@@ -9959,7 +7977,7 @@ index bcb2dd7..a510243 100644
          # TODO(roberto): Remove after registered CuTeDSL warmups are migrated
          # to the shared JIT warmup infrastructure.
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 9c77980..f58154d 100644
+index 9c7798096..f58154d37 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -91,6 +91,104 @@ def _fill_short_context_topk_indices(
@@ -10411,7 +8429,7 @@ index 9c77980..f58154d 100644
 -
 -        return apply_pre_quantized_block_scaled_mm(self.wq_b, qr, qr_scale)
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-index 326a94f..4723b30 100644
+index 326a94f4f..4723b30f2 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 @@ -44,6 +44,20 @@ else:
@@ -10567,7 +8585,7 @@ index 326a94f..4723b30 100644
      kv = tl.load(
          row_base[:, None] + block[None, :],
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py b/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
-index 77b1aa2..88a5e56 100644
+index 77b1aa223..88a5e562b 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
 @@ -23,6 +23,14 @@ from vllm.triton_utils import tl, triton
@@ -10608,7 +8626,7 @@ index 77b1aa2..88a5e56 100644
  
      num_tokens, num_heads, head_dim = o.shape
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
-index 59ac4d2..a7e6e22 100644
+index 59ac4d27c..a7e6e2234 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
 @@ -107,7 +107,7 @@ class FusedMTPInputRMSNormKernel(
@@ -10621,7 +8639,7 @@ index 59ac4d2..a7e6e22 100644
                  x,
                  hnorm_weight_ptr,
 diff --git a/vllm/models/deepseek_v4/common/ops/save_partial_states.py b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
-index 6a554b9..4298153 100644
+index 6a554b9b4..429815393 100644
 --- a/vllm/models/deepseek_v4/common/ops/save_partial_states.py
 +++ b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
 @@ -12,10 +12,25 @@ from vllm.model_executor.warmup.jit_warmup_triton_helper import (
@@ -10660,7 +8678,7 @@ index 6a554b9..4298153 100644
  
  
 diff --git a/vllm/models/deepseek_v4/compressor.py b/vllm/models/deepseek_v4/compressor.py
-index 41af0c7..75ae9a0 100644
+index 41af0c766..75ae9a004 100644
 --- a/vllm/models/deepseek_v4/compressor.py
 +++ b/vllm/models/deepseek_v4/compressor.py
 @@ -389,6 +389,47 @@ class DeepseekCompressor(nn.Module):
@@ -10712,7 +8730,7 @@ index 41af0c7..75ae9a0 100644
          # NOTE: PDL is disabled — both this kernel and the compress kernels
          # below depend on preceding kernel outputs (kv/score from the cublas
 diff --git a/vllm/models/deepseek_v4/nvidia/dspark.py b/vllm/models/deepseek_v4/nvidia/dspark.py
-index 1a3c2c7..cef0f12 100644
+index 1a3c2c780..cef0f1271 100644
 --- a/vllm/models/deepseek_v4/nvidia/dspark.py
 +++ b/vllm/models/deepseek_v4/nvidia/dspark.py
 @@ -23,6 +23,7 @@ from vllm.distributed import (
@@ -10767,7 +8785,7 @@ index 1a3c2c7..cef0f12 100644
  
          # (param_name, ckpt_shard_name, shard_id) for non-expert stacked params.
 diff --git a/vllm/models/deepseek_v4/nvidia/flashmla.py b/vllm/models/deepseek_v4/nvidia/flashmla.py
-index 0ae0d87..6647f1c 100644
+index 0ae0d87a1..6647f1c7a 100644
 --- a/vllm/models/deepseek_v4/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v4/nvidia/flashmla.py
 @@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
@@ -10842,7 +8860,7 @@ index 0ae0d87..6647f1c 100644
 +                ),
              )
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
-index b1379cc..2b3a071 100644
+index b1379cc9e..2b3a07149 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
 @@ -142,6 +142,12 @@ class DeepseekV4MLP(nn.Module):
@@ -10906,7 +8924,7 @@ index b1379cc..2b3a071 100644
              self.hf_to_vllm_mapper = _make_deepseek_v4_weights_mapper(expert_dtype)
  
 diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
-index 5540355..2405a84 100644
+index 55403559d..2405a84f4 100644
 --- a/vllm/models/deepseek_v4/nvidia/mtp.py
 +++ b/vllm/models/deepseek_v4/nvidia/mtp.py
 @@ -381,10 +381,15 @@ class DeepSeekV4MTP(nn.Module):
@@ -10929,7 +8947,7 @@ index 5540355..2405a84 100644
  
          for name, loaded_weight in weights:
 diff --git a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
-index 72ce43b..38567e8 100644
+index 72ce43b46..38567e845 100644
 --- a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
 +++ b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
 @@ -70,13 +70,33 @@ def deep_gemm_fp8_o_proj(
@@ -10974,7 +8992,7 @@ index 72ce43b..38567e8 100644
          grouped_weight = wo_a.weight.view(n_groups, o_lora_rank, -1)
          torch.bmm(
 diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
-index 30eed82..a086b87 100644
+index 30eed82cc..a086b8767 100644
 --- a/vllm/platforms/cuda.py
 +++ b/vllm/platforms/cuda.py
 @@ -760,7 +760,7 @@ class CudaPlatformBase(Platform):
@@ -10987,7 +9005,7 @@ index 30eed82..a086b87 100644
  
      @classmethod
 diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
-index b3b7fe8..ae64515 100644
+index b3b7fe8b0..ae64515b1 100644
 --- a/vllm/platforms/rocm.py
 +++ b/vllm/platforms/rocm.py
 @@ -1164,7 +1164,7 @@ class RocmPlatform(Platform):
@@ -11000,7 +9018,7 @@ index b3b7fe8..ae64515 100644
  
      @classmethod
 diff --git a/vllm/platforms/xpu.py b/vllm/platforms/xpu.py
-index 6920c55..e0cdc68 100644
+index 6920c55e7..e0cdc68c0 100644
 --- a/vllm/platforms/xpu.py
 +++ b/vllm/platforms/xpu.py
 @@ -491,7 +491,9 @@ class XPUPlatform(Platform):
@@ -11015,7 +9033,7 @@ index 6920c55..e0cdc68 100644
      @classmethod
      def device_count(cls) -> int:
 diff --git a/vllm/profiler/wrapper.py b/vllm/profiler/wrapper.py
-index abe8a34..f4c49d3 100644
+index abe8a3431..f4c49d327 100644
 --- a/vllm/profiler/wrapper.py
 +++ b/vllm/profiler/wrapper.py
 @@ -175,11 +175,12 @@ class WorkerProfiler(ABC):
@@ -11033,7 +9051,7 @@ index abe8a34..f4c49d3 100644
  }
  
 diff --git a/vllm/tilelang_utils/__init__.py b/vllm/tilelang_utils/__init__.py
-index 803409b..031a300 100644
+index 803409b1e..031a30058 100644
 --- a/vllm/tilelang_utils/__init__.py
 +++ b/vllm/tilelang_utils/__init__.py
 @@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any
@@ -11050,7 +9068,7 @@ index 803409b..031a300 100644
          raise ImportError(
              "tilelang is required for mhc but is not installed. Install it with "
 diff --git a/vllm/tokenizers/registry.py b/vllm/tokenizers/registry.py
-index 46446ec..c0ecf85 100644
+index 46446ecd6..c0ecf8566 100644
 --- a/vllm/tokenizers/registry.py
 +++ b/vllm/tokenizers/registry.py
 @@ -41,6 +41,16 @@ _MIN_TRANSFORMERS_VERSION_FOR_HF_MISTRAL = Version("5.15.0")
@@ -11071,7 +9089,7 @@ index 46446ec..c0ecf85 100644
      "step3_vl",
      "step3p7",
 diff --git a/vllm/triton_utils/__init__.py b/vllm/triton_utils/__init__.py
-index 5c9006c..64f7f59 100644
+index 5c9006c05..64f7f5932 100644
 --- a/vllm/triton_utils/__init__.py
 +++ b/vllm/triton_utils/__init__.py
 @@ -12,9 +12,19 @@ if TYPE_CHECKING or HAS_TRITON:
@@ -11099,7 +9117,7 @@ index 5c9006c..64f7f59 100644
      tl = TritonLanguagePlaceholder()
 diff --git a/vllm/triton_utils/musa.py b/vllm/triton_utils/musa.py
 new file mode 100644
-index 0000000..0dd80f4
+index 000000000..0dd80f4f7
 --- /dev/null
 +++ b/vllm/triton_utils/musa.py
 @@ -0,0 +1,17 @@
@@ -11121,7 +9139,7 @@ index 0000000..0dd80f4
 +
 +    return Version("3.2.0") <= Version(triton.__version__) < Version("3.3.0")
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index 5d05c29..54e68a3 100644
+index 5d05c29a8..54e68a345 100644
 --- a/vllm/utils/deep_gemm.py
 +++ b/vllm/utils/deep_gemm.py
 @@ -74,6 +74,13 @@ class DeepGemmQuantScaleFMT(Enum):
@@ -11220,7 +9238,7 @@ index 5d05c29..54e68a3 100644
          *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
      )
 diff --git a/vllm/utils/jit_monitor.py b/vllm/utils/jit_monitor.py
-index bb0bb8d..0580958 100644
+index bb0bb8df9..05809581d 100644
 --- a/vllm/utils/jit_monitor.py
 +++ b/vllm/utils/jit_monitor.py
 @@ -98,7 +98,11 @@ def _setup_triton_autotuning_print() -> None:
@@ -11250,7 +9268,7 @@ index bb0bb8d..0580958 100644
  
      # kernels pass non-JSON-serializable constexprs
 diff --git a/vllm/utils/mem_utils.py b/vllm/utils/mem_utils.py
-index c092dff..9830609 100644
+index c092dff41..9830609a5 100644
 --- a/vllm/utils/mem_utils.py
 +++ b/vllm/utils/mem_utils.py
 @@ -225,6 +225,26 @@ class MemoryProfilingResult:
@@ -11287,7 +9305,7 @@ index c092dff..9830609 100644
 -    result.non_kv_cache_memory = result.total_consumed + result.transient_peak_headroom
 +    result.non_kv_cache_memory = _calculate_non_kv_cache_memory(result)
 diff --git a/vllm/utils/multi_stream_utils.py b/vllm/utils/multi_stream_utils.py
-index a8286c8..d370431 100644
+index a8286c848..d370431a9 100644
 --- a/vllm/utils/multi_stream_utils.py
 +++ b/vllm/utils/multi_stream_utils.py
 @@ -19,6 +19,7 @@ def maybe_execute_in_parallel(
@@ -11364,7 +9382,7 @@ index a8286c8..d370431 100644
      pending: list[torch.cuda.Event] = []
  
 diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
-index 0b330ed..9f7e031 100644
+index 0b330edf0..9f7e0318b 100644
 --- a/vllm/utils/torch_utils.py
 +++ b/vllm/utils/torch_utils.py
 @@ -879,6 +879,12 @@ def weak_ref_tensor(tensor: Any) -> Any:
@@ -11381,7 +9399,7 @@ index 0b330ed..9f7e031 100644
      else:
          return tensor
 diff --git a/vllm/v1/attention/backends/fa_utils.py b/vllm/v1/attention/backends/fa_utils.py
-index 0de6b85..e5192e1 100644
+index 0de6b8521..e5192e1a2 100644
 --- a/vllm/v1/attention/backends/fa_utils.py
 +++ b/vllm/v1/attention/backends/fa_utils.py
 @@ -80,6 +80,10 @@ def get_flash_attn_version(
@@ -11396,7 +9414,7 @@ index 0de6b85..e5192e1 100644
          return 2
      if current_platform.is_rocm():
 diff --git a/vllm/v1/attention/backends/gdn_attn.py b/vllm/v1/attention/backends/gdn_attn.py
-index 23daff5..1af4bd1 100644
+index 23daff543..1af4bd1d2 100644
 --- a/vllm/v1/attention/backends/gdn_attn.py
 +++ b/vllm/v1/attention/backends/gdn_attn.py
 @@ -54,6 +54,9 @@ class GDNAttentionMetadata:
@@ -11475,7 +9493,7 @@ index 23daff5..1af4bd1 100644
              non_spec_state_indices_tensor=non_spec_state_indices_tensor,
              spec_sequence_masks=spec_sequence_masks,
 diff --git a/vllm/v1/attention/backends/mamba_attn.py b/vllm/v1/attention/backends/mamba_attn.py
-index e0b5fab..564a802 100644
+index e0b5fab46..564a80273 100644
 --- a/vllm/v1/attention/backends/mamba_attn.py
 +++ b/vllm/v1/attention/backends/mamba_attn.py
 @@ -87,6 +87,7 @@ class BaseMambaAttentionMetadata:
@@ -11524,7 +9542,7 @@ index e0b5fab..564a802 100644
  
      def build(
 diff --git a/vllm/v1/attention/backends/mla/flashmla.py b/vllm/v1/attention/backends/mla/flashmla.py
-index 8ebfbbb..e3a1757 100644
+index 8ebfbbba7..e3a1757b2 100644
 --- a/vllm/v1/attention/backends/mla/flashmla.py
 +++ b/vllm/v1/attention/backends/mla/flashmla.py
 @@ -72,7 +72,7 @@ class FlashMLABackend(MLACommonBackend):
@@ -11537,7 +9555,7 @@ index 8ebfbbb..e3a1757 100644
      @classmethod
      def supports_combination(
 diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-index 3a9ca2f..e1ecb9f 100644
+index 3a9ca2ffd..e1ecb9f1a 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
 @@ -696,6 +696,9 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
@@ -11572,7 +9590,7 @@ index 3a9ca2f..e1ecb9f 100644
              actual_num_heads = q.shape[1]
  
 diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
-index 837dbca..2bcf413 100644
+index 837dbca81..2bcf413b8 100644
 --- a/vllm/v1/attention/backends/mla/indexer.py
 +++ b/vllm/v1/attention/backends/mla/indexer.py
 @@ -607,7 +607,7 @@ class DeepSeekV32IndexerDecodeMetadata:
@@ -11626,7 +9644,7 @@ index 837dbca..2bcf413 100644
                      seq_lens,
                      self.kv_cache_spec.num_states,
 diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
-index c4f3cd8..80d30d5 100644
+index c4f3cd8b4..80d30d5eb 100644
 --- a/vllm/v1/attention/backends/mla/sparse_swa.py
 +++ b/vllm/v1/attention/backends/mla/sparse_swa.py
 @@ -31,7 +31,7 @@ from vllm.v1.attention.backends.mla.compressor_utils import (
@@ -11648,7 +9666,7 @@ index c4f3cd8..80d30d5 100644
          # Clear the row so a padded token cannot gather through stale indices.
          for i in range(0, index_width, TRITON_BLOCK_SIZE):
 diff --git a/vllm/v1/attention/ops/flashmla.py b/vllm/v1/attention/ops/flashmla.py
-index c84a495..bbba514 100644
+index c84a49585..bbba514ad 100644
 --- a/vllm/v1/attention/ops/flashmla.py
 +++ b/vllm/v1/attention/ops/flashmla.py
 @@ -55,7 +55,7 @@ def is_flashmla_dense_supported() -> tuple[bool, str | None]:
@@ -11661,7 +9679,7 @@ index c84a495..bbba514 100644
      return True, None
  
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
-index dff0b21..59dc552 100644
+index dff0b21c6..59dc552c4 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
 +++ b/vllm/v1/attention/ops/triton_attention_helpers.py
 @@ -91,7 +91,7 @@ def find_seq_idx(
@@ -11683,7 +9701,7 @@ index dff0b21..59dc552 100644
          # formula above can overshoot for non-causal sequences, and slots
          # >= seq_len are unwritten KV (last-block tail) that may hold NaN
 diff --git a/vllm/v1/attention/ops/triton_turboquant_decode.py b/vllm/v1/attention/ops/triton_turboquant_decode.py
-index 3adaf26..a699dc9 100644
+index 3adaf2610..a699dc91d 100644
 --- a/vllm/v1/attention/ops/triton_turboquant_decode.py
 +++ b/vllm/v1/attention/ops/triton_turboquant_decode.py
 @@ -218,7 +218,7 @@ def _tq_decode_stage1(
@@ -11767,7 +9785,7 @@ index 3adaf26..a699dc9 100644
      else:
          v_vals = tl.zeros([BLOCK_D], dtype=tl.float32)
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd..6832d94 100644
+index b0231dd0c..6832d9442 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -34,6 +34,21 @@ logger = init_logger(__name__)
@@ -11858,7 +9876,7 @@ index b0231dd..6832d94 100644
          BLOCK_Q=BLOCK_Q,
          num_seqs=num_seqs,
 diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
-index e2a06e7..03391ce 100644
+index e2a06e7e4..03391ce49 100644
 --- a/vllm/v1/core/block_pool.py
 +++ b/vllm/v1/core/block_pool.py
 @@ -288,14 +288,23 @@ class BlockPool:
@@ -11893,7 +9911,7 @@ index e2a06e7..03391ce 100644
                  block_hash_with_group_id,
                  blk,
 diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
-index afb03ac..181bbe7 100644
+index afb03ac3e..181bbe7e4 100644
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
 @@ -12,6 +12,7 @@ from vllm.v1.core.kv_cache_utils import (
@@ -11951,7 +9969,7 @@ index afb03ac..181bbe7 100644
                      and self.single_type_managers[group.group_ids[0]].block_pool
                      is self.single_type_managers[i].block_pool
 diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
-index 226da3a..b710d7b 100644
+index 226da3a1e..b710d7bc9 100644
 --- a/vllm/v1/core/kv_cache_manager.py
 +++ b/vllm/v1/core/kv_cache_manager.py
 @@ -2,7 +2,7 @@
@@ -12067,7 +10085,7 @@ index 226da3a..b710d7b 100644
              return None
  
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index 28478b6..043285a 100644
+index 28478b69f..043285a20 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1575,74 +1575,247 @@ def _get_kv_cache_groups_uniform_page_size(
@@ -12792,7 +10810,7 @@ index 28478b6..043285a 100644
      return kv_cache_configs
  
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index daf2b31..9a7d8ba 100644
+index daf2b316d..9a7d8ba31 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
 @@ -2625,7 +2625,7 @@ class Scheduler(SchedulerInterface):
@@ -12814,7 +10832,7 @@ index daf2b31..9a7d8ba 100644
      def get_num_unfinished_requests(self) -> int:
          if self._pause_state == PauseState.PAUSED_ALL:
 diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
-index 40027e7..2487c31 100644
+index 40027e71f..2487c3177 100644
 --- a/vllm/v1/core/single_type_kv_cache_manager.py
 +++ b/vllm/v1/core/single_type_kv_cache_manager.py
 @@ -1994,6 +1994,12 @@ class MambaManager(SingleTypeKVCacheManager):
@@ -12831,7 +10849,7 @@ index 40027e7..2487c31 100644
          super().cache_blocks(
              request,
 diff --git a/vllm/v1/cudagraph_dispatcher.py b/vllm/v1/cudagraph_dispatcher.py
-index 6a48b62..356c008 100644
+index 6a48b6282..356c00870 100644
 --- a/vllm/v1/cudagraph_dispatcher.py
 +++ b/vllm/v1/cudagraph_dispatcher.py
 @@ -31,8 +31,9 @@ class CudagraphDispatcher:
@@ -12912,7 +10930,7 @@ index 6a48b62..356c008 100644
  
          if CUDAGraphMode.FULL in allowed_modes:
 diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
-index 8cd867e..a1d0c99 100644
+index 8cd867eb9..a1d0c992d 100644
 --- a/vllm/v1/kv_cache_interface.py
 +++ b/vllm/v1/kv_cache_interface.py
 @@ -1380,6 +1380,7 @@ class KVCacheTensor:
@@ -12933,7 +10951,7 @@ index 8cd867e..a1d0c99 100644
      kv_cache_layout: str | None = None
      """The KV cache layout resolved by the engine core, adopted by all workers."""
 diff --git a/vllm/v1/sample/metadata.py b/vllm/v1/sample/metadata.py
-index fa4ceac..98fc48d 100644
+index fa4ceac8e..98fc48d09 100644
 --- a/vllm/v1/sample/metadata.py
 +++ b/vllm/v1/sample/metadata.py
 @@ -53,3 +53,6 @@ class SamplingMetadata:
@@ -12944,7 +10962,7 @@ index fa4ceac..98fc48d 100644
 +    uniform_top_k: int | None = None
 +    uniform_temperature: float | None = None
 diff --git a/vllm/v1/sample/ops/topk_topp_triton.py b/vllm/v1/sample/ops/topk_topp_triton.py
-index 695ba62..9825d87 100755
+index 695ba624f..9825d8714 100755
 --- a/vllm/v1/sample/ops/topk_topp_triton.py
 +++ b/vllm/v1/sample/ops/topk_topp_triton.py
 @@ -211,10 +211,7 @@ def _topk_topp_kernel(
@@ -13026,7 +11044,7 @@ index 695ba62..9825d87 100755
                      found_pivot = 0
                      while found_pivot == 0:
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
-index 85b623b..5e39f70 100644
+index 85b623bd8..5e39f7016 100644
 --- a/vllm/v1/sample/rejection_sampler.py
 +++ b/vllm/v1/sample/rejection_sampler.py
 @@ -18,6 +18,7 @@ from vllm.model_executor.warmup.jit_warmup_triton_helper import (
@@ -13105,7 +11123,7 @@ index 85b623b..5e39f70 100644
          return
  
 diff --git a/vllm/v1/spec_decode/dflash.py b/vllm/v1/spec_decode/dflash.py
-index 284db7d..9435609 100644
+index 284db7dee..943560905 100644
 --- a/vllm/v1/spec_decode/dflash.py
 +++ b/vllm/v1/spec_decode/dflash.py
 @@ -215,6 +215,7 @@ class DFlashProposer(SpecDecodeBaseProposer):
@@ -13184,7 +11202,7 @@ index 284db7d..9435609 100644
          ):
              self.model(
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index 1bd1bdc..8ae07cf 100644
+index 1bd1bdc45..8ae07cf6f 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
 @@ -15,13 +15,14 @@ from vllm.config import (
@@ -13465,7 +11483,7 @@ index 1bd1bdc..8ae07cf 100644
  
  # NOTE(woosuk): Currently, the below code is not used and we always use argmax
 diff --git a/vllm/v1/spec_decode/utils.py b/vllm/v1/spec_decode/utils.py
-index fbfe443..c219a19 100644
+index fbfe44384..c219a1941 100644
 --- a/vllm/v1/spec_decode/utils.py
 +++ b/vllm/v1/spec_decode/utils.py
 @@ -207,6 +207,15 @@ def eagle_prepare_inputs_padded_kernel(
@@ -13494,7 +11512,7 @@ index fbfe443..c219a19 100644
      index_to_sample = q_last_tok_idx - num_rejected_tokens
      tl.store(token_indices_to_sample_ptr + req_idx, index_to_sample)
 diff --git a/vllm/v1/worker/gpu/async_utils.py b/vllm/v1/worker/gpu/async_utils.py
-index 0ab0ab3..7d5661e 100644
+index 0ab0ab3f3..7d5661ea1 100644
 --- a/vllm/v1/worker/gpu/async_utils.py
 +++ b/vllm/v1/worker/gpu/async_utils.py
 @@ -146,7 +146,16 @@ class AsyncOutput(AsyncModelRunnerOutput):
@@ -13516,7 +11534,7 @@ index 0ab0ab3..7d5661e 100644
              if sampler_output.sampling_mask_tensors is not None:
                  self.sampling_mask_tensors = (
 diff --git a/vllm/v1/worker/gpu/block_table.py b/vllm/v1/worker/gpu/block_table.py
-index c01895e..e4e9aac 100644
+index c01895e63..e4e9aac8f 100644
 --- a/vllm/v1/worker/gpu/block_table.py
 +++ b/vllm/v1/worker/gpu/block_table.py
 @@ -250,7 +250,7 @@ def _gather_block_tables_kernel(
@@ -13558,7 +11576,7 @@ index c01895e..e4e9aac 100644
 +    ptr = ptr.to(tl.pointer_type(tl.int32))
 +    return tl.multiple_of(ptr, 16)
 diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.py
-index d3c65bd..43f753f 100644
+index d3c65bd06..43f753f76 100644
 --- a/vllm/v1/worker/gpu/input_batch.py
 +++ b/vllm/v1/worker/gpu/input_batch.py
 @@ -563,6 +563,8 @@ def _post_update_kernel(
@@ -13597,7 +11615,7 @@ index d3c65bd..43f753f 100644
      )
  
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index b66d552..9aabefd 100644
+index b66d552cb..9aabefdf9 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -441,64 +441,38 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -13824,7 +11842,7 @@ index b66d552..9aabefd 100644
  
          self.model_state.postprocess_state(
 diff --git a/vllm/v1/worker/gpu/sample/gumbel.py b/vllm/v1/worker/gpu/sample/gumbel.py
-index 4bf1f47..7e6131e 100644
+index 4bf1f4728..7e6131ecd 100644
 --- a/vllm/v1/worker/gpu/sample/gumbel.py
 +++ b/vllm/v1/worker/gpu/sample/gumbel.py
 @@ -66,7 +66,12 @@ def apply_temperature(
@@ -13920,7 +11938,7 @@ index 4bf1f47..7e6131e 100644
 +    sampled_values = local_max.gather(dim=-1, index=max_block_idx).view(-1)
 +    return sampled, sampled_values
 diff --git a/vllm/v1/worker/gpu/sample/penalties.py b/vllm/v1/worker/gpu/sample/penalties.py
-index 25cb2f2..820bae5 100644
+index 25cb2f211..820bae5d4 100644
 --- a/vllm/v1/worker/gpu/sample/penalties.py
 +++ b/vllm/v1/worker/gpu/sample/penalties.py
 @@ -129,7 +129,7 @@ def _penalties_kernel(
@@ -13933,7 +11951,7 @@ index 25cb2f2..820bae5 100644
          # Early return to avoid loading logits.
          return
 diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
-index b069604..4d74825 100644
+index b069604c2..4d7482553 100644
 --- a/vllm/v1/worker/gpu/sample/sampler.py
 +++ b/vllm/v1/worker/gpu/sample/sampler.py
 @@ -129,14 +129,29 @@ class Sampler:
@@ -14003,7 +12021,7 @@ index b069604..4d74825 100644
          sampler_output = SamplerOutput(
              # The sampled tokens are expanded to 2D tensor with shape
 diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
-index 9d64c1e..ca66fb3 100644
+index 9d64c1ecb..ca66fb35e 100644
 --- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
 +++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
 @@ -587,6 +587,8 @@ def _rejection_kernel(
@@ -14093,7 +12111,7 @@ index 9d64c1e..ca66fb3 100644
          num_warps=1,
      )
 diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
-index 01b6b5b..940d450 100644
+index 01b6b5b0c..940d450de 100644
 --- a/vllm/v1/worker/gpu_input_batch.py
 +++ b/vllm/v1/worker/gpu_input_batch.py
 @@ -313,6 +313,8 @@ class InputBatch:
@@ -14169,7 +12187,7 @@ index 01b6b5b..940d450 100644
      def all_greedy(self) -> bool:
          return len(self.random_reqs) == 0
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 97a59bd..06b55ed 100644
+index 97a59bd27..06b55ed5f 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -12,6 +12,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -14667,7 +12685,7 @@ index 97a59bd..06b55ed 100644
  
          if (
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index 2a3531b..9ab5a27 100644
+index 2a3531b61..9ab5a27d4 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
 @@ -104,6 +104,53 @@ from .utils import request_memory
@@ -14763,7 +12781,7 @@ index 2a3531b..9ab5a27 100644
                      logger.debug(
                          "Starting torch profiler with trace name: %s", trace_name
 diff --git a/vllm/v1/worker/mamba_utils.py b/vllm/v1/worker/mamba_utils.py
-index 1deb89b..d8739db 100644
+index 1deb89bda..d8739db7d 100644
 --- a/vllm/v1/worker/mamba_utils.py
 +++ b/vllm/v1/worker/mamba_utils.py
 @@ -470,8 +470,9 @@ def postprocess_mamba_fused_kernel(
@@ -14778,207 +12796,3 @@ index 1deb89b..d8739db 100644
  
      # Skip no-op self-copy.
      if src_block_idx == dest_block_idx and accept_token_bias == 0:
-diff --git a/vllm_musa/__init__.py b/vllm_musa/__init__.py
-new file mode 100644
-index 0000000..7480e89
---- /dev/null
-+++ b/vllm_musa/__init__.py
-@@ -0,0 +1,198 @@
-+# SPDX-License-Identifier: Apache-2.0
-+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-+"""
-+vLLM MUSA Platform Plugin
-+
-+This plugin enables vLLM to run on Moore Threads MUSA GPUs.
-+It provides a MUSAPlatform implementation that integrates with vLLM's
-+platform abstraction layer.
-+
-+Usage:
-+    Install this package alongside vLLM, and the MUSA platform will be
-+    automatically detected and used when running on Moore Threads hardware.
-+"""
-+
-+import logging
-+
-+__all__ = [
-+    "MUSAPlatform",
-+    "musa_platform_plugin",
-+    "register_custom_ops",
-+    "collect_env",
-+]
-+__version__ = "0.1.30"
-+
-+logger = logging.getLogger(__name__)
-+
-+# Import torchada early to ensure torch.device patching happens before
-+# any torch.device("cuda:X") calls in vLLM. This is critical for MUSA
-+# to work correctly - it patches torch.cuda to redirect to MUSA.
-+try:
-+    # isort: off
-+    import torchada  # noqa: F401
-+    import torch  # noqa: F401
-+
-+    # isort: on
-+    _torchada_available = True
-+except ImportError:
-+    _torchada_available = False
-+
-+# vLLM source patches are applied at BUILD time to the cloned vLLM
-+# (setup.py -> build_apply.py -> vllm_musa/patches/series/ diff series). There is
-+# no runtime source-patching and no fallback; only the object patches
-+# (_apply_object_patches) run at import time. The torch/vLLM config compat
-+# shims live as cat-6 object patches under vllm_musa/patches/ (applied by
-+# apply_object_patches alongside the spec-decode kernel prime and draft-TP=1
-+# wiring).
-+
-+
-+########### platform plugin ###########
-+
-+
-+def musa_platform_plugin() -> str | None:
-+    """Register the MUSA platform.
-+
-+    vLLM platform plugin entry point. Called by vLLM to check if the MUSA
-+    platform is available. Returns the qualified class name if available.
-+
-+    Note: We intentionally do NOT apply patches here because this function
-+    is called during vLLM module initialization which can cause circular
-+    import issues. Patches are applied via the general plugin mechanism.
-+    """
-+    # Check if torchada detected MUSA platform
-+    if _torchada_available:
-+        import torchada
-+
-+        if torchada.is_musa_platform():
-+            return "vllm_musa.platform.MUSAPlatform"
-+
-+    # Fallback: check if torch_musa is available
-+    try:
-+        import torch_musa  # noqa: F401
-+
-+        return "vllm_musa.platform.MUSAPlatform"
-+    except ImportError:
-+        pass
-+
-+    return None
-+
-+
-+# Optional, default-off registration of Inductor GEMM template heuristics
-+# for device_type='musa'. The default ATen lowering is the fast path; set
-+# VLLM_MUSA_ENABLE_INDUCTOR_HEURISTICS=1 to experiment with Triton GEMM
-+# autotuning. No-ops quietly on old torch versions.
-+try:
-+    from vllm_musa._inductor import maybe_register_musa_template_heuristics
-+
-+    maybe_register_musa_template_heuristics()
-+except Exception as _exc:  # pragma: no cover
-+    logger.warning(
-+        "failed to register Inductor template heuristics for "
-+        "MUSA (%s); falling back to ATen path for compiled `mm` ops.",
-+        _exc,
-+    )
-+
-+
-+########### general plugins ###########
-+
-+
-+def _apply_object_patches() -> None:
-+    """Apply explicit in-process object/monkey patches for MUSA.
-+
-+    These are the runtime patches: the spec-decode kernel prime, the draft-TP=1
-+    wiring, and the torch/vLLM config compat shims and dflash
-+    _custom_ops fallbacks — live-object edits with no source-diff form. (vLLM
-+    source edits are applied at build time; see the note above.) They
-+    are explicit, ordered, and idempotent ``apply()`` functions called by
-+    ``vllm_musa.patches.apply_object_patches``. Best-effort: a failure is logged,
-+    not raised.
-+    """
-+    try:
-+        from .patches import apply_object_patches
-+
-+        apply_object_patches()
-+    except Exception as e:
-+        logger.error(f"Failed to apply object patches: {e}")
-+
-+
-+def patch_report() -> list[dict]:
-+    """Status of the vLLM-MUSA runtime object patches, read-only.
-+
-+    Public entry point; delegates to ``vllm_musa.patches.patch_report``. Useful
-+    for ``vllm_collect_env`` and for debugging the object patches on a given vLLM
-+    version. (Source edits are applied at build time and are not audited here.)
-+    Returns a list of per-patch dicts; see that function.
-+    """
-+    from .patches import patch_report as _patch_report
-+
-+    return _patch_report()
-+
-+
-+def _register_patches() -> None:
-+    """Register MUSA runtime patches.
-+
-+    vLLM **source** edits are applied at BUILD time (setup.py +
-+    ``vllm_musa/patches/series/``), not here. the torch/vLLM config
-+    compat shims are now cat-6 object patches too, so ``_register_patches``
-+    installs only the runtime **object** monkey-patches (live-object edits that
-+    have no source-diff form), all via :func:`_apply_object_patches`.
-+    """
-+    _apply_object_patches()
-+
-+
-+def _register_ops() -> None:
-+    """Register OOT custom ops (activation, layernorm, fused_moe, etc.)."""
-+    import vllm_musa.model_executor  # noqa: F401
-+    import vllm_musa.jit_kernel.csrc.moe as _moe  # noqa: F401
-+
-+    _moe.prewarm()
-+
-+
-+def _register_modules() -> None:
-+    """Register distributed connectors, utils, and v1 attention backends."""
-+    import vllm_musa.distributed  # noqa: F401
-+    import vllm_musa.utils  # noqa: F401
-+    import vllm_musa.v1  # noqa: F401
-+
-+
-+def register_custom_ops() -> None:
-+    """
-+    vLLM general plugin entry point for MUSA customizations.
-+
-+    This function is called by vLLM's general plugin mechanism after the
-+    platform is initialized, which avoids circular import issues.
-+    It applies the runtime object patches and registers all MUSA-specific ops,
-+    distributed connectors, and attention backends.
-+    """
-+    # Must run before any Mooncake worker is constructed.  Keep this helper
-+    # stdlib-only so it does not pull in torch or replace upstream connector
-+    # objects during plugin discovery.
-+    from .distributed.mooncake_compat import configure_legacy_device_filter
-+
-+    configure_legacy_device_filter()
-+    _register_patches()
-+    _register_ops()
-+    _register_modules()
-+    logger.info("MUSA patches and custom ops registered")
-+
-+
-+########### console scripts ###########
-+
-+
-+def collect_env() -> None:
-+    """Entry point for vllm_collect_env console script."""
-+    from .collect_env import main
-+
-+    main()
-+
-+
-+########### lazy imports ###########
-+
-+
-+def __getattr__(name: str):
-+    """Lazy import module components."""
-+    if name == "MUSAPlatform":
-+        from .platform import MUSAPlatform
-+
-+        return MUSAPlatform
-+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
