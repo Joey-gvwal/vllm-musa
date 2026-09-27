@@ -1843,7 +1843,11 @@ class FlashAttentionImpl(AttentionImpl):
             # we use direct Q, K, V tensors without caching
             return
 
-        key_cache, value_cache = kv_cache.unbind(0)
+        kv_cache_parts = kv_cache.unbind(0)
+        if len(kv_cache_parts) < 2:
+            raise ValueError("MUSA KV cache must contain key and value tensors")
+        # v0.30 may append scale/metadata planes after key and value.
+        key_cache, value_cache = kv_cache_parts[0], kv_cache_parts[1]
 
         # Reshape the input keys and values and store them in the cache.
         # Skip this if sharing KV cache with an earlier attention layer.
