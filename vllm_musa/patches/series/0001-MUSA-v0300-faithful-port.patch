@@ -862,7 +862,7 @@ index de0c505..33be566 100644
    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index a7ee87b..8c76eb3 100644
+index a7ee87b..270fe94 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
 @@ -268,7 +268,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
@@ -891,15 +891,6 @@ index a7ee87b..8c76eb3 100644
  
  // SITU (Kimi SituGLU) gated activation. Non-interleaved layout:
  // input = [gate(d), up(d)] per token.
-@@ -875,7 +878,7 @@ __global__ void masked_swigluoai_and_mul_kernel(
-     const scalar_t* in_ptr = input + row * 2 * d;
-     scalar_t* out_ptr = out + row * d;
-     out_ptr[idx] =
--        swigluoai_and_mul(in_ptr[2 * idx], in_ptr[2 * idx + 1], alpha, limit);
-+        vllm::swigluoai_and_mul(in_ptr[2 * idx], in_ptr[2 * idx + 1], alpha, limit);
-   }
- }
- 
 @@ -948,6 +951,7 @@ __global__ void masked_activation_kernel(
  
  }  // namespace vllm
