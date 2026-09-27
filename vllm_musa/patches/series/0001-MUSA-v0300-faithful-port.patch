@@ -2929,10 +2929,10 @@ index c0e966b2b..68ddf7294 100644
 +REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
-index 000000000..fcd5c5de2
+index 000000000..7a9949509
 --- /dev/null
 +++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,322 @@
 +// MUSA: regular-ABI registration of the _C_cache_ops library.
 +//
 +// The cache/MLA kernels in libtorch_stable/cache_kernels{,_fused}.cu take
@@ -2993,7 +2993,9 @@ index 000000000..fcd5c5de2
 +                                  stable::Tensor& kv_cache_ptrs,
 +                                  stable::Tensor& slot_mapping,
 +                                  int64_t block_size, int64_t block_stride,
-+                                  int64_t entry_stride);
++                                  int64_t entry_stride,
++                                  std::optional<stable::Tensor> kv_scales,
++                                  const std::string& kv_cache_dtype);
 +void concat_and_cache_mla_rope_fused(
 +    stable::Tensor& positions, stable::Tensor& q_pe, stable::Tensor& k_pe,
 +    stable::Tensor& kv_c, stable::Tensor& rope_cos_sin_cache, bool rope_is_neox,
@@ -3065,10 +3067,12 @@ index 000000000..fcd5c5de2
 +void concat_and_cache_mla_grouped(at::Tensor& kv_c, at::Tensor& k_pe,
 +                                  at::Tensor& cache_ptrs, at::Tensor& slot,
 +                                  int64_t block_size, int64_t block_stride,
-+                                  int64_t entry_stride) {
++                                  int64_t entry_stride,
++                                  const std::optional<at::Tensor>& kv_scales,
++                                  const std::string& kv_cache_dtype) {
 +  auto a = S(kv_c), b = S(k_pe), c = S(cache_ptrs), d = S(slot);
 +  ::concat_and_cache_mla_grouped(a, b, c, d, block_size, block_stride,
-+                                 entry_stride);
++                                 entry_stride, S(kv_scales), kv_cache_dtype);
 +}
 +void concat_and_cache_mla_rope_fused(at::Tensor& positions, at::Tensor& q_pe,
 +                                     at::Tensor& k_pe, at::Tensor& kv_c,
@@ -3174,7 +3178,8 @@ index 000000000..fcd5c5de2
 +      "                             Tensor kv_cache_ptrs,"
 +      "                             Tensor slot_mapping,"
 +      "                             int block_size, int block_stride,"
-+      "                             int entry_stride) -> ()");
++      "                             int entry_stride, Tensor? kv_scales=None,"
++      "                             str kv_cache_dtype=\"auto\") -> ()");
 +  m.impl("concat_and_cache_mla_grouped", torch::kPrivateUse1,
 +         &mcb::concat_and_cache_mla_grouped);
 +
