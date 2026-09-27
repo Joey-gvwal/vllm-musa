@@ -1878,7 +1878,7 @@ index c17b06a79..b35a4b2b6 100644
          selective_scan_fwd_cuda<input_t, weight_t, state_t>(params, stream);
      });
 diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-index d66b78fe8..d27a53810 100644
+index d66b78fe8..f665bd71b 100644
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 @@ -2,15 +2,15 @@
@@ -2096,9 +2096,10 @@ index d66b78fe8..d27a53810 100644
 +  TORCH_CHECK(block_size > 0, "block_size should be greater than 0. ");
  
    int device_max_shared_mem;
-   int dev = topk_ids.get_device_index();
+-  int dev = topk_ids.get_device_index();
 -  const torch::stable::accelerator::DeviceGuard device_guard(dev);
-+  const at::cuda::OptionalCUDAGuard device_guard(dev);
++  const auto dev = topk_ids.get_device();
++  const at::cuda::OptionalCUDAGuard device_guard(device_of(topk_ids));
    cudaDeviceGetAttribute(&device_max_shared_mem,
                           cudaDevAttrMaxSharedMemoryPerBlockOptin, dev);
 -  const cudaStream_t stream = get_current_cuda_stream(dev);
