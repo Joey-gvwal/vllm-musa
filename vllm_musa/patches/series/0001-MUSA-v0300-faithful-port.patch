@@ -11331,6 +11331,40 @@ index c4f3cd8..80d30d5 100644
          tl.store(swa_lens_ptr + pid, 0)
          # Clear the row so a padded token cannot gather through stale indices.
          for i in range(0, index_width, TRITON_BLOCK_SIZE):
+diff --git a/vllm/v1/attention/backends/utils.py b/vllm/v1/attention/backends/utils.py
+index e656343..99a3f84 100644
+--- a/vllm/v1/attention/backends/utils.py
++++ b/vllm/v1/attention/backends/utils.py
+@@ -1,3 +1,4 @@
++import functools
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ import math
+@@ -251,6 +252,24 @@ def record_kv_cache_layout(cache_config: CacheConfig, layout_name: str) -> None:
+     cache_config.kv_cache_layout = layout.name
+ 
+ 
++@functools.lru_cache
++_KV_CACHE_LAYOUT_OVERRIDE: str | None = None
++
++
++def get_kv_cache_layout() -> str:
++    """Compatibility accessor for MUSA backends ported from v0.28."""
++    if _KV_CACHE_LAYOUT_OVERRIDE is not None:
++        return _KV_CACHE_LAYOUT_OVERRIDE
++    requested = getattr(envs, "VLLM_KV_CACHE_LAYOUT", None)
++    return requested or "NHD"
++
++
++def set_kv_cache_layout(layout: str | None) -> None:
++    global _KV_CACHE_LAYOUT_OVERRIDE
++    _KV_CACHE_LAYOUT_OVERRIDE = layout
++    get_kv_cache_layout.cache_clear()
++
++
+ def resolve_kv_cache_layout(
+     vllm_config: VllmConfig,
+     supported_layouts: list[list[str]],
 diff --git a/vllm/v1/attention/ops/flashmla.py b/vllm/v1/attention/ops/flashmla.py
 index c84a495..bbba514 100644
 --- a/vllm/v1/attention/ops/flashmla.py
