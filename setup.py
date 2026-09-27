@@ -239,6 +239,10 @@ VLLM_MOE_CSRC_SOURCES = [
     # extension: the kernels are converted off the stable ABI (the stable path
     # needs torch::stable::sum_out with an int[] dim that torch_musa 2.9 cannot
     # box), the bindings are a regular TORCH_LIBRARY, and moe_ops.h is at::Tensor.
+    # grouped_topk remains a stable-ABI implementation in v0.30's MoE binding;
+    # link its definition into _moe_C as well as the stable extension so the
+    # registration in moe/torch_bindings.cpp has a matching definition.
+    str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/grouped_topk_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/moe_align_sum_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/topk_softmax_kernels.cu"),
     str(_VLLM_REPO.source_dir / "csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu"),
