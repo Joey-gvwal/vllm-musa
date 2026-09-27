@@ -1,6 +1,6 @@
 diff --git a/.claude/skills/ci-fails-buildkite b/.claude/skills/ci-fails-buildkite
 deleted file mode 120000
-index db179cf70..000000000
+index db179cf..0000000
 --- a/.claude/skills/ci-fails-buildkite
 +++ /dev/null
 @@ -1 +0,0 @@
@@ -8,7 +8,7 @@ index db179cf70..000000000
 \ No newline at end of file
 diff --git a/.claude/skills/debug-ima b/.claude/skills/debug-ima
 deleted file mode 120000
-index 6a1dbb461..000000000
+index 6a1dbb4..0000000
 --- a/.claude/skills/debug-ima
 +++ /dev/null
 @@ -1 +0,0 @@
@@ -16,7 +16,7 @@ index 6a1dbb461..000000000
 \ No newline at end of file
 diff --git a/.claude/skills/kernel-microbenchmark b/.claude/skills/kernel-microbenchmark
 deleted file mode 120000
-index c0233605e..000000000
+index c023360..0000000
 --- a/.claude/skills/kernel-microbenchmark
 +++ /dev/null
 @@ -1 +0,0 @@
@@ -24,14 +24,14 @@ index c0233605e..000000000
 \ No newline at end of file
 diff --git a/.claude/skills/triton-kernel-writing b/.claude/skills/triton-kernel-writing
 deleted file mode 120000
-index 39e7b6be5..000000000
+index 39e7b6b..0000000
 --- a/.claude/skills/triton-kernel-writing
 +++ /dev/null
 @@ -1 +0,0 @@
 -../../.agents/skills/triton-kernel-writing
 \ No newline at end of file
 diff --git a/csrc/cuda_compat.h b/csrc/cuda_compat.h
-index d7d589db6..3893d6a97 100644
+index d7d589d..3893d6a 100644
 --- a/csrc/cuda_compat.h
 +++ b/csrc/cuda_compat.h
 @@ -69,7 +69,7 @@ struct Utils {
@@ -45,7 +45,7 @@ index d7d589db6..3893d6a97 100644
      hipFuncSetAttribute(FUNC, hipFuncAttributeMaxDynamicSharedMemorySize, VAL)
 diff --git a/csrc/cuda_view.cu b/csrc/cuda_view.cu
 new file mode 100644
-index 000000000..9d27348bb
+index 0000000..9d27348
 --- /dev/null
 +++ b/csrc/cuda_view.cu
 @@ -0,0 +1,57 @@
@@ -107,7 +107,7 @@ index 000000000..9d27348bb
 +                          contiguous_cpu.options().device(torch::kCUDA));
 +}
 diff --git a/csrc/custom_all_reduce.cuh b/csrc/custom_all_reduce.cuh
-index 385a0e0ae..1cf56b6ad 100644
+index 385a0e0..1cf56b6 100644
 --- a/csrc/custom_all_reduce.cuh
 +++ b/csrc/custom_all_reduce.cuh
 @@ -1,25 +1,292 @@
@@ -871,7 +871,7 @@ index 385a0e0ae..1cf56b6ad 100644
    }
  };
 diff --git a/csrc/dispatch_utils.h b/csrc/dispatch_utils.h
-index de0c505b7..33be56698 100644
+index de0c505..33be566 100644
 --- a/csrc/dispatch_utils.h
 +++ b/csrc/dispatch_utils.h
 @@ -11,6 +11,18 @@
@@ -894,7 +894,7 @@ index de0c505b7..33be56698 100644
    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index a7ee87b35..c5de37f97 100644
+index a7ee87b..c5de37f 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
 @@ -268,7 +268,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
@@ -979,7 +979,7 @@ index a7ee87b35..c5de37f97 100644
                                           input.const_data_ptr<scalar_t>(), d); \
        });                                                                      \
 diff --git a/csrc/libtorch_stable/attention/merge_attn_states.cu b/csrc/libtorch_stable/attention/merge_attn_states.cu
-index cc89397f6..067acb4dd 100644
+index cc89397..067acb4 100644
 --- a/csrc/libtorch_stable/attention/merge_attn_states.cu
 +++ b/csrc/libtorch_stable/attention/merge_attn_states.cu
 @@ -1,14 +1,14 @@
@@ -1149,7 +1149,7 @@ index cc89397f6..067acb4dd 100644
                             CALL_MERGE_ATTN_STATES_LAUNCHER);
  }
 diff --git a/csrc/libtorch_stable/custom_all_reduce.cu b/csrc/libtorch_stable/custom_all_reduce.cu
-index 07fca99dd..df98c2f02 100644
+index 07fca99..df98c2f 100644
 --- a/csrc/libtorch_stable/custom_all_reduce.cu
 +++ b/csrc/libtorch_stable/custom_all_reduce.cu
 @@ -1,11 +1,7 @@
@@ -1438,7 +1438,7 @@ index 07fca99dd..df98c2f02 100644
 +  AT_CUDA_CHECK(cudaFree(reinterpret_cast<void*>(buffer)));
  }
 diff --git a/csrc/libtorch_stable/mamba/selective_scan_fwd.cu b/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
-index c17b06a79..b35a4b2b6 100644
+index c17b06a..b35a4b2 100644
 --- a/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
 +++ b/csrc/libtorch_stable/mamba/selective_scan_fwd.cu
 @@ -1,9 +1,18 @@
@@ -1878,7 +1878,7 @@ index c17b06a79..b35a4b2b6 100644
          selective_scan_fwd_cuda<input_t, weight_t, state_t>(params, stream);
      });
 diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-index d66b78fe8..f665bd71b 100644
+index d66b78f..f665bd7 100644
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 @@ -2,15 +2,15 @@
@@ -2166,7 +2166,7 @@ index d66b78fe8..f665bd71b 100644
            auto align_kernel =
                vllm::moe::moe_lora_align_block_size_kernel<scalar_t>;
 diff --git a/csrc/libtorch_stable/moe/moe_ops.h b/csrc/libtorch_stable/moe/moe_ops.h
-index 03057c3b1..5df44325a 100644
+index 03057c3..5df4432 100644
 --- a/csrc/libtorch_stable/moe/moe_ops.h
 +++ b/csrc/libtorch_stable/moe/moe_ops.h
 @@ -1,76 +1,76 @@
@@ -2303,7 +2303,7 @@ index 03057c3b1..5df44325a 100644
 +                  const torch::Tensor& dst2src_map,
 +                  torch::Tensor& output_tensor);
 diff --git a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
-index 098644a1b..7bae15b41 100644
+index 098644a..7bae15b 100644
 --- a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
 @@ -19,14 +19,13 @@
@@ -2533,7 +2533,7 @@ index 098644a1b..7bae15b41 100644
      }
  }
 diff --git a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
-index fbb07216d..bf78b9cda 100644
+index fbb0721..bf78b9c 100644
 --- a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 @@ -20,14 +20,13 @@
@@ -2762,7 +2762,7 @@ index fbb07216d..bf78b9cda 100644
    }
  }
 diff --git a/csrc/libtorch_stable/moe/torch_bindings.cpp b/csrc/libtorch_stable/moe/torch_bindings.cpp
-index c0e966b2b..68ddf7294 100644
+index c0e966b..68ddf72 100644
 --- a/csrc/libtorch_stable/moe/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/moe/torch_bindings.cpp
 @@ -1,20 +1,20 @@
@@ -2929,7 +2929,7 @@ index c0e966b2b..68ddf7294 100644
 +REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
-index 000000000..76a18dea5
+index 0000000..76a18de
 --- /dev/null
 +++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 @@ -0,0 +1,330 @@
@@ -3264,7 +3264,7 @@ index 000000000..76a18dea5
 +  m.impl("merge_attn_states", &merge_attn_states);
 +}
 diff --git a/csrc/libtorch_stable/ops.h b/csrc/libtorch_stable/ops.h
-index e19f49d60..c17cfe05e 100644
+index e19f49d..c17cfe0 100644
 --- a/csrc/libtorch_stable/ops.h
 +++ b/csrc/libtorch_stable/ops.h
 @@ -11,8 +11,14 @@
@@ -3283,7 +3283,7 @@ index e19f49d60..c17cfe05e 100644
    // Get the raw data pointer
    void* data_ptr = tensor.mutable_data_ptr();
 diff --git a/csrc/libtorch_stable/quantization/activation_kernels.cu b/csrc/libtorch_stable/quantization/activation_kernels.cu
-index 822a41969..2afdd15fb 100644
+index 822a419..2afdd15 100644
 --- a/csrc/libtorch_stable/quantization/activation_kernels.cu
 +++ b/csrc/libtorch_stable/quantization/activation_kernels.cu
 @@ -117,15 +117,18 @@ __device__ __forceinline__ float2 silu2(float2 x) {
@@ -3367,7 +3367,7 @@ index 822a41969..2afdd15fb 100644
    // fixed GROUP_SIZE of 128.
    static constexpr int GROUP_SIZE = 128;
 diff --git a/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu b/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
-index 56dd47038..b722eb19e 100644
+index 56dd470..b722eb1 100644
 --- a/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
 +++ b/csrc/libtorch_stable/quantization/fused_kernels/fused_layernorm_dynamic_per_token_quant.cu
 @@ -142,8 +142,10 @@ void rms_norm_dynamic_per_token_quant_dispatch(
@@ -3397,7 +3397,7 @@ index 56dd47038..b722eb19e 100644
    STD_TORCH_CHECK(hidden_size % 4 == 0,
                    "Hidden size must be divisible by 4 for vectorized access");
 diff --git a/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh b/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
-index a81a0b9fe..72d046cad 100644
+index a81a0b9..72d046c 100644
 --- a/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
 +++ b/csrc/libtorch_stable/quantization/fused_kernels/quant_conversions.cuh
 @@ -13,7 +13,9 @@ namespace vllm {
@@ -3412,7 +3412,7 @@ index a81a0b9fe..72d046cad 100644
        static_cast<float>(std::numeric_limits<int8_t>::min());
    static const float i8_max =
 diff --git a/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu b/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu
-index e620c1818..be1c7cfd9 100644
+index e620c18..be1c7cf 100644
 --- a/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu
 +++ b/csrc/libtorch_stable/quantization/w8a8/int8/scaled_quant.cu
 @@ -8,7 +8,9 @@
@@ -3447,7 +3447,7 @@ index e620c1818..be1c7cfd9 100644
        static_cast<int32_t>(std::numeric_limits<int8_t>::min());
    static constexpr auto i8_max =
 diff --git a/csrc/libtorch_stable/topk.cu b/csrc/libtorch_stable/topk.cu
-index b3e1a8623..e774969e2 100644
+index b3e1a86..e774969 100644
 --- a/csrc/libtorch_stable/topk.cu
 +++ b/csrc/libtorch_stable/topk.cu
 @@ -1,54 +1,53 @@
@@ -3691,7 +3691,7 @@ index b3e1a8623..e774969e2 100644
  #endif
  }
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
-index 54548dfd0..db7d3e621 100644
+index 54548df..db7d3e6 100644
 --- a/csrc/libtorch_stable/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
 @@ -181,10 +181,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
@@ -3891,7 +3891,7 @@ index 54548dfd0..db7d3e621 100644
 +#endif
  REGISTER_EXTENSION(_C_stable_libtorch)
 diff --git a/csrc/libtorch_stable/torch_utils.h b/csrc/libtorch_stable/torch_utils.h
-index f02346739..cb4729196 100644
+index f023467..cb47291 100644
 --- a/csrc/libtorch_stable/torch_utils.h
 +++ b/csrc/libtorch_stable/torch_utils.h
 @@ -14,6 +14,10 @@
@@ -3987,7 +3987,7 @@ index f02346739..cb4729196 100644
 +  return reinterpret_cast<mublasHandle_t>(blas_handle_ptr);
  }
 diff --git a/csrc/libtorch_stable/type_convert.cuh b/csrc/libtorch_stable/type_convert.cuh
-index 8093c4bc8..2526fa637 100644
+index 8093c4b..2526fa6 100644
 --- a/csrc/libtorch_stable/type_convert.cuh
 +++ b/csrc/libtorch_stable/type_convert.cuh
 @@ -47,7 +47,7 @@ struct _typeConvert<float> {
@@ -4020,7 +4020,7 @@ index 8093c4bc8..2526fa637 100644
  
  /* Vector POD struct to generate vectorized and packed FP16/BF16 ops
 diff --git a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
-index 11a9b0818..730101918 100644
+index 11a9b08..7301019 100644
 --- a/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 +++ b/csrc/quantization/w8a8/fp8/nvidia/quant_utils.cuh
 @@ -1,7 +1,6 @@
@@ -4086,7 +4086,7 @@ index 11a9b0818..730101918 100644
  
  }  // namespace fp8
 diff --git a/csrc/torch_bindings.cpp b/csrc/torch_bindings.cpp
-index bcf0ce3e1..a4e5b2ca4 100644
+index bcf0ce3..a4e5b2c 100644
 --- a/csrc/torch_bindings.cpp
 +++ b/csrc/torch_bindings.cpp
 @@ -1,9 +1,9 @@
@@ -4252,7 +4252,7 @@ index bcf0ce3e1..a4e5b2ca4 100644
  REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
 diff --git a/tests/kernels/ir/test_gated_qkv.py b/tests/kernels/ir/test_gated_qkv.py
 new file mode 100644
-index 000000000..96919a35b
+index 0000000..96919a3
 --- /dev/null
 +++ b/tests/kernels/ir/test_gated_qkv.py
 @@ -0,0 +1,159 @@
@@ -4416,7 +4416,7 @@ index 000000000..96919a35b
 +    with pytest.raises(ValueError, match="packed_qkv last dimension"):
 +        native(*args)
 diff --git a/tests/test_config.py b/tests/test_config.py
-index f75592f08..f0818b43d 100644
+index f75592f..f0818b4 100644
 --- a/tests/test_config.py
 +++ b/tests/test_config.py
 @@ -3415,6 +3415,7 @@ def test_ir_op_priority_default():
@@ -4436,7 +4436,7 @@ index f75592f08..f0818b43d 100644
  
  @pytest.mark.parametrize("mode", [CompilationMode.NONE, CompilationMode.VLLM_COMPILE])
 diff --git a/tests/tokenizers_/test_registry.py b/tests/tokenizers_/test_registry.py
-index b7201c1cf..53dee37c0 100644
+index b7201c1..53dee37 100644
 --- a/tests/tokenizers_/test_registry.py
 +++ b/tests/tokenizers_/test_registry.py
 @@ -3,7 +3,7 @@
@@ -4481,7 +4481,7 @@ index b7201c1cf..53dee37c0 100644
 +    assert tokenizer is fake_tokenizer
 +    load_fast.assert_called_once()
 diff --git a/tests/utils_/test_mem_utils.py b/tests/utils_/test_mem_utils.py
-index 19690d1f3..c96b74795 100644
+index 19690d1..c96b747 100644
 --- a/tests/utils_/test_mem_utils.py
 +++ b/tests/utils_/test_mem_utils.py
 @@ -5,11 +5,33 @@ from unittest.mock import MagicMock, patch
@@ -4520,7 +4520,7 @@ index 19690d1f3..c96b74795 100644
  def test_memory_profiling():
      # Fake out some model loading + inference memory usage to test profiling
 diff --git a/tests/v1/attention/test_gdn_metadata_builder.py b/tests/v1/attention/test_gdn_metadata_builder.py
-index 221f933d8..2368cec1a 100644
+index 221f933..2368cec 100644
 --- a/tests/v1/attention/test_gdn_metadata_builder.py
 +++ b/tests/v1/attention/test_gdn_metadata_builder.py
 @@ -221,3 +221,22 @@ def test_full_cudagraph_spec_metadata_uses_request_count():
@@ -4547,7 +4547,7 @@ index 221f933d8..2368cec1a 100644
 +    )
 +    assert common._num_computed_tokens_cache is None
 diff --git a/tests/v1/sample/test_rejection_sampler.py b/tests/v1/sample/test_rejection_sampler.py
-index b02e53af8..e2e9b83fd 100644
+index b02e53a..e2e9b83 100644
 --- a/tests/v1/sample/test_rejection_sampler.py
 +++ b/tests/v1/sample/test_rejection_sampler.py
 @@ -14,6 +14,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
@@ -4620,7 +4620,7 @@ index b02e53af8..e2e9b83fd 100644
  def test_frequency_penalties(rejection_sampler):
      """Test rejection sampling with frequency penalties"""
 diff --git a/vllm/compilation/backends.py b/vllm/compilation/backends.py
-index 439a87e15..8745d273d 100644
+index 439a87e..8745d27 100644
 --- a/vllm/compilation/backends.py
 +++ b/vllm/compilation/backends.py
 @@ -11,7 +11,7 @@ import pprint
@@ -4661,7 +4661,7 @@ index 439a87e15..8745d273d 100644
              VllmSerializableFunction,
          )
 diff --git a/vllm/compilation/caching.py b/vllm/compilation/caching.py
-index 94456fc18..e205f5735 100644
+index 94456fc..e205f57 100644
 --- a/vllm/compilation/caching.py
 +++ b/vllm/compilation/caching.py
 @@ -12,7 +12,16 @@ from unittest.mock import patch
@@ -4692,7 +4692,7 @@ index 94456fc18..e205f5735 100644
      @classmethod
      def deserialize_graph_module(
 diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
-index 4a65376ca..abeaaf4c2 100644
+index 4a65376..abeaaf4 100644
 --- a/vllm/compilation/passes/pass_manager.py
 +++ b/vllm/compilation/passes/pass_manager.py
 @@ -48,10 +48,15 @@ if current_platform.is_cuda_alike():
@@ -4723,7 +4723,7 @@ index 4a65376ca..abeaaf4c2 100644
                  if rocm_aiter_ops.is_enabled():
                      self.passes += [RocmAiterAllReduceFusionPass(config)]
 diff --git a/vllm/compilation/piecewise_backend.py b/vllm/compilation/piecewise_backend.py
-index b647e0d85..d89472d13 100644
+index b647e0d..d89472d 100644
 --- a/vllm/compilation/piecewise_backend.py
 +++ b/vllm/compilation/piecewise_backend.py
 @@ -6,6 +6,7 @@ import io
@@ -4749,7 +4749,7 @@ index b647e0d85..d89472d13 100644
  
                  f = io.BytesIO()
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
-index 0ac5bf439..1dc117f89 100644
+index 0ac5bf4..1dc117f 100644
 --- a/vllm/config/kernel.py
 +++ b/vllm/config/kernel.py
 @@ -32,6 +32,7 @@ class IrOpPriorityConfig:
@@ -4761,7 +4761,7 @@ index 0ac5bf439..1dc117f89 100644
  
      gelu_and_mul_sparse: list[str] = Field(default_factory=list)
 diff --git a/vllm/config/model.py b/vllm/config/model.py
-index 89978c35d..332861d9d 100644
+index 89978c3..332861d 100644
 --- a/vllm/config/model.py
 +++ b/vllm/config/model.py
 @@ -1014,8 +1014,13 @@ class ModelConfig:
@@ -4781,7 +4781,7 @@ index 89978c35d..332861d9d 100644
          if self.runner != "auto":
              runner = self.runner
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index 8e0846982..a4cfdf6f1 100644
+index 8e08469..a4cfdf6 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
 @@ -696,7 +696,8 @@ class VllmConfig:
@@ -4795,7 +4795,7 @@ index 8e0846982..a4cfdf6f1 100644
              if any(arch in ROCM_DEFAULT_MRV1_ARCHITECTURES for arch in architectures):
                  logger.warning_once(
 diff --git a/vllm/distributed/device_communicators/all2all.py b/vllm/distributed/device_communicators/all2all.py
-index 080e7feef..96f08f1f2 100644
+index 080e7fe..96f08f1 100644
 --- a/vllm/distributed/device_communicators/all2all.py
 +++ b/vllm/distributed/device_communicators/all2all.py
 @@ -203,11 +203,23 @@ class DeepEPAll2AllManagerBase(All2AllManagerBase):
@@ -4841,7 +4841,7 @@ index 080e7feef..96f08f1f2 100644
          )
          return kwargs
 diff --git a/vllm/distributed/device_communicators/cuda_communicator.py b/vllm/distributed/device_communicators/cuda_communicator.py
-index 4afc28f65..6e510bd0a 100644
+index 4afc28f..6e510bd 100644
 --- a/vllm/distributed/device_communicators/cuda_communicator.py
 +++ b/vllm/distributed/device_communicators/cuda_communicator.py
 @@ -142,13 +142,37 @@ class CudaCommunicator(DeviceCommunicatorBase):
@@ -4890,7 +4890,7 @@ index 4afc28f65..6e510bd0a 100644
          # AITER custom all-gather/reduce-scatter DP-attention dispatch/combine
          if (
 diff --git a/vllm/distributed/device_communicators/custom_all_reduce.py b/vllm/distributed/device_communicators/custom_all_reduce.py
-index 6c15a9827..37d929a4d 100644
+index 6c15a98..37d929a 100644
 --- a/vllm/distributed/device_communicators/custom_all_reduce.py
 +++ b/vllm/distributed/device_communicators/custom_all_reduce.py
 @@ -122,7 +122,7 @@ class CustomAllreduce:
@@ -4911,7 +4911,7 @@ index 6c15a9827..37d929a4d 100644
          ):
              logger.warning(
 diff --git a/vllm/distributed/kv_transfer/kv_connector/utils.py b/vllm/distributed/kv_transfer/kv_connector/utils.py
-index 93552d51b..bae93efbf 100644
+index 93552d5..bae93ef 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/utils.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/utils.py
 @@ -22,10 +22,12 @@ from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
@@ -4928,7 +4928,7 @@ index 93552d51b..bae93efbf 100644
  logger = init_logger(__name__)
  
 diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
-index 4451f0566..48dd2869c 100644
+index 4451f05..48dd286 100644
 --- a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
 +++ b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
 @@ -1113,7 +1113,9 @@ class MooncakeConnectorWorker:
@@ -4943,7 +4943,7 @@ index 4451f0566..48dd2869c 100644
              self._sender_executor.shutdown(wait=False)
              if self.sender_loop.is_running():
 diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
-index dc3022a16..7cdf9310e 100644
+index dc3022a..7cdf931 100644
 --- a/vllm/distributed/parallel_state.py
 +++ b/vllm/distributed/parallel_state.py
 @@ -1871,7 +1871,7 @@ def init_distributed_environment(
@@ -4981,7 +4981,7 @@ index dc3022a16..7cdf9310e 100644
              tp_pp_cpu_group = torch.distributed.new_group(
                  backend="gloo", timeout=timeout
 diff --git a/vllm/ir/ops/__init__.py b/vllm/ir/ops/__init__.py
-index 13e2b7dda..aeaf063d7 100644
+index 13e2b7d..aeaf063 100644
 --- a/vllm/ir/ops/__init__.py
 +++ b/vllm/ir/ops/__init__.py
 @@ -1,6 +1,7 @@
@@ -4995,7 +4995,7 @@ index 13e2b7dda..aeaf063d7 100644
 +__all__ = ["rms_norm", "fused_add_rms_norm", "gelu_and_mul_sparse", "gated_qkv_rms_norm_rope"]
 diff --git a/vllm/ir/ops/gated_qkv.py b/vllm/ir/ops/gated_qkv.py
 new file mode 100644
-index 000000000..a293942fb
+index 0000000..a293942
 --- /dev/null
 +++ b/vllm/ir/ops/gated_qkv.py
 @@ -0,0 +1,218 @@
@@ -5218,7 +5218,7 @@ index 000000000..a293942fb
 +        weight_offset,
 +    )
 diff --git a/vllm/ir/tolerances.py b/vllm/ir/tolerances.py
-index a794a9397..0108aa590 100644
+index a794a93..0108aa5 100644
 --- a/vllm/ir/tolerances.py
 +++ b/vllm/ir/tolerances.py
 @@ -29,7 +29,7 @@ DEFAULT_TOLERANCES: ToleranceSpec = {
@@ -5231,7 +5231,7 @@ index a794a9397..0108aa590 100644
      # rtol=0 because relative error is meaningless for small integers.
      torch.int8: {"atol": 1, "rtol": 0},
 diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
-index d3c41f97d..2825846ef 100644
+index d3c41f9..2825846 100644
 --- a/vllm/model_executor/kernels/linear/__init__.py
 +++ b/vllm/model_executor/kernels/linear/__init__.py
 @@ -675,7 +675,34 @@ def choose_scaled_mm_linear_kernel(
@@ -5271,7 +5271,7 @@ index d3c41f97d..2825846ef 100644
      # Apply --linear-backend filtering when set.
      platform_kernels = _resolve_backend_kernels(
 diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
-index cea186e49..27336e58c 100644
+index cea186e..27336e5 100644
 --- a/vllm/model_executor/kernels/mhc/tilelang.py
 +++ b/vllm/model_executor/kernels/mhc/tilelang.py
 @@ -577,6 +577,26 @@ def mhc_pre_tilelang(
@@ -5380,7 +5380,7 @@ index cea186e49..27336e58c 100644
          _MHC_FUSED_TILELANG_KERNEL,
          _MHC_POST_TILELANG_KERNEL,
 diff --git a/vllm/model_executor/layers/attention/attention.py b/vllm/model_executor/layers/attention/attention.py
-index a001c8c29..003f8ad0d 100644
+index a001c8c..003f8ad 100644
 --- a/vllm/model_executor/layers/attention/attention.py
 +++ b/vllm/model_executor/layers/attention/attention.py
 @@ -492,6 +492,7 @@ class Attention(nn.Module, AttentionLayerBase):
@@ -5425,7 +5425,7 @@ index a001c8c29..003f8ad0d 100644
                  kv_cache_dummy_dep = torch.ops.vllm.unified_kv_cache_update(
                      key, value, encoded
 diff --git a/vllm/model_executor/layers/fused_moe/activation.py b/vllm/model_executor/layers/fused_moe/activation.py
-index d83301bed..660080a24 100644
+index d83301b..660080a 100644
 --- a/vllm/model_executor/layers/fused_moe/activation.py
 +++ b/vllm/model_executor/layers/fused_moe/activation.py
 @@ -351,6 +351,12 @@ def apply_moe_activation(
@@ -5442,7 +5442,7 @@ index d83301bed..660080a24 100644
              torch.ops._C.silu_and_mul(output, input)
      elif activation == MoEActivation.GELU:
 diff --git a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
-index 211364d24..f0179e4a0 100644
+index 211364d..f0179e4 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/deep_gemm_moe.py
 @@ -355,9 +355,12 @@ class DeepGemmExperts(mk.FusedMoEExpertsModular):
@@ -5474,7 +5474,7 @@ index 211364d24..f0179e4a0 100644
                  expert_ids,
                  **gemm_kwargs,
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index dc619b2b1..85ce47371 100644
+index dc619b2..85ce473 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
 @@ -33,6 +33,7 @@ from vllm.model_executor.layers.fused_moe.utils import (
@@ -5733,7 +5733,7 @@ index dc619b2b1..85ce47371 100644
  
      return out_hidden_states
 diff --git a/vllm/model_executor/layers/fused_moe/routed_experts.py b/vllm/model_executor/layers/fused_moe/routed_experts.py
-index 2dafb6c49..0305a535c 100644
+index 2dafb6c..0305a53 100644
 --- a/vllm/model_executor/layers/fused_moe/routed_experts.py
 +++ b/vllm/model_executor/layers/fused_moe/routed_experts.py
 @@ -456,6 +456,39 @@ class RoutedExperts(PluggableLayer):
@@ -5841,7 +5841,7 @@ index 2dafb6c49..0305a535c 100644
          hidden_dim = self._get_hidden_dim(shard_dim, expert_data.ndim)
          expert_data = self._narrow_expert_data_for_padding(
 diff --git a/vllm/model_executor/layers/fused_moe/router/gate_linear.py b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
-index 1f086b448..c75266615 100644
+index 1f086b4..c752666 100644
 --- a/vllm/model_executor/layers/fused_moe/router/gate_linear.py
 +++ b/vllm/model_executor/layers/fused_moe/router/gate_linear.py
 @@ -165,6 +165,28 @@ class GateLinear(ReplicatedLinear):
@@ -5874,7 +5874,7 @@ index 1f086b448..c75266615 100644
          if self.allow_ll_bf16_gemm and x.shape[0] <= 16 and x.dtype == torch.bfloat16:
              from vllm.model_executor.kernels.linear.cute_dsl.ll_bf16 import (
 diff --git a/vllm/model_executor/layers/layernorm.py b/vllm/model_executor/layers/layernorm.py
-index cded9daf1..5746c1481 100644
+index cded9da..5746c14 100644
 --- a/vllm/model_executor/layers/layernorm.py
 +++ b/vllm/model_executor/layers/layernorm.py
 @@ -157,7 +157,9 @@ class GemmaRMSNorm(CustomOp):
@@ -5889,7 +5889,7 @@ index cded9daf1..5746c1481 100644
      def forward_cuda(
          self,
 diff --git a/vllm/model_executor/layers/logits_processor.py b/vllm/model_executor/layers/logits_processor.py
-index 694bb6b03..c35196331 100644
+index 694bb6b..c351963 100644
 --- a/vllm/model_executor/layers/logits_processor.py
 +++ b/vllm/model_executor/layers/logits_processor.py
 @@ -10,7 +10,10 @@ import torch.nn.functional as F
@@ -6013,7 +6013,7 @@ index 694bb6b03..c35196331 100644
          num_pad = lm_head.shard_indices.num_org_vocab_padding
          if num_pad > 0:
 diff --git a/vllm/model_executor/layers/mamba/abstract.py b/vllm/model_executor/layers/mamba/abstract.py
-index 10ed7d05f..a13b8ab1a 100644
+index 10ed7d0..a13b8ab 100644
 --- a/vllm/model_executor/layers/mamba/abstract.py
 +++ b/vllm/model_executor/layers/mamba/abstract.py
 @@ -26,12 +26,24 @@ class MambaBase(AttentionLayerBase):
@@ -6043,7 +6043,7 @@ index 10ed7d05f..a13b8ab1a 100644
          states: list[torch.Tensor] = []
          offset = 0
 diff --git a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
-index bd554ede5..33514fe15 100644
+index bd554ed..33514fe 100644
 --- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
 +++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
 @@ -14,8 +14,50 @@ from vllm.triton_utils import tl, triton
@@ -6192,7 +6192,7 @@ index bd554ede5..33514fe15 100644
          D_HAS_HDIM=D.dim() == 2 if D is not None else True,
          HAS_Z=z is not None,
 diff --git a/vllm/model_executor/layers/mhc.py b/vllm/model_executor/layers/mhc.py
-index 73993fbc9..3d24941e5 100644
+index 73993fb..3d24941 100644
 --- a/vllm/model_executor/layers/mhc.py
 +++ b/vllm/model_executor/layers/mhc.py
 @@ -222,6 +222,22 @@ class MHCPreOp(CustomOp):
@@ -6270,7 +6270,7 @@ index 73993fbc9..3d24941e5 100644
          residual_cur = mhc_kernels.mhc_post_torch(
              x, residual, post_layer_mix, comb_res_mix
 diff --git a/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py b/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
-index afae19c75..37dd63eca 100644
+index afae19c..37dd63e 100644
 --- a/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
 +++ b/vllm/model_executor/layers/minimax_rms_norm/lamport_workspace.py
 @@ -13,7 +13,15 @@ import torch
@@ -6303,7 +6303,7 @@ index afae19c75..37dd63eca 100644
          assert comm_size > 0, "comm_size must be positive"
  
 diff --git a/vllm/model_executor/layers/quantization/fp8.py b/vllm/model_executor/layers/quantization/fp8.py
-index d8bef7347..1ada5f0e2 100644
+index d8bef73..1ada5f0 100644
 --- a/vllm/model_executor/layers/quantization/fp8.py
 +++ b/vllm/model_executor/layers/quantization/fp8.py
 @@ -146,7 +146,7 @@ class Fp8Config(QuantizationConfig):
@@ -6316,7 +6316,7 @@ index d8bef7347..1ada5f0e2 100644
      @classmethod
      def get_config_filenames(cls) -> list[str]:
 diff --git a/vllm/model_executor/layers/quantization/modelopt.py b/vllm/model_executor/layers/quantization/modelopt.py
-index e3e8b3736..6de64f48a 100644
+index e3e8b37..6de64f4 100644
 --- a/vllm/model_executor/layers/quantization/modelopt.py
 +++ b/vllm/model_executor/layers/quantization/modelopt.py
 @@ -437,7 +437,7 @@ class ModelOptFp8Config(ModelOptQuantConfigBase):
@@ -6329,7 +6329,7 @@ index e3e8b3736..6de64f48a 100644
      @classmethod
      def override_quantization_method(
 diff --git a/vllm/model_executor/layers/quantization/utils/fp8_utils.py b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
-index e42f43b39..c6144ae40 100644
+index e42f43b..c6144ae 100644
 --- a/vllm/model_executor/layers/quantization/utils/fp8_utils.py
 +++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
 @@ -551,6 +551,19 @@ def _per_token_group_quant_fp8_colmajor(
@@ -6379,7 +6379,7 @@ index e42f43b39..c6144ae40 100644
          torch.ops._C.per_token_group_fp8_quant(
              x,
 diff --git a/vllm/model_executor/layers/rotary_embedding/mrope.py b/vllm/model_executor/layers/rotary_embedding/mrope.py
-index a7fe51c46..171ba72b2 100644
+index a7fe51c..171ba72 100644
 --- a/vllm/model_executor/layers/rotary_embedding/mrope.py
 +++ b/vllm/model_executor/layers/rotary_embedding/mrope.py
 @@ -228,12 +228,11 @@ def apply_interleaved_rope(x: torch.Tensor, mrope_section: list[int]) -> torch.T
@@ -6401,7 +6401,7 @@ index a7fe51c46..171ba72b2 100644
  
  class MRotaryEmbedding(RotaryEmbeddingBase):
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 32902901c..10abf3d8d 100644
+index 3290290..10abf3d 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,15 +2,22 @@
@@ -8111,7 +8111,7 @@ index 32902901c..10abf3d8d 100644
          self,
          hidden_states: torch.Tensor,
 diff --git a/vllm/model_executor/models/deepseek_ocr.py b/vllm/model_executor/models/deepseek_ocr.py
-index 114498764..536a28ed1 100644
+index 1144987..536a28e 100644
 --- a/vllm/model_executor/models/deepseek_ocr.py
 +++ b/vllm/model_executor/models/deepseek_ocr.py
 @@ -78,6 +78,11 @@ from .deepseek_vl2 import MlpProjector
@@ -8162,7 +8162,7 @@ index 114498764..536a28ed1 100644
          local_features_2 = self.vision_model(patches, local_features_1)
          features = torch.cat(
 diff --git a/vllm/model_executor/models/qwen3_moe.py b/vllm/model_executor/models/qwen3_moe.py
-index 5df982d74..cd69e7246 100644
+index 5df982d..cd69e72 100644
 --- a/vllm/model_executor/models/qwen3_moe.py
 +++ b/vllm/model_executor/models/qwen3_moe.py
 @@ -53,6 +53,14 @@ from vllm.model_executor.layers.linear import (
@@ -8181,7 +8181,7 @@ index 5df982d74..cd69e7246 100644
      ParallelLMHead,
      VocabParallelEmbedding,
 diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
-index 495650eb1..42503f229 100644
+index 495650e..42503f2 100644
 --- a/vllm/model_executor/models/qwen3_next.py
 +++ b/vllm/model_executor/models/qwen3_next.py
 @@ -8,6 +8,8 @@ from itertools import islice
@@ -8525,7 +8525,7 @@ index 495650eb1..42503f229 100644
          return output
  
 diff --git a/vllm/model_executor/models/qwen3_vl.py b/vllm/model_executor/models/qwen3_vl.py
-index 644fd134a..8f3f88a0d 100644
+index 644fd13..8f3f88a 100644
 --- a/vllm/model_executor/models/qwen3_vl.py
 +++ b/vllm/model_executor/models/qwen3_vl.py
 @@ -24,6 +24,7 @@
@@ -8789,7 +8789,7 @@ index 644fd134a..8f3f88a0d 100644
  
          deepstack_feature_lists = []
 diff --git a/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py b/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
-index 91ae7c44c..46bb8f44a 100644
+index 91ae7c4..46bb8f4 100644
 --- a/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
 +++ b/vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py
 @@ -259,6 +259,17 @@ def deepseek_v4_sparse_mla_attention_warmup(worker: "Worker") -> None:
@@ -8811,7 +8811,7 @@ index 91ae7c44c..46bb8f44a 100644
      mixed_tokens = _clamp_warmup_tokens(_SPARSE_MLA_MIXED_WARMUP_TOKENS, max_tokens)
      if mixed_tokens <= 0:
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index bcb2dd779..a510243df 100644
+index bcb2dd7..a510243 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
 @@ -99,118 +99,47 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
@@ -8952,7 +8952,7 @@ index bcb2dd779..a510243df 100644
          # TODO(roberto): Remove after registered CuTeDSL warmups are migrated
          # to the shared JIT warmup infrastructure.
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 9c7798096..f58154d37 100644
+index 9c77980..f58154d 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -91,6 +91,104 @@ def _fill_short_context_topk_indices(
@@ -9404,7 +9404,7 @@ index 9c7798096..f58154d37 100644
 -
 -        return apply_pre_quantized_block_scaled_mm(self.wq_b, qr, qr_scale)
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
-index 326a94f4f..4723b30f2 100644
+index 326a94f..4723b30 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
 @@ -44,6 +44,20 @@ else:
@@ -9560,7 +9560,7 @@ index 326a94f4f..4723b30f2 100644
      kv = tl.load(
          row_base[:, None] + block[None, :],
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py b/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
-index 77b1aa223..88a5e562b 100644
+index 77b1aa2..88a5e56 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py
 @@ -23,6 +23,14 @@ from vllm.triton_utils import tl, triton
@@ -9601,7 +9601,7 @@ index 77b1aa223..88a5e562b 100644
  
      num_tokens, num_heads, head_dim = o.shape
 diff --git a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
-index 59ac4d27c..a7e6e2234 100644
+index 59ac4d2..a7e6e22 100644
 --- a/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
 +++ b/vllm/models/deepseek_v4/common/ops/fused_mtp_input_rmsnorm.py
 @@ -107,7 +107,7 @@ class FusedMTPInputRMSNormKernel(
@@ -9614,7 +9614,7 @@ index 59ac4d27c..a7e6e2234 100644
                  x,
                  hnorm_weight_ptr,
 diff --git a/vllm/models/deepseek_v4/common/ops/save_partial_states.py b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
-index 6a554b9b4..429815393 100644
+index 6a554b9..4298153 100644
 --- a/vllm/models/deepseek_v4/common/ops/save_partial_states.py
 +++ b/vllm/models/deepseek_v4/common/ops/save_partial_states.py
 @@ -12,10 +12,25 @@ from vllm.model_executor.warmup.jit_warmup_triton_helper import (
@@ -9653,7 +9653,7 @@ index 6a554b9b4..429815393 100644
  
  
 diff --git a/vllm/models/deepseek_v4/compressor.py b/vllm/models/deepseek_v4/compressor.py
-index 41af0c766..75ae9a004 100644
+index 41af0c7..75ae9a0 100644
 --- a/vllm/models/deepseek_v4/compressor.py
 +++ b/vllm/models/deepseek_v4/compressor.py
 @@ -389,6 +389,47 @@ class DeepseekCompressor(nn.Module):
@@ -9705,7 +9705,7 @@ index 41af0c766..75ae9a004 100644
          # NOTE: PDL is disabled — both this kernel and the compress kernels
          # below depend on preceding kernel outputs (kv/score from the cublas
 diff --git a/vllm/models/deepseek_v4/nvidia/dspark.py b/vllm/models/deepseek_v4/nvidia/dspark.py
-index 1a3c2c780..cef0f1271 100644
+index 1a3c2c7..cef0f12 100644
 --- a/vllm/models/deepseek_v4/nvidia/dspark.py
 +++ b/vllm/models/deepseek_v4/nvidia/dspark.py
 @@ -23,6 +23,7 @@ from vllm.distributed import (
@@ -9760,7 +9760,7 @@ index 1a3c2c780..cef0f1271 100644
  
          # (param_name, ckpt_shard_name, shard_id) for non-expert stacked params.
 diff --git a/vllm/models/deepseek_v4/nvidia/flashmla.py b/vllm/models/deepseek_v4/nvidia/flashmla.py
-index 0ae0d87a1..6647f1c7a 100644
+index 0ae0d87..6647f1c 100644
 --- a/vllm/models/deepseek_v4/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v4/nvidia/flashmla.py
 @@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
@@ -9835,7 +9835,7 @@ index 0ae0d87a1..6647f1c7a 100644
 +                ),
              )
 diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
-index b1379cc9e..2b3a07149 100644
+index b1379cc..2b3a071 100644
 --- a/vllm/models/deepseek_v4/nvidia/model.py
 +++ b/vllm/models/deepseek_v4/nvidia/model.py
 @@ -142,6 +142,12 @@ class DeepseekV4MLP(nn.Module):
@@ -9899,7 +9899,7 @@ index b1379cc9e..2b3a07149 100644
              self.hf_to_vllm_mapper = _make_deepseek_v4_weights_mapper(expert_dtype)
  
 diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
-index 55403559d..2405a84f4 100644
+index 5540355..2405a84 100644
 --- a/vllm/models/deepseek_v4/nvidia/mtp.py
 +++ b/vllm/models/deepseek_v4/nvidia/mtp.py
 @@ -381,10 +381,15 @@ class DeepSeekV4MTP(nn.Module):
@@ -9922,7 +9922,7 @@ index 55403559d..2405a84f4 100644
  
          for name, loaded_weight in weights:
 diff --git a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
-index 72ce43b46..38567e845 100644
+index 72ce43b..38567e8 100644
 --- a/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
 +++ b/vllm/models/deepseek_v4/nvidia/ops/o_proj.py
 @@ -70,13 +70,33 @@ def deep_gemm_fp8_o_proj(
@@ -9967,7 +9967,7 @@ index 72ce43b46..38567e845 100644
          grouped_weight = wo_a.weight.view(n_groups, o_lora_rank, -1)
          torch.bmm(
 diff --git a/vllm/platforms/cuda.py b/vllm/platforms/cuda.py
-index 30eed82cc..a086b8767 100644
+index 30eed82..a086b87 100644
 --- a/vllm/platforms/cuda.py
 +++ b/vllm/platforms/cuda.py
 @@ -760,7 +760,7 @@ class CudaPlatformBase(Platform):
@@ -9980,7 +9980,7 @@ index 30eed82cc..a086b8767 100644
  
      @classmethod
 diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
-index b3b7fe8b0..ae64515b1 100644
+index b3b7fe8..ae64515 100644
 --- a/vllm/platforms/rocm.py
 +++ b/vllm/platforms/rocm.py
 @@ -1164,7 +1164,7 @@ class RocmPlatform(Platform):
@@ -9993,7 +9993,7 @@ index b3b7fe8b0..ae64515b1 100644
  
      @classmethod
 diff --git a/vllm/platforms/xpu.py b/vllm/platforms/xpu.py
-index 6920c55e7..e0cdc68c0 100644
+index 6920c55..e0cdc68 100644
 --- a/vllm/platforms/xpu.py
 +++ b/vllm/platforms/xpu.py
 @@ -491,7 +491,9 @@ class XPUPlatform(Platform):
@@ -10008,7 +10008,7 @@ index 6920c55e7..e0cdc68c0 100644
      @classmethod
      def device_count(cls) -> int:
 diff --git a/vllm/profiler/wrapper.py b/vllm/profiler/wrapper.py
-index abe8a3431..f4c49d327 100644
+index abe8a34..f4c49d3 100644
 --- a/vllm/profiler/wrapper.py
 +++ b/vllm/profiler/wrapper.py
 @@ -175,11 +175,12 @@ class WorkerProfiler(ABC):
@@ -10026,7 +10026,7 @@ index abe8a3431..f4c49d327 100644
  }
  
 diff --git a/vllm/tilelang_utils/__init__.py b/vllm/tilelang_utils/__init__.py
-index 803409b1e..031a30058 100644
+index 803409b..031a300 100644
 --- a/vllm/tilelang_utils/__init__.py
 +++ b/vllm/tilelang_utils/__init__.py
 @@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any
@@ -10043,7 +10043,7 @@ index 803409b1e..031a30058 100644
          raise ImportError(
              "tilelang is required for mhc but is not installed. Install it with "
 diff --git a/vllm/tokenizers/registry.py b/vllm/tokenizers/registry.py
-index 46446ecd6..c0ecf8566 100644
+index 46446ec..c0ecf85 100644
 --- a/vllm/tokenizers/registry.py
 +++ b/vllm/tokenizers/registry.py
 @@ -41,6 +41,16 @@ _MIN_TRANSFORMERS_VERSION_FOR_HF_MISTRAL = Version("5.15.0")
@@ -10064,7 +10064,7 @@ index 46446ecd6..c0ecf8566 100644
      "step3_vl",
      "step3p7",
 diff --git a/vllm/triton_utils/__init__.py b/vllm/triton_utils/__init__.py
-index 5c9006c05..64f7f5932 100644
+index 5c9006c..64f7f59 100644
 --- a/vllm/triton_utils/__init__.py
 +++ b/vllm/triton_utils/__init__.py
 @@ -12,9 +12,19 @@ if TYPE_CHECKING or HAS_TRITON:
@@ -10092,7 +10092,7 @@ index 5c9006c05..64f7f5932 100644
      tl = TritonLanguagePlaceholder()
 diff --git a/vllm/triton_utils/musa.py b/vllm/triton_utils/musa.py
 new file mode 100644
-index 000000000..0dd80f4f7
+index 0000000..0dd80f4
 --- /dev/null
 +++ b/vllm/triton_utils/musa.py
 @@ -0,0 +1,17 @@
@@ -10114,7 +10114,7 @@ index 000000000..0dd80f4f7
 +
 +    return Version("3.2.0") <= Version(triton.__version__) < Version("3.3.0")
 diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
-index 5d05c29a8..54e68a345 100644
+index 5d05c29..54e68a3 100644
 --- a/vllm/utils/deep_gemm.py
 +++ b/vllm/utils/deep_gemm.py
 @@ -74,6 +74,13 @@ class DeepGemmQuantScaleFMT(Enum):
@@ -10213,7 +10213,7 @@ index 5d05c29a8..54e68a345 100644
          *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
      )
 diff --git a/vllm/utils/jit_monitor.py b/vllm/utils/jit_monitor.py
-index bb0bb8df9..05809581d 100644
+index bb0bb8d..0580958 100644
 --- a/vllm/utils/jit_monitor.py
 +++ b/vllm/utils/jit_monitor.py
 @@ -98,7 +98,11 @@ def _setup_triton_autotuning_print() -> None:
@@ -10243,7 +10243,7 @@ index bb0bb8df9..05809581d 100644
  
      # kernels pass non-JSON-serializable constexprs
 diff --git a/vllm/utils/mem_utils.py b/vllm/utils/mem_utils.py
-index c092dff41..9830609a5 100644
+index c092dff..9830609 100644
 --- a/vllm/utils/mem_utils.py
 +++ b/vllm/utils/mem_utils.py
 @@ -225,6 +225,26 @@ class MemoryProfilingResult:
@@ -10280,7 +10280,7 @@ index c092dff41..9830609a5 100644
 -    result.non_kv_cache_memory = result.total_consumed + result.transient_peak_headroom
 +    result.non_kv_cache_memory = _calculate_non_kv_cache_memory(result)
 diff --git a/vllm/utils/multi_stream_utils.py b/vllm/utils/multi_stream_utils.py
-index a8286c848..d370431a9 100644
+index a8286c8..d370431 100644
 --- a/vllm/utils/multi_stream_utils.py
 +++ b/vllm/utils/multi_stream_utils.py
 @@ -19,6 +19,7 @@ def maybe_execute_in_parallel(
@@ -10357,7 +10357,7 @@ index a8286c848..d370431a9 100644
      pending: list[torch.cuda.Event] = []
  
 diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
-index 0b330edf0..9f7e0318b 100644
+index 0b330ed..9f7e031 100644
 --- a/vllm/utils/torch_utils.py
 +++ b/vllm/utils/torch_utils.py
 @@ -879,6 +879,12 @@ def weak_ref_tensor(tensor: Any) -> Any:
@@ -10374,7 +10374,7 @@ index 0b330edf0..9f7e0318b 100644
      else:
          return tensor
 diff --git a/vllm/v1/attention/backends/fa_utils.py b/vllm/v1/attention/backends/fa_utils.py
-index 0de6b8521..e5192e1a2 100644
+index 0de6b85..e5192e1 100644
 --- a/vllm/v1/attention/backends/fa_utils.py
 +++ b/vllm/v1/attention/backends/fa_utils.py
 @@ -80,6 +80,10 @@ def get_flash_attn_version(
@@ -10389,7 +10389,7 @@ index 0de6b8521..e5192e1a2 100644
          return 2
      if current_platform.is_rocm():
 diff --git a/vllm/v1/attention/backends/gdn_attn.py b/vllm/v1/attention/backends/gdn_attn.py
-index 23daff543..1af4bd1d2 100644
+index 23daff5..1af4bd1 100644
 --- a/vllm/v1/attention/backends/gdn_attn.py
 +++ b/vllm/v1/attention/backends/gdn_attn.py
 @@ -54,6 +54,9 @@ class GDNAttentionMetadata:
@@ -10468,7 +10468,7 @@ index 23daff543..1af4bd1d2 100644
              non_spec_state_indices_tensor=non_spec_state_indices_tensor,
              spec_sequence_masks=spec_sequence_masks,
 diff --git a/vllm/v1/attention/backends/mamba_attn.py b/vllm/v1/attention/backends/mamba_attn.py
-index e0b5fab46..564a80273 100644
+index e0b5fab..564a802 100644
 --- a/vllm/v1/attention/backends/mamba_attn.py
 +++ b/vllm/v1/attention/backends/mamba_attn.py
 @@ -87,6 +87,7 @@ class BaseMambaAttentionMetadata:
@@ -10517,7 +10517,7 @@ index e0b5fab46..564a80273 100644
  
      def build(
 diff --git a/vllm/v1/attention/backends/mla/flashmla.py b/vllm/v1/attention/backends/mla/flashmla.py
-index 8ebfbbba7..e3a1757b2 100644
+index 8ebfbbb..e3a1757 100644
 --- a/vllm/v1/attention/backends/mla/flashmla.py
 +++ b/vllm/v1/attention/backends/mla/flashmla.py
 @@ -72,7 +72,7 @@ class FlashMLABackend(MLACommonBackend):
@@ -10530,7 +10530,7 @@ index 8ebfbbba7..e3a1757b2 100644
      @classmethod
      def supports_combination(
 diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
-index 3a9ca2ffd..e1ecb9f1a 100644
+index 3a9ca2f..e1ecb9f 100644
 --- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
 +++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
 @@ -696,6 +696,9 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
@@ -10565,7 +10565,7 @@ index 3a9ca2ffd..e1ecb9f1a 100644
              actual_num_heads = q.shape[1]
  
 diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
-index 837dbca81..2bcf413b8 100644
+index 837dbca..2bcf413 100644
 --- a/vllm/v1/attention/backends/mla/indexer.py
 +++ b/vllm/v1/attention/backends/mla/indexer.py
 @@ -607,7 +607,7 @@ class DeepSeekV32IndexerDecodeMetadata:
@@ -10619,7 +10619,7 @@ index 837dbca81..2bcf413b8 100644
                      seq_lens,
                      self.kv_cache_spec.num_states,
 diff --git a/vllm/v1/attention/backends/mla/sparse_swa.py b/vllm/v1/attention/backends/mla/sparse_swa.py
-index c4f3cd8b4..80d30d5eb 100644
+index c4f3cd8..80d30d5 100644
 --- a/vllm/v1/attention/backends/mla/sparse_swa.py
 +++ b/vllm/v1/attention/backends/mla/sparse_swa.py
 @@ -31,7 +31,7 @@ from vllm.v1.attention.backends.mla.compressor_utils import (
@@ -10641,7 +10641,7 @@ index c4f3cd8b4..80d30d5eb 100644
          # Clear the row so a padded token cannot gather through stale indices.
          for i in range(0, index_width, TRITON_BLOCK_SIZE):
 diff --git a/vllm/v1/attention/ops/flashmla.py b/vllm/v1/attention/ops/flashmla.py
-index c84a49585..bbba514ad 100644
+index c84a495..bbba514 100644
 --- a/vllm/v1/attention/ops/flashmla.py
 +++ b/vllm/v1/attention/ops/flashmla.py
 @@ -55,7 +55,7 @@ def is_flashmla_dense_supported() -> tuple[bool, str | None]:
@@ -10654,7 +10654,7 @@ index c84a49585..bbba514ad 100644
      return True, None
  
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
-index dff0b21c6..59dc552c4 100644
+index dff0b21..59dc552 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
 +++ b/vllm/v1/attention/ops/triton_attention_helpers.py
 @@ -91,7 +91,7 @@ def find_seq_idx(
@@ -10676,7 +10676,7 @@ index dff0b21c6..59dc552c4 100644
          # formula above can overshoot for non-causal sequences, and slots
          # >= seq_len are unwritten KV (last-block tail) that may hold NaN
 diff --git a/vllm/v1/attention/ops/triton_turboquant_decode.py b/vllm/v1/attention/ops/triton_turboquant_decode.py
-index 3adaf2610..a699dc91d 100644
+index 3adaf26..a699dc9 100644
 --- a/vllm/v1/attention/ops/triton_turboquant_decode.py
 +++ b/vllm/v1/attention/ops/triton_turboquant_decode.py
 @@ -218,7 +218,7 @@ def _tq_decode_stage1(
@@ -10760,7 +10760,7 @@ index 3adaf2610..a699dc91d 100644
      else:
          v_vals = tl.zeros([BLOCK_D], dtype=tl.float32)
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd0c..6832d9442 100644
+index b0231dd..6832d94 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -34,6 +34,21 @@ logger = init_logger(__name__)
@@ -10851,7 +10851,7 @@ index b0231dd0c..6832d9442 100644
          BLOCK_Q=BLOCK_Q,
          num_seqs=num_seqs,
 diff --git a/vllm/v1/core/block_pool.py b/vllm/v1/core/block_pool.py
-index e2a06e7e4..03391ce49 100644
+index e2a06e7..03391ce 100644
 --- a/vllm/v1/core/block_pool.py
 +++ b/vllm/v1/core/block_pool.py
 @@ -288,14 +288,23 @@ class BlockPool:
@@ -10886,7 +10886,7 @@ index e2a06e7e4..03391ce49 100644
                  block_hash_with_group_id,
                  blk,
 diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
-index afb03ac3e..181bbe7e4 100644
+index afb03ac..181bbe7 100644
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
 @@ -12,6 +12,7 @@ from vllm.v1.core.kv_cache_utils import (
@@ -10944,7 +10944,7 @@ index afb03ac3e..181bbe7e4 100644
                      and self.single_type_managers[group.group_ids[0]].block_pool
                      is self.single_type_managers[i].block_pool
 diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
-index 226da3a1e..b710d7bc9 100644
+index 226da3a..b710d7b 100644
 --- a/vllm/v1/core/kv_cache_manager.py
 +++ b/vllm/v1/core/kv_cache_manager.py
 @@ -2,7 +2,7 @@
@@ -11060,29 +11060,33 @@ index 226da3a1e..b710d7bc9 100644
              return None
  
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index 28478b69f..043285a20 100644
+index 28478b6..01e094d 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1575,74 +1575,247 @@ def _get_kv_cache_groups_uniform_page_size(
-     return create_kv_cache_group_specs(kv_cache_spec, grouped_layers)
+@@ -1611,38 +1611,249 @@ def _get_kv_cache_bytes_per_block(
+     return bytes_per_block
  
  
--def _get_per_layer_spec(
--    group: KVCacheGroupSpec,
--    layer_name: str,
--) -> KVCacheSpec:
--    spec = group.kv_cache_spec
--    if isinstance(spec, UniformTypeKVCacheSpecs):
--        return spec.kv_cache_specs[layer_name]
--    return spec
+-def validate_kv_cache_layout(
+-    layout: KVCacheLayout,
++
++
 +def _get_packed_kv_cache_layout(
-+    kv_cache_groups: list[KVCacheGroupSpec],
+     kv_cache_groups: list[KVCacheGroupSpec],
+-) -> None:
+-    """Validate that the resolved layout can express this model's packing.
 +) -> tuple[int, dict[int, list[str]]]:
 +    """Lay out each cache group densely in one shared block slab.
-+
+ 
+-    The layout was chosen once in the engine core from the backends' supported
+-    sets; a backend whose model packs pages side by side (e.g. the DeepSeek-V4
+-    indexer) declares block-outermost layouts there, so an inexpressible
+-    layout reaching this point is an error.
 +    A block ID is owned by one cache group at a time, so layouts from different
 +    groups may overlap. Layers within a group remain disjoint.
-+    """
+     """
+-    page_sizes = {
+-        _get_per_layer_spec(group, layer_name).page_size_bytes
 +    layers_by_offset: dict[int, list[str]] = defaultdict(list)
 +    block_stride = 0
 +    for group in kv_cache_groups:
@@ -11098,22 +11102,10 @@ index 28478b69f..043285a20 100644
 +        block_stride = max(block_stride, byte_offset)
 +    assert block_stride > 0
 +    return block_stride, layers_by_offset
- 
- 
--def _get_kv_cache_bytes_per_block(
++
++
 +def _bucket_layers_by_page_size(
-     kv_cache_groups: list[KVCacheGroupSpec],
--) -> int:
--    """Return the largest cache group's bytes per block."""
--    if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
--        _, _, mla_names, idx_names, mla_page, idx_page, _, _ = glm5_layout
--        return len(mla_names) * mla_page + len(idx_names) * idx_page
--
--    bytes_per_block = max(
--        sum(
--            _get_per_layer_spec(group, layer_name).page_size_bytes
--            for layer_name in group.layer_names
--        )
++    kv_cache_groups: list[KVCacheGroupSpec],
 +) -> dict[int, list[list[str]]]:
 +    """Bucket layers by page size: ``result[ps][slot_idx] = layer_names``."""
 +    buckets: dict[int, list[list[str]]] = defaultdict(list)
@@ -11140,16 +11132,12 @@ index 28478b69f..043285a20 100644
 +    is_dsv4 = all(
 +        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
          for group in kv_cache_groups
-     )
--    assert bytes_per_block > 0
--    hot_page_sizes = [
--        group.kv_cache_spec.page_size_bytes
--        for group in kv_cache_groups
--        if isinstance(group.kv_cache_spec, HiSparseHotSpec)
--    ]
--    if hot_page_sizes:
--        bytes_per_block = round_up(bytes_per_block, math.lcm(*hot_page_sizes))
--    return bytes_per_block
+-        for layer_name in group.layer_names
+-    }
+-    if len(page_sizes) == 1:
+-        # A rectangular layer dim exists; every layout can express it.
+-        return
++    )
 +    kv_transfer_config = vllm_config.kv_transfer_config
 +    extra_config = (
 +        kv_transfer_config.kv_connector_extra_config
@@ -11163,14 +11151,21 @@ index 28478b69f..043285a20 100644
 +    )
 +    return is_dsv4 or (enable_cross_layers and len(kv_cache_groups) > 1)
  
- 
--def validate_kv_cache_layout(
--    layout: KVCacheLayout,
+-    # Mixed page sizes pack pages side by side within a block, which needs each page
+-    # to be one contiguous chunk inside its block (a block-compact layout) and, with
+-    # multiple KV cache groups, the layer dim inside the block dim.
+-    if not layout.is_block_compact or (
+-        len(kv_cache_groups) > 1 and layout.is_layer_compact
+-    ):
+-        raise ValueError(
+-            f"KV cache layout {layout.name} cannot express this model's "
+-            f"mixed page sizes ({sorted(page_sizes)}); a backend should "
+-            "declare block-outermost supported layouts (e.g. BLHNC), or "
+-            "set VLLM_KV_CACHE_LAYOUT=BLHNC."
++
 +def _get_kv_cache_config_packed(
 +    vllm_config: VllmConfig,
-     kv_cache_groups: list[KVCacheGroupSpec],
--) -> None:
--    """Validate that the resolved layout can express this model's packing.
++    kv_cache_groups: list[KVCacheGroupSpec],
 +    available_memory: int,
 +) -> tuple[int, list[KVCacheTensor]]:
 +    """Plan a packed per-block KV cache tensor layout.
@@ -11186,7 +11181,7 @@ index 28478b69f..043285a20 100644
 +        buckets = _bucket_layers_by_page_size(kv_cache_groups)
 +        bytes_per_block = sum(
 +            page_size * len(slots) for page_size, slots in buckets.items()
-+        )
+         )
 +        num_blocks = available_memory // bytes_per_block
 +        num_blocks = may_override_num_blocks(vllm_config, num_blocks)
 +        return num_blocks, [
@@ -11194,20 +11189,7 @@ index 28478b69f..043285a20 100644
 +            for page_size, slots in buckets.items()
 +            for slot in slots
 +        ]
- 
--    The layout was chosen once in the engine core from the backends' supported
--    sets; a backend whose model packs pages side by side (e.g. the DeepSeek-V4
--    indexer) declares block-outermost layouts there, so an inexpressible
--    layout reaching this point is an error.
--    """
--    page_sizes = {
--        _get_per_layer_spec(group, layer_name).page_size_bytes
--        for group in kv_cache_groups
--        for layer_name in group.layer_names
--    }
--    if len(page_sizes) == 1:
--        # A rectangular layer dim exists; every layout can express it.
--        return
++
 +    block_stride, layers_by_offset = _get_packed_kv_cache_layout(kv_cache_groups)
 +    num_blocks = available_memory // block_stride
 +    num_blocks = may_override_num_blocks(vllm_config, num_blocks)
@@ -11223,18 +11205,7 @@ index 28478b69f..043285a20 100644
 +                block_stride=block_stride,
 +            )
 +        )
- 
--    # Mixed page sizes pack pages side by side within a block, which needs each page
--    # to be one contiguous chunk inside its block (a block-compact layout) and, with
--    # multiple KV cache groups, the layer dim inside the block dim.
--    if not layout.is_block_compact or (
--        len(kv_cache_groups) > 1 and layout.is_layer_compact
--    ):
--        raise ValueError(
--            f"KV cache layout {layout.name} cannot express this model's "
--            f"mixed page sizes ({sorted(page_sizes)}); a backend should "
--            "declare block-outermost supported layouts (e.g. BLHNC), or "
--            "set VLLM_KV_CACHE_LAYOUT=BLHNC."
++
 +    return num_blocks, kv_cache_tensors
 +
 +
@@ -11322,7 +11293,7 @@ index 28478b69f..043285a20 100644
 +        cdiv(
 +            group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
 +            mamba_page,
-         )
++        )
 +        for group in mamba_groups
 +    )
 +    mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
@@ -11368,7 +11339,7 @@ index 28478b69f..043285a20 100644
  
  
  def get_kv_cache_config_from_groups(
-@@ -1668,142 +1841,78 @@ def get_kv_cache_config_from_groups(
+@@ -1668,142 +1879,78 @@ def get_kv_cache_config_from_groups(
              num_blocks=1,
              kv_cache_tensors=[],
              kv_cache_groups=kv_cache_groups,
@@ -11566,7 +11537,7 @@ index 28478b69f..043285a20 100644
      )
  
  
-@@ -2298,24 +2407,30 @@ def get_kv_cache_groups(
+@@ -2298,24 +2445,30 @@ def get_kv_cache_groups(
          if not isinstance(v, HiddenStateCacheSpec)
      }
  
@@ -11615,7 +11586,7 @@ index 28478b69f..043285a20 100644
  
      # Add hidden-state layers back with page aligned to the common page.
      if hidden_specs:
-@@ -2412,53 +2527,103 @@ def _max_memory_usage_bytes_from_groups(
+@@ -2412,53 +2565,103 @@ def _max_memory_usage_bytes_from_groups(
      This correctly accounts for padding in hybrid models. For example, if a
      model has 8 full attention layers and 9 sliding window layers, they will
      be padded to 9 full + 9 sliding window for uniform group sizes.
@@ -11756,7 +11727,7 @@ index 28478b69f..043285a20 100644
  
  
  def _estimate_max_model_len_from_groups(
-@@ -2760,15 +2925,18 @@ def get_kv_cache_configs(
+@@ -2760,15 +2963,18 @@ def get_kv_cache_configs(
      min_num_blocks = min(
          kv_cache_config.num_blocks for kv_cache_config in kv_cache_configs
      )
@@ -11785,7 +11756,7 @@ index 28478b69f..043285a20 100644
      return kv_cache_configs
  
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index daf2b316d..9a7d8ba31 100644
+index daf2b31..9a7d8ba 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
 @@ -2625,7 +2625,7 @@ class Scheduler(SchedulerInterface):
@@ -11807,7 +11778,7 @@ index daf2b316d..9a7d8ba31 100644
      def get_num_unfinished_requests(self) -> int:
          if self._pause_state == PauseState.PAUSED_ALL:
 diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
-index 40027e71f..2487c3177 100644
+index 40027e7..2487c31 100644
 --- a/vllm/v1/core/single_type_kv_cache_manager.py
 +++ b/vllm/v1/core/single_type_kv_cache_manager.py
 @@ -1994,6 +1994,12 @@ class MambaManager(SingleTypeKVCacheManager):
@@ -11824,7 +11795,7 @@ index 40027e71f..2487c3177 100644
          super().cache_blocks(
              request,
 diff --git a/vllm/v1/cudagraph_dispatcher.py b/vllm/v1/cudagraph_dispatcher.py
-index 6a48b6282..356c00870 100644
+index 6a48b62..356c008 100644
 --- a/vllm/v1/cudagraph_dispatcher.py
 +++ b/vllm/v1/cudagraph_dispatcher.py
 @@ -31,8 +31,9 @@ class CudagraphDispatcher:
@@ -11905,7 +11876,7 @@ index 6a48b6282..356c00870 100644
  
          if CUDAGraphMode.FULL in allowed_modes:
 diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
-index 8cd867eb9..a1d0c992d 100644
+index 8cd867e..a1d0c99 100644
 --- a/vllm/v1/kv_cache_interface.py
 +++ b/vllm/v1/kv_cache_interface.py
 @@ -1380,6 +1380,7 @@ class KVCacheTensor:
@@ -11926,7 +11897,7 @@ index 8cd867eb9..a1d0c992d 100644
      kv_cache_layout: str | None = None
      """The KV cache layout resolved by the engine core, adopted by all workers."""
 diff --git a/vllm/v1/sample/metadata.py b/vllm/v1/sample/metadata.py
-index fa4ceac8e..98fc48d09 100644
+index fa4ceac..98fc48d 100644
 --- a/vllm/v1/sample/metadata.py
 +++ b/vllm/v1/sample/metadata.py
 @@ -53,3 +53,6 @@ class SamplingMetadata:
@@ -11937,7 +11908,7 @@ index fa4ceac8e..98fc48d09 100644
 +    uniform_top_k: int | None = None
 +    uniform_temperature: float | None = None
 diff --git a/vllm/v1/sample/ops/topk_topp_triton.py b/vllm/v1/sample/ops/topk_topp_triton.py
-index 695ba624f..9825d8714 100755
+index 695ba62..9825d87 100755
 --- a/vllm/v1/sample/ops/topk_topp_triton.py
 +++ b/vllm/v1/sample/ops/topk_topp_triton.py
 @@ -211,10 +211,7 @@ def _topk_topp_kernel(
@@ -12019,7 +11990,7 @@ index 695ba624f..9825d8714 100755
                      found_pivot = 0
                      while found_pivot == 0:
 diff --git a/vllm/v1/sample/rejection_sampler.py b/vllm/v1/sample/rejection_sampler.py
-index 85b623bd8..5e39f7016 100644
+index 85b623b..5e39f70 100644
 --- a/vllm/v1/sample/rejection_sampler.py
 +++ b/vllm/v1/sample/rejection_sampler.py
 @@ -18,6 +18,7 @@ from vllm.model_executor.warmup.jit_warmup_triton_helper import (
@@ -12098,7 +12069,7 @@ index 85b623bd8..5e39f7016 100644
          return
  
 diff --git a/vllm/v1/spec_decode/dflash.py b/vllm/v1/spec_decode/dflash.py
-index 284db7dee..943560905 100644
+index 284db7d..9435609 100644
 --- a/vllm/v1/spec_decode/dflash.py
 +++ b/vllm/v1/spec_decode/dflash.py
 @@ -215,6 +215,7 @@ class DFlashProposer(SpecDecodeBaseProposer):
@@ -12177,7 +12148,7 @@ index 284db7dee..943560905 100644
          ):
              self.model(
 diff --git a/vllm/v1/spec_decode/llm_base_proposer.py b/vllm/v1/spec_decode/llm_base_proposer.py
-index 1bd1bdc45..8ae07cf6f 100644
+index 1bd1bdc..8ae07cf 100644
 --- a/vllm/v1/spec_decode/llm_base_proposer.py
 +++ b/vllm/v1/spec_decode/llm_base_proposer.py
 @@ -15,13 +15,14 @@ from vllm.config import (
@@ -12458,7 +12429,7 @@ index 1bd1bdc45..8ae07cf6f 100644
  
  # NOTE(woosuk): Currently, the below code is not used and we always use argmax
 diff --git a/vllm/v1/spec_decode/utils.py b/vllm/v1/spec_decode/utils.py
-index fbfe44384..c219a1941 100644
+index fbfe443..c219a19 100644
 --- a/vllm/v1/spec_decode/utils.py
 +++ b/vllm/v1/spec_decode/utils.py
 @@ -207,6 +207,15 @@ def eagle_prepare_inputs_padded_kernel(
@@ -12487,7 +12458,7 @@ index fbfe44384..c219a1941 100644
      index_to_sample = q_last_tok_idx - num_rejected_tokens
      tl.store(token_indices_to_sample_ptr + req_idx, index_to_sample)
 diff --git a/vllm/v1/worker/gpu/async_utils.py b/vllm/v1/worker/gpu/async_utils.py
-index 0ab0ab3f3..7d5661ea1 100644
+index 0ab0ab3..7d5661e 100644
 --- a/vllm/v1/worker/gpu/async_utils.py
 +++ b/vllm/v1/worker/gpu/async_utils.py
 @@ -146,7 +146,16 @@ class AsyncOutput(AsyncModelRunnerOutput):
@@ -12509,7 +12480,7 @@ index 0ab0ab3f3..7d5661ea1 100644
              if sampler_output.sampling_mask_tensors is not None:
                  self.sampling_mask_tensors = (
 diff --git a/vllm/v1/worker/gpu/block_table.py b/vllm/v1/worker/gpu/block_table.py
-index c01895e63..e4e9aac8f 100644
+index c01895e..e4e9aac 100644
 --- a/vllm/v1/worker/gpu/block_table.py
 +++ b/vllm/v1/worker/gpu/block_table.py
 @@ -250,7 +250,7 @@ def _gather_block_tables_kernel(
@@ -12551,7 +12522,7 @@ index c01895e63..e4e9aac8f 100644
 +    ptr = ptr.to(tl.pointer_type(tl.int32))
 +    return tl.multiple_of(ptr, 16)
 diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.py
-index d3c65bd06..43f753f76 100644
+index d3c65bd..43f753f 100644
 --- a/vllm/v1/worker/gpu/input_batch.py
 +++ b/vllm/v1/worker/gpu/input_batch.py
 @@ -563,6 +563,8 @@ def _post_update_kernel(
@@ -12590,7 +12561,7 @@ index d3c65bd06..43f753f76 100644
      )
  
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index b66d552cb..9aabefdf9 100644
+index b66d552..9aabefd 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -441,64 +441,38 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -12817,7 +12788,7 @@ index b66d552cb..9aabefdf9 100644
  
          self.model_state.postprocess_state(
 diff --git a/vllm/v1/worker/gpu/sample/gumbel.py b/vllm/v1/worker/gpu/sample/gumbel.py
-index 4bf1f4728..7e6131ecd 100644
+index 4bf1f47..7e6131e 100644
 --- a/vllm/v1/worker/gpu/sample/gumbel.py
 +++ b/vllm/v1/worker/gpu/sample/gumbel.py
 @@ -66,7 +66,12 @@ def apply_temperature(
@@ -12913,7 +12884,7 @@ index 4bf1f4728..7e6131ecd 100644
 +    sampled_values = local_max.gather(dim=-1, index=max_block_idx).view(-1)
 +    return sampled, sampled_values
 diff --git a/vllm/v1/worker/gpu/sample/penalties.py b/vllm/v1/worker/gpu/sample/penalties.py
-index 25cb2f211..820bae5d4 100644
+index 25cb2f2..820bae5 100644
 --- a/vllm/v1/worker/gpu/sample/penalties.py
 +++ b/vllm/v1/worker/gpu/sample/penalties.py
 @@ -129,7 +129,7 @@ def _penalties_kernel(
@@ -12926,7 +12897,7 @@ index 25cb2f211..820bae5d4 100644
          # Early return to avoid loading logits.
          return
 diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
-index b069604c2..4d7482553 100644
+index b069604..4d74825 100644
 --- a/vllm/v1/worker/gpu/sample/sampler.py
 +++ b/vllm/v1/worker/gpu/sample/sampler.py
 @@ -129,14 +129,29 @@ class Sampler:
@@ -12996,7 +12967,7 @@ index b069604c2..4d7482553 100644
          sampler_output = SamplerOutput(
              # The sampled tokens are expanded to 2D tensor with shape
 diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
-index 9d64c1ecb..ca66fb35e 100644
+index 9d64c1e..ca66fb3 100644
 --- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
 +++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
 @@ -587,6 +587,8 @@ def _rejection_kernel(
@@ -13086,7 +13057,7 @@ index 9d64c1ecb..ca66fb35e 100644
          num_warps=1,
      )
 diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
-index 01b6b5b0c..940d450de 100644
+index 01b6b5b..940d450 100644
 --- a/vllm/v1/worker/gpu_input_batch.py
 +++ b/vllm/v1/worker/gpu_input_batch.py
 @@ -313,6 +313,8 @@ class InputBatch:
@@ -13162,7 +13133,7 @@ index 01b6b5b0c..940d450de 100644
      def all_greedy(self) -> bool:
          return len(self.random_reqs) == 0
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 97a59bd27..06b55ed5f 100644
+index 97a59bd..06b55ed 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
 @@ -12,6 +12,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -13660,7 +13631,7 @@ index 97a59bd27..06b55ed5f 100644
  
          if (
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index 2a3531b61..9ab5a27d4 100644
+index 2a3531b..9ab5a27 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
 @@ -104,6 +104,53 @@ from .utils import request_memory
@@ -13756,7 +13727,7 @@ index 2a3531b61..9ab5a27d4 100644
                      logger.debug(
                          "Starting torch profiler with trace name: %s", trace_name
 diff --git a/vllm/v1/worker/mamba_utils.py b/vllm/v1/worker/mamba_utils.py
-index 1deb89bda..d8739db7d 100644
+index 1deb89b..d8739db 100644
 --- a/vllm/v1/worker/mamba_utils.py
 +++ b/vllm/v1/worker/mamba_utils.py
 @@ -470,8 +470,9 @@ def postprocess_mamba_fused_kernel(
