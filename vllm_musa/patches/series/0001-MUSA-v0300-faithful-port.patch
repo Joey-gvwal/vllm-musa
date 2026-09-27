@@ -12626,7 +12626,7 @@ index d3c65bd..43f753f 100644
      )
  
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index b66d552..50fe651 100644
+index b66d552..612d8ab 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -441,64 +441,38 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -12805,39 +12805,21 @@ index b66d552..50fe651 100644
              positions=self.input_buffers.positions[:num_tokens_after_padding],
              is_padding=self.input_buffers.is_padding[:num_tokens_after_padding],
              logits_indices=logits_indices,
-@@ -1515,25 +1524,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
-         input_batch: InputBatch,
-         grammar_output: GrammarOutput | None,
-     ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
--        shard_metadata = None
--        global_input_batch = input_batch
--        if self.batch_sharder is not None:
--            # Shard the inputs along the batch dimension to sample in parallel
--            # across TP ranks.
--            input_batch, sorted_logits_indices, grammar_output, shard_metadata = (
--                self.batch_sharder.shard_sampler_inputs(input_batch, grammar_output)
--            )
--            # The hidden states must be gathered in rank-owner-sorted order
--            # before computing the partial-vocab logits, so that the all-to-all
--            # produces full-vocab logits for just the locally-owned requests.
--            sample_hidden_states = hidden_states[sorted_logits_indices]
--            local_logits = self.model.compute_logits_local(sample_hidden_states)
--            logits = all_to_all_logits(local_logits, shard_metadata)
--            logits = logits[:, : self.vocab_size]
--        else:
-+        selector = getattr(self, "_musa_select_sample_hidden_states", None)
-+        sample_hidden_states = (
-+            None if selector is None else selector(hidden_states, input_batch)
-+        )
-+        if sample_hidden_states is None:
-             sample_hidden_states = hidden_states[input_batch.logits_indices]
--            logits = self.model.compute_logits(sample_hidden_states)
--
-+        logits = self.model.compute_logits(sample_hidden_states)
+@@ -1531,7 +1540,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             logits = all_to_all_logits(local_logits, shard_metadata)
+             logits = logits[:, : self.vocab_size]
+         else:
+-            sample_hidden_states = hidden_states[input_batch.logits_indices]
++            selector = getattr(self, "_musa_select_sample_hidden_states", None)
++            sample_hidden_states = (
++                None if selector is None else selector(hidden_states, input_batch)
++            )
++            if sample_hidden_states is None:
++                sample_hidden_states = hidden_states[input_batch.logits_indices]
+             logits = self.model.compute_logits(sample_hidden_states)
+ 
          if grammar_output is not None:
-             # Apply grammar bitmask to the logits in-place.
-             assert self.structured_outputs_worker is not None
-@@ -1601,6 +1598,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1601,6 +1615,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              output_bin_counts = self.sampler.penalties_state.output_bin_counts
          else:
              output_bin_counts = None
@@ -12846,7 +12828,7 @@ index b66d552..50fe651 100644
          post_update(
              idx_mapping,
              self.req_states.num_computed_tokens.gpu,
-@@ -1612,6 +1611,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1612,6 +1628,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc,
              self.req_states.all_token_ids.gpu,
              self.req_states.total_len.gpu,
