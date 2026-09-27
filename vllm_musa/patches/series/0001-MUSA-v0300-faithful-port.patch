@@ -12556,7 +12556,7 @@ index d3c65bd..43f753f 100644
      )
  
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index b66d552..adac7be 100644
+index b66d552..50fe651 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -441,64 +441,38 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -12719,7 +12719,7 @@ index b66d552..adac7be 100644
          prompt_lens = None
          if self.model_config.rswa_window is not None:
              # prompt_lens is only used in R-SWA case.
-@@ -1441,13 +1450,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1441,13 +1450,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc_np=query_start_loc_np,
              seq_lens=seq_lens,
              seq_lens_cpu_upper_bound=seq_lens_cpu_upper_bound,
@@ -12731,12 +12731,11 @@ index b66d552..adac7be 100644
              is_prefilling_np=batch_req_state.is_prefilling_np,
              has_prefill=batch_req_state.has_prefill,
 -            input_ids=self.input_buffers.input_ids[:num_tokens_after_padding],
-+            max_seq_len_np=max_seq_len_np,
 +            input_ids=input_ids,
              positions=self.input_buffers.positions[:num_tokens_after_padding],
              is_padding=self.input_buffers.is_padding[:num_tokens_after_padding],
              logits_indices=logits_indices,
-@@ -1515,25 +1525,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1515,25 +1524,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
          input_batch: InputBatch,
          grammar_output: GrammarOutput | None,
      ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
@@ -12768,7 +12767,7 @@ index b66d552..adac7be 100644
          if grammar_output is not None:
              # Apply grammar bitmask to the logits in-place.
              assert self.structured_outputs_worker is not None
-@@ -1601,6 +1599,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1601,6 +1598,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              output_bin_counts = self.sampler.penalties_state.output_bin_counts
          else:
              output_bin_counts = None
@@ -12777,7 +12776,7 @@ index b66d552..adac7be 100644
          post_update(
              idx_mapping,
              self.req_states.num_computed_tokens.gpu,
-@@ -1612,6 +1612,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1612,6 +1611,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc,
              self.req_states.all_token_ids.gpu,
              self.req_states.total_len.gpu,
