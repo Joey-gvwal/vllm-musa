@@ -862,7 +862,7 @@ index de0c505..33be566 100644
    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index a7ee87b..dcdbea4 100644
+index a7ee87b..c5de37f 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
 @@ -268,7 +268,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
@@ -899,11 +899,12 @@ index a7ee87b..dcdbea4 100644
  template <typename scalar_t, bool BATCHED_EXPERTS>
  __global__ void masked_situ_and_mul_kernel(
      scalar_t* __restrict__ out, const scalar_t* __restrict__ input,
-@@ -947,7 +951,10 @@ __global__ void masked_activation_kernel(
+@@ -946,8 +950,11 @@ __global__ void masked_activation_kernel(
+   }
  }
  
- }  // namespace vllm
 +#endif  // !USE_MUSA
+ }  // namespace vllm
  
 +
 +#ifndef USE_MUSA  // fatrelu/swigluoai kernels crash mcc
