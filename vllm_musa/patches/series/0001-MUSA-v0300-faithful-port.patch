@@ -8499,19 +8499,17 @@ index 495650eb1..42503f229 100644
          return output
  
 diff --git a/vllm/model_executor/models/qwen3_vl.py b/vllm/model_executor/models/qwen3_vl.py
-index 644fd134a..c6c3ebe7d 100644
+index 644fd134a..8f3f88a0d 100644
 --- a/vllm/model_executor/models/qwen3_vl.py
 +++ b/vllm/model_executor/models/qwen3_vl.py
-@@ -24,7 +24,8 @@
+@@ -24,6 +24,7 @@
  # limitations under the License.
  """Inference-only Qwen3VL model compatible with HuggingFace weights."""
  
--from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 +import os
-+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+ from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
  from functools import lru_cache, partial
  from itertools import islice
- from typing import Any
 @@ -48,6 +49,7 @@ from transformers.models.qwen3_vl.video_processing_qwen3_vl import (
  )
  from transformers.video_utils import VideoMetadata
