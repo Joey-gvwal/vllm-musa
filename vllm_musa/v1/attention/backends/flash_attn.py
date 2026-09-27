@@ -1148,7 +1148,7 @@ class FlashAttentionImpl(AttentionImpl):
             )
 
         # For decoder and cross-attention, use KV cache as before
-        key_cache, value_cache = kv_cache.unbind(0)
+        key_cache, value_cache = kv_cache.unbind(0)[:2]
 
         if self.kv_cache_dtype.startswith("fp8"):
             # queries are quantized in the attention layer
@@ -1691,7 +1691,7 @@ class FlashAttentionImpl(AttentionImpl):
             and get_kv_cache_layout() == "NHD"
         )
         if can_fuse_cache:
-            key_cache, value_cache = kv_cache.unbind(0)
+            key_cache, value_cache = kv_cache.unbind(0)[:2]
             expected_tail = (self.num_kv_heads, self.head_size)
             flat_cache_supported = (
                 key_cache.is_contiguous()
@@ -1794,7 +1794,7 @@ class FlashAttentionImpl(AttentionImpl):
     ) -> None:
         """Apply Qwen2 RoPE and populate its NHD cache in one MUSA launch."""
         if query.shape[0] <= 1:
-            key_cache, value_cache = kv_cache.unbind(0)
+            key_cache, value_cache = kv_cache.unbind(0)[:2]
             from vllm_musa.kernels.qwen2_rope_kv import try_qwen2_rope_kv_cache
 
             if try_qwen2_rope_kv_cache(
