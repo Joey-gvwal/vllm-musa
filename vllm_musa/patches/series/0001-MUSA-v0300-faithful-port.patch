@@ -11647,7 +11647,7 @@ index e2a06e7..03391ce 100644
                  block_hash_with_group_id,
                  blk,
 diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
-index afb03ac..181bbe7 100644
+index afb03ac..32e2c33 100644
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
 @@ -12,6 +12,7 @@ from vllm.v1.core.kv_cache_utils import (
@@ -11696,7 +11696,66 @@ index afb03ac..181bbe7 100644
              if isinstance(manager, CrossAttentionManager):
                  # For cross-attention, we issue a single static allocation
                  # of blocks based on the number of encoder input tokens.
-@@ -754,6 +770,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+@@ -230,6 +246,58 @@ class KVCacheCoordinator(ABC):
+                 )
+         return num_blocks_to_allocate
+ 
++    def get_num_blocks_to_allocate_by_pool(
++        self,
++        request_id: str,
++        num_tokens: int,
++        new_computed_blocks: tuple[Sequence[KVCacheBlock], ...],
++        num_encoder_tokens: int,
++        total_computed_tokens: int,
++        num_local_computed_tokens: int,
++        num_tokens_main_model: int,
++        apply_admission_cap: bool = False,
++    ) -> tuple[tuple[BlockPool, int], ...]:
++        """Return allocation requirements grouped by owning block pool.
++
++        The upstream coordinator has one ``BlockPool``, so its aggregate
++        admission count is sufficient.  MUSA hybrid models may place Mamba
++        groups in independent pools; omitting those groups from the aggregate
++        count avoids constraining attention admission, but used to let the
++        later Mamba allocation fail inside ``BlockPool.get_new_blocks``.  Keep
++        the legacy aggregate API unchanged and expose the per-pool counts for
++        the scheduler's admission gate.
++        """
++        requirements: dict[int, tuple[BlockPool, int]] = {}
++        for i, manager in enumerate(self.single_type_managers):
++            if isinstance(manager, CrossAttentionManager):
++                required = manager.get_num_blocks_to_allocate(
++                    request_id,
++                    num_encoder_tokens,
++                    [],
++                    0,
++                    0,
++                    num_encoder_tokens,
++                    apply_admission_cap=apply_admission_cap,
++                )
++            else:
++                required = manager.get_num_blocks_to_allocate(
++                    request_id,
++                    num_tokens,
++                    new_computed_blocks[i],
++                    total_computed_tokens,
++                    num_local_computed_tokens,
++                    num_tokens_main_model,
++                    apply_admission_cap=apply_admission_cap,
++                )
++            pool = manager.block_pool
++            pool_id = id(pool)
++            previous = requirements.get(pool_id)
++            if previous is None:
++                requirements[pool_id] = (pool, required)
++            else:
++                requirements[pool_id] = (pool, previous[1] + required)
++        return tuple(requirements.values())
++
+     def allocate_new_computed_blocks(
+         self,
+         request_id: str,
+@@ -754,6 +822,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
              for idx, group in enumerate(self.attention_groups):
                  if (
                      group.spec == spec
