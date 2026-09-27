@@ -2435,9 +2435,17 @@ def _patch_triton_experts_quant_scheme() -> None:
         )
         return
 
-    TritonExperts._supports_quant_scheme = _supports_quant_scheme
+    upstream_supports_quant_scheme = TritonExperts._supports_quant_scheme
+
+    def supports_quant_scheme(weight_key, activation_key) -> bool:
+        # v0.30 accepts refined FP8 block grids (e.g. 64x64 for TP-sharded
+        # DeepSeek-V2-Lite). Keep that support alongside the MUSA keys below.
+        return upstream_supports_quant_scheme(
+            weight_key, activation_key
+        ) or _supports_quant_scheme(weight_key, activation_key)
+
+    TritonExperts._supports_quant_scheme = staticmethod(supports_quant_scheme)
 
 
-# The TritonExperts._supports_quant_scheme patch is independent; it expands
-# MUSA's supported FP8 quant key list and stays in place for upstream dispatch.
+# Keep the upstream quant keys and extend them with MUSA's supported keys.
 _patch_triton_experts_quant_scheme()
