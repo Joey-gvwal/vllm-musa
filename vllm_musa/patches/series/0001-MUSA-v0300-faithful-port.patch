@@ -9481,10 +9481,18 @@ index 91ae7c4..46bb8f4 100644
      mixed_tokens = _clamp_warmup_tokens(_SPARSE_MLA_MIXED_WARMUP_TOKENS, max_tokens)
      if mixed_tokens <= 0:
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index bcb2dd7..3e9933b 100644
+index bcb2dd7..04e1a88 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
-@@ -99,118 +99,51 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
+@@ -6,6 +6,7 @@ This is useful specifically for JIT'ed kernels as we don't want JIT'ing to
+ happen during model execution.
+ """
+ 
++import os
+ import sys
+ import time
+ from typing import TYPE_CHECKING
+@@ -99,118 +100,54 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
      )
  
  
@@ -9545,6 +9553,9 @@ index bcb2dd7..3e9933b 100644
 -
 -
  def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
++    if os.environ.get("VLLM_SKIP_KERNEL_WARMUP") == "1":
++        logger.info_once("Skipping kernel warmup by VLLM_SKIP_KERNEL_WARMUP=1")
++        return
      from vllm.model_executor.warmup.minimax_m3_msa_warmup import (
          minimax_m3_msa_warmup,
      )
@@ -9625,7 +9636,7 @@ index bcb2dd7..3e9933b 100644
      if worker.vllm_config.kernel_config.enable_cutedsl_warmup:
          # TODO(roberto): Remove after registered CuTeDSL warmups are migrated
          # to the shared JIT warmup infrastructure.
-@@ -220,8 +153,14 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
+@@ -220,8 +157,14 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
      if process_local_only:
          return
  
