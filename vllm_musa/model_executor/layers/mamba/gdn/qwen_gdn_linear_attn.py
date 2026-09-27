@@ -271,6 +271,8 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         core_attn_out: torch.Tensor,
         attn_metadata,
     ) -> bool:
+        if os.environ.get("VLLM_MUSA_DISABLE_MATE_GDN_DECODE") == "1":
+            return False
         if (
             attn_metadata.spec_sequence_masks is not None
             or attn_metadata.num_decodes <= 0
