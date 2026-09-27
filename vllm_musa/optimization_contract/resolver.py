@@ -159,7 +159,10 @@ def _model_signature(model_config: Any, vllm_config: Any | None) -> ModelSignatu
             is_hybrid = bool(is_hybrid())
         except (AttributeError, TypeError, ValueError):
             is_hybrid = None
-    if not isinstance(is_hybrid, bool) and gdn_dim is not None:
+    layer_types = getattr(text_config, "layer_types", ()) or ()
+    if "linear_attention" in layer_types and "full_attention" in layer_types:
+        is_hybrid = True
+    elif not isinstance(is_hybrid, bool) and gdn_dim is not None:
         is_hybrid = True
     return ModelSignature(
         family=ModelFamily.UNKNOWN,
