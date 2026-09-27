@@ -9481,10 +9481,10 @@ index 91ae7c4..46bb8f4 100644
      mixed_tokens = _clamp_warmup_tokens(_SPARSE_MLA_MIXED_WARMUP_TOKENS, max_tokens)
      if mixed_tokens <= 0:
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index bcb2dd7..a510243 100644
+index bcb2dd7..e1df35e 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
-@@ -99,118 +99,47 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
+@@ -99,118 +99,49 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
      )
  
  
@@ -9586,33 +9586,35 @@ index bcb2dd7..a510243 100644
      compilation_config = worker.vllm_config.compilation_config
      cudagraph_capture_sizes = list(compilation_config.cudagraph_capture_sizes or [])
  
-+    # DSv4 mHC TileLang kernels (hc_pre/hc_post/hc_head_op) run every decoder
-+    # layer per token; warm them across token sizes first so the first real
-+    # request doesn't pay JIT cost. No-op for non-DSv4 models (gated inside).
-+    deepseek_v4_mhc_warmup(
-+        worker.get_model(),
-+        max_tokens=worker.scheduler_config.max_num_batched_tokens,
-+        cudagraph_capture_sizes=cudagraph_capture_sizes,
-+    )
-+
-     # Run next so input-prep kernels JIT against pristine runner state.
+-    # Run next so input-prep kernels JIT against pristine runner state.
 -    if enable_jit_warmup:
-+    if worker.vllm_config.kernel_config.enable_jit_warmup:
-         kimi_k3_triton_warmup(worker)
+-        kimi_k3_triton_warmup(worker)
 -        watermark_sample_warmup(worker)
 -        qwen4_exp_qsa_triton_warmup(worker)
 -
 -    if enable_jit_warmup and current_platform.is_device_capability_family(100):
 -        _warmup_bf16x3_router_gemm(
--            worker.get_model(),
++    # DSv4 mHC TileLang kernels (hc_pre/hc_post/hc_head_op) run every decoder
++    # layer per token; warm them across token sizes first so the first real
++    # request doesn't pay JIT cost. No-op for non-DSv4 models (gated inside).
++    mhc_warmup = globals().get("deepseek_v4_mhc_warmup")
++    if mhc_warmup is not None:
++        mhc_warmup(
+             worker.get_model(),
 -            worker.scheduler_config.max_num_batched_tokens,
--        )
++            max_tokens=worker.scheduler_config.max_num_batched_tokens,
++            cudagraph_capture_sizes=cudagraph_capture_sizes,
+         )
+ 
++    # Run next so input-prep kernels JIT against pristine runner state.
++    if worker.vllm_config.kernel_config.enable_jit_warmup:
++        kimi_k3_triton_warmup(worker)
 +        if not current_platform.is_musa():
 +            fa4_cutedsl_warmup(worker)
 +        else:
 +            logger.info_once("Skipping CUDA-only FA4 CuTeDSL warmup on MUSA.")
 +        sparse_mla_triton_warmup(worker)
- 
++
      if current_platform.has_device_capability(90):
          _warmup_ll_bf16_router_gemm(worker.get_model())
  
