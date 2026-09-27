@@ -9481,10 +9481,10 @@ index 91ae7c4..46bb8f4 100644
      mixed_tokens = _clamp_warmup_tokens(_SPARSE_MLA_MIXED_WARMUP_TOKENS, max_tokens)
      if mixed_tokens <= 0:
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index bcb2dd7..e1df35e 100644
+index bcb2dd7..3e9933b 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
-@@ -99,118 +99,49 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
+@@ -99,118 +99,51 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
      )
  
  
@@ -9613,7 +9613,9 @@ index bcb2dd7..e1df35e 100644
 +            fa4_cutedsl_warmup(worker)
 +        else:
 +            logger.info_once("Skipping CUDA-only FA4 CuTeDSL warmup on MUSA.")
-+        sparse_mla_triton_warmup(worker)
++        sparse_mla_warmup = globals().get("sparse_mla_triton_warmup")
++        if sparse_mla_warmup is not None:
++            sparse_mla_warmup(worker)
 +
      if current_platform.has_device_capability(90):
          _warmup_ll_bf16_router_gemm(worker.get_model())
@@ -9623,6 +9625,23 @@ index bcb2dd7..e1df35e 100644
      if worker.vllm_config.kernel_config.enable_cutedsl_warmup:
          # TODO(roberto): Remove after registered CuTeDSL warmups are migrated
          # to the shared JIT warmup infrastructure.
+@@ -220,8 +153,14 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
+     if process_local_only:
+         return
+ 
+-    flashinfer_sparse_mla_decode_autotune_warmup(worker)
+-    deepseek_v4_sparse_mla_attention_warmup(worker)
++    flashinfer_mla_warmup = globals().get(
++        "flashinfer_sparse_mla_decode_autotune_warmup"
++    )
++    if flashinfer_mla_warmup is not None:
++        flashinfer_mla_warmup(worker)
++    deepseek_mla_warmup = globals().get("deepseek_v4_sparse_mla_attention_warmup")
++    if deepseek_mla_warmup is not None:
++        deepseek_mla_warmup(worker)
+ 
+     # Deep GEMM warmup
+     do_deep_gemm_warmup = (
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
 index 9c77980..f58154d 100644
 --- a/vllm/models/deepseek_v4/attention.py
