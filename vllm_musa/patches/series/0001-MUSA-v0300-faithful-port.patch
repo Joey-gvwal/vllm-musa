@@ -12159,7 +12159,7 @@ index 6a48b62..356c008 100644
  
          if CUDAGraphMode.FULL in allowed_modes:
 diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
-index 8cd867e..a1d0c99 100644
+index 8cd867e..b0b0002 100644
 --- a/vllm/v1/kv_cache_interface.py
 +++ b/vllm/v1/kv_cache_interface.py
 @@ -1380,6 +1380,7 @@ class KVCacheTensor:
@@ -12179,6 +12179,21 @@ index 8cd867e..a1d0c99 100644
      """Resolved retention policy for local prefix-cache checkpoints."""
      kv_cache_layout: str | None = None
      """The KV cache layout resolved by the engine core, adopted by all workers."""
+@@ -1505,6 +1508,14 @@ class KVCacheConfig:
+     def num_blocks_of(self, tensor: KVCacheTensor) -> int:
+         """Number of blocks addressable by the pool backing ``tensor``."""
+         if not tensor.host_resident:
++            if self.musa_mamba_num_blocks is not None:
++                tensor_layers = set(tensor.layers)
++                if any(
++                    isinstance(group.kv_cache_spec, MambaSpec)
++                    and tensor_layers.intersection(group.layer_names)
++                    for group in self.kv_cache_groups
++                ):
++                    return self.musa_mamba_num_blocks
+             return self.num_blocks
+         assert self.hisparse_host_num_blocks is not None
+         return self.hisparse_host_num_blocks
 diff --git a/vllm/v1/sample/metadata.py b/vllm/v1/sample/metadata.py
 index fa4ceac..98fc48d 100644
 --- a/vllm/v1/sample/metadata.py
