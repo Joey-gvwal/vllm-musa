@@ -12556,7 +12556,7 @@ index d3c65bd..43f753f 100644
      )
  
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index b66d552..9aabefd 100644
+index b66d552..eda3384 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -441,64 +441,38 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -12696,7 +12696,7 @@ index b66d552..9aabefd 100644
 +                num_tokens,
 +                num_tokens_after_padding,
 +                num_reqs_padded,
-             )
++            )
 +        if model_inputs is None:
 +            logits_indices = combine_sampled_and_draft_tokens(
 +                self.input_buffers.input_ids,
@@ -12709,14 +12709,26 @@ index b66d552..9aabefd 100644
 +                cu_num_logits,
 +                total_num_logits,
 +                self.model_state.num_new_sampled_tokens_per_step,
-+            )
+             )
 +            input_ids = self.input_buffers.input_ids[:num_tokens_after_padding]
 +        else:
 +            input_ids, logits_indices = model_inputs
  
          # CPU upper bound on seq_lens; padded entries left at zero.
          num_computed_tokens_np = self.req_states.num_computed_tokens_np[idx_mapping_np]
-@@ -1441,13 +1435,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1419,6 +1413,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         )
+         seq_lens_cpu_upper_bound = torch.from_numpy(seq_lens_cpu_upper_bound_np)
+ 
++        max_seq_len_np = None
++        if self.use_pp:
++            # Used only by pipeline-parallel sampled-mask handling.
++            max_seq_len_np = self.req_states.max_seq_len[idx_mapping_np]
++
+         prompt_lens = None
+         if self.model_config.rswa_window is not None:
+             # prompt_lens is only used in R-SWA case.
+@@ -1441,13 +1440,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc_np=query_start_loc_np,
              seq_lens=seq_lens,
              seq_lens_cpu_upper_bound=seq_lens_cpu_upper_bound,
@@ -12733,7 +12745,7 @@ index b66d552..9aabefd 100644
              positions=self.input_buffers.positions[:num_tokens_after_padding],
              is_padding=self.input_buffers.is_padding[:num_tokens_after_padding],
              logits_indices=logits_indices,
-@@ -1515,25 +1510,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1515,25 +1515,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
          input_batch: InputBatch,
          grammar_output: GrammarOutput | None,
      ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
@@ -12765,7 +12777,7 @@ index b66d552..9aabefd 100644
          if grammar_output is not None:
              # Apply grammar bitmask to the logits in-place.
              assert self.structured_outputs_worker is not None
-@@ -1601,6 +1584,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1601,6 +1589,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              output_bin_counts = self.sampler.penalties_state.output_bin_counts
          else:
              output_bin_counts = None
@@ -12774,7 +12786,7 @@ index b66d552..9aabefd 100644
          post_update(
              idx_mapping,
              self.req_states.num_computed_tokens.gpu,
-@@ -1612,6 +1597,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1612,6 +1602,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc,
              self.req_states.all_token_ids.gpu,
              self.req_states.total_len.gpu,
