@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import bisect
 import inspect
+import os
 from typing import Any
 
 import torch
@@ -313,14 +314,16 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # The upstream wrapper casts BF16 activations to the FP32 cache dtype
         # and casts the result back.  The MUSA kernel accepts those dtypes
         # directly; keep the upstream path as a structural fallback.
-        mixed_qkv_tilelang = musa_tilelang_causal_conv1d_update(
-            mixed_qkv,
-            conv_state,
-            conv_weights,
-            self.conv1d.bias,
-            self.activation,
-            conv_state_indices=state_indices,
-        )
+        mixed_qkv_tilelang = None
+        if os.environ.get("VLLM_MUSA_DISABLE_TILELANG_CAUSAL_CONV") != "1":
+            mixed_qkv_tilelang = musa_tilelang_causal_conv1d_update(
+                mixed_qkv,
+                conv_state,
+                conv_weights,
+                self.conv1d.bias,
+                self.activation,
+                conv_state_indices=state_indices,
+            )
         if mixed_qkv_tilelang is None:
             from vllm.model_executor.layers.mamba.ops.causal_conv1d import (
                 causal_conv1d_update,
