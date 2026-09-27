@@ -2762,10 +2762,10 @@ index fbb07216d..bf78b9cda 100644
    }
  }
 diff --git a/csrc/libtorch_stable/moe/torch_bindings.cpp b/csrc/libtorch_stable/moe/torch_bindings.cpp
-index c0e966b2b..2fa1272aa 100644
+index c0e966b2b..68ddf7294 100644
 --- a/csrc/libtorch_stable/moe/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/moe/torch_bindings.cpp
-@@ -1,27 +1,27 @@
+@@ -1,20 +1,20 @@
  #include "core/registration.h"
  #include "moe_ops.h"
  
@@ -2777,8 +2777,7 @@ index c0e966b2b..2fa1272aa 100644
    m.def(
        "topk_softmax(Tensor! topk_weights, Tensor! topk_indices, Tensor! "
        "token_expert_indices, Tensor gating_output, bool renormalize, Tensor? "
--      "bias, Tensor? is_padding) -> ()");
-+      "bias, Tensor? is_padding, Tensor? bias_vl=None, int image_sentinel_lo=0) -> ()");
+       "bias, Tensor? is_padding) -> ()");
 +  m.impl("topk_softmax", torch::kCUDA, &topk_softmax);
  
    // Apply topk sigmoid to the gating outputs.
@@ -2790,16 +2789,15 @@ index c0e966b2b..2fa1272aa 100644
  
    m.def(
        "topk_softplus_sqrt(Tensor! topk_weights, Tensor! topk_indices, Tensor! "
-       "token_expert_indices, Tensor gating_output, bool renormalize, float "
+@@ -22,6 +22,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "routed_scaling_factor, Tensor? "
--      "bias, Tensor? input_ids, Tensor? tid2eid, Tensor? is_padding, "
--      "Tensor? bias_vl=None, int image_sentinel_lo=0) -> ()");
-+      "bias, Tensor? input_ids, Tensor? tid2eid, Tensor? is_padding) -> ()");
+       "bias, Tensor? input_ids, Tensor? tid2eid, Tensor? is_padding, "
+       "Tensor? bias_vl=None, int image_sentinel_lo=0) -> ()");
 +  m.impl("topk_softplus_sqrt", torch::kCUDA, &topk_softplus_sqrt);
  
    // Calculate the result of moe by summing up the partial results
    // from all selected experts. topk_ids/expert_map are optional and, when
-@@ -31,6 +31,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -31,6 +32,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
    m.def(
        "moe_sum(Tensor input, Tensor! output, Tensor? topk_ids=None, "
        "Tensor? expert_map=None) -> ()");
@@ -2807,7 +2805,7 @@ index c0e966b2b..2fa1272aa 100644
  
    // Aligning the number of tokens to be processed by each expert such
    // that it is divisible by the block size.
-@@ -40,6 +41,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -40,6 +42,7 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "                     Tensor! experts_ids,"
        "                     Tensor! num_tokens_post_pad,"
        "                     Tensor? maybe_expert_map) -> ()");
@@ -2815,7 +2813,7 @@ index c0e966b2b..2fa1272aa 100644
  
    // Aligning the number of tokens to be processed by each expert such
    // that it is divisible by the block size, but for the batched case.
-@@ -49,6 +51,8 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -49,6 +52,8 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "                     Tensor! sorted_token_ids,"
        "                     Tensor! experts_ids,"
        "                     Tensor! num_tokens_post_pad) -> ()");
@@ -2824,7 +2822,7 @@ index c0e966b2b..2fa1272aa 100644
  
    // Aligning the number of tokens to be processed by each expert such
    // that it is divisible by the block size.
-@@ -65,7 +69,9 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -65,7 +70,9 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "                     Tensor !adapter_enabled,"
        "                     Tensor !lora_ids,"
        "                     Tensor? maybe_expert_map) -> () ");
@@ -2835,7 +2833,7 @@ index c0e966b2b..2fa1272aa 100644
    m.def(
        "moe_wna16_gemm(Tensor input, Tensor! output, Tensor b_qweight, "
        "Tensor b_scales, Tensor? b_qzeros, "
-@@ -74,17 +80,20 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -74,17 +81,20 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "int top_k, int BLOCK_SIZE_M, int BLOCK_SIZE_N, int BLOCK_SIZE_K, "
        "int bit) -> Tensor");
  
@@ -2858,7 +2856,7 @@ index c0e966b2b..2fa1272aa 100644
        "bool use_fp32_reduce, bool is_zp_float,"
        "int thread_k, int thread_n, int blocks_per_sm) -> Tensor");
  
-@@ -96,29 +105,19 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -96,29 +106,19 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "expert_first_token_offset, Tensor! inv_permuted_idx, Tensor! "
        "permuted_idx)->()");
  
@@ -2890,7 +2888,7 @@ index c0e966b2b..2fa1272aa 100644
  
    // Apply grouped topk routing to select experts.
    m.def(
-@@ -126,33 +125,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -126,33 +126,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "topk_group, int topk, bool renormalize, float "
        "routed_scaling_factor, Tensor bias, int scoring_func) -> (Tensor, "
        "Tensor)");
