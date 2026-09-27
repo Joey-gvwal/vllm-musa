@@ -121,6 +121,19 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
             gqa_interleaved_layout,
             reduce_results=reduce_results,
         )
+        # These v0.28 fast paths can hang with the v0.30 GDN metadata and
+        # torch 2.11/MUSA 5.2. Keep them available for targeted validation,
+        # while using the verified functional paths by default.
+        self._musa_enable_tilelang_causal_conv = (
+            os.environ.get("VLLM_MUSA_ENABLE_TILELANG_CAUSAL_CONV") == "1"
+        )
+        self._musa_enable_mate_gdn_decode = (
+            os.environ.get("VLLM_MUSA_ENABLE_MATE_GDN_DECODE") == "1"
+        )
+        self.enable_packed_recurrent_decode = (
+            self.enable_packed_recurrent_decode
+            and os.environ.get("VLLM_MUSA_ENABLE_PACKED_RECURRENT_DECODE") == "1"
+        )
         self._musa_optimization_contract = resolve_optimization_contract(vllm_config)
         compilation_config = vllm_config.compilation_config
         self._gdn_cudagraph_capture_sizes = tuple(
@@ -271,7 +284,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         core_attn_out: torch.Tensor,
         attn_metadata,
     ) -> bool:
-        if os.environ.get("VLLM_MUSA_DISABLE_MATE_GDN_DECODE") == "1":
+        if not self._musa_enable_mate_gdn_decode:
             return False
         if (
             attn_metadata.spec_sequence_masks is not None
@@ -317,7 +330,7 @@ class MusaQwenGatedDeltaNetAttention(QwenGatedDeltaNetAttention):
         # and casts the result back.  The MUSA kernel accepts those dtypes
         # directly; keep the upstream path as a structural fallback.
         mixed_qkv_tilelang = None
-        if os.environ.get("VLLM_MUSA_DISABLE_TILELANG_CAUSAL_CONV") != "1":
+        if self._musa_enable_tilelang_causal_conv:
             mixed_qkv_tilelang = musa_tilelang_causal_conv1d_update(
                 mixed_qkv,
                 conv_state,
