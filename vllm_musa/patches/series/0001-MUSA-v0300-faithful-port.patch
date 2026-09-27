@@ -5361,6 +5361,26 @@ index 94456fc..e205f57 100644
  
      @classmethod
      def deserialize_graph_module(
+diff --git a/vllm/compilation/cuda_graph.py b/vllm/compilation/cuda_graph.py
+index 5577160..f8f97e7 100644
+--- a/vllm/compilation/cuda_graph.py
++++ b/vllm/compilation/cuda_graph.py
+@@ -315,7 +315,14 @@ class CUDAGraphWrapper:
+                 with torch.cuda.graph(
+                     cudagraph,
+                     pool=self.graph_pool,
+-                    stream=current_stream(),
++                    # torch_musa selects a dedicated non-default capture
++                    # stream when stream is None. Capturing on the current
++                    # default stream raises in MUSA graph capture.
++                    stream=(
++                        None
++                        if current_platform.device_type == "musa"
++                        else current_stream()
++                    ),
+                 ):
+                     # `output` is managed by pytorch's cudagraph pool
+                     output = self.runnable(*args, **kwargs)
 diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
 index 4a65376..abeaaf4 100644
 --- a/vllm/compilation/passes/pass_manager.py
