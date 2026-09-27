@@ -1878,10 +1878,10 @@ index c17b06a79..b35a4b2b6 100644
          selective_scan_fwd_cuda<input_t, weight_t, state_t>(params, stream);
      });
 diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-index d66b78fe8..e2f2e9174 100644
+index d66b78fe8..d27a53810 100644
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-@@ -2,14 +2,14 @@
+@@ -2,15 +2,15 @@
  #include <cub/cub.cuh>
  
  #include <cuda_runtime.h>
@@ -1893,6 +1893,7 @@ index d66b78fe8..e2f2e9174 100644
 -
 -#include "../../cuda_compat.h"
 -#include "libtorch_stable/core/math.hpp"
+-#include "libtorch_stable/dispatch_utils.h"
 +#include <torch/all.h>
 +#include <ATen/cuda/CUDAContext.h>
 +#include <c10/cuda/CUDAGuard.h>
@@ -1901,9 +1902,10 @@ index d66b78fe8..e2f2e9174 100644
 +
 +#include "cuda_compat.h"
 +#include "../core/math.hpp"
- #include "libtorch_stable/dispatch_utils.h"
++#include "dispatch_utils.h"
  #include "libtorch_stable/quantization/vectorization.cuh"
  #include "libtorch_stable/torch_utils.h"
+ 
 @@ -659,14 +659,13 @@ __global__ void moe_lora_align_block_size_small_batch_expert_kernel(
  // taken from
  // https://github.com/sgl-project/sglang/blob/8b5f83ed3b7d2a49ad5c5cd5aa61c5d502f47dbc
