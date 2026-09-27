@@ -245,6 +245,9 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         self.kv_b_proj = kv_b_proj
         self.indexer = indexer
         self.q_pad_num_heads = q_pad_num_heads
+        # MUSA uses BF16 batched matmul for MLA absorb/de-absorb. The ROCm
+        # Aiter FP8 path is not registered on this platform.
+        self.is_aiter_triton_fp8_bmm_enabled = False
 
         self.supports_quant_query_input = True
 
