@@ -1,705 +1,3 @@
-diff --git a/.claude/skills/ci-fails-buildkite b/.claude/skills/ci-fails-buildkite
-deleted file mode 120000
-index db179cf..0000000
---- a/.claude/skills/ci-fails-buildkite
-+++ /dev/null
-@@ -1 +0,0 @@
--../../.agents/skills/ci-fails-buildkite
-\ No newline at end of file
-diff --git a/.claude/skills/ci-fails-buildkite/SKILL.md b/.claude/skills/ci-fails-buildkite/SKILL.md
-new file mode 100644
-index 0000000..d195c02
---- /dev/null
-+++ b/.claude/skills/ci-fails-buildkite/SKILL.md
-@@ -0,0 +1,35 @@
-+---
-+name: ci-fails-buildkite
-+description: Fetch and diagnose vLLM Buildkite CI failure logs. Use when investigating failing CI jobs on a PR or build, when the user pastes a buildkite.com URL, or asks to fetch/diagnose CI logs.
-+---
-+
-+# Diagnosing vLLM Buildkite CI Failures
-+
-+Buildkite logs are public; no login needed.
-+
-+`.buildkite/scripts/ci-fetch-log.sh` saves each log as `ci-<build>-<job-name>.log`, stripped of timestamps and ANSI codes. Existing files are kept; set `CI_FETCH_LOG_FORCE=1` to refetch.
-+
-+## Fetching logs
-+
-+```bash
-+# All failed jobs in a PR's latest build (current branch's PR if omitted):
-+.buildkite/scripts/ci-fetch-log.sh --pr <PR>
-+
-+# All failed jobs in a build (--soft also includes soft-failed jobs;
-+# --all fetches every finished job):
-+.buildkite/scripts/ci-fetch-log.sh "https://buildkite.com/vllm/ci/builds/<N>"
-+
-+# One job — `gh pr checks` URLs (#<job_uuid>) and web UI URLs (?sid=) both
-+# work; pass "-" as a second argument to stream to stdout:
-+.buildkite/scripts/ci-fetch-log.sh "https://buildkite.com/vllm/ci/builds/<N>#<job_uuid>"
-+```
-+
-+To clean an already-downloaded log with `.buildkite/scripts/ci-clean-log.sh`:
-+
-+```bash
-+./ci-clean-log.sh ci.log
-+```
-+
-+## Reference
-+
-+See [docs/contributing/ci/failures.md](../../../docs/contributing/ci/failures.md) for the full guide: filing CI failure issues, investigating/bisecting, reproducing flaky tests, and daily triage.
-diff --git a/.claude/skills/debug-ima b/.claude/skills/debug-ima
-deleted file mode 120000
-index 6a1dbb4..0000000
---- a/.claude/skills/debug-ima
-+++ /dev/null
-@@ -1 +0,0 @@
--../../.agents/skills/debug-ima
-\ No newline at end of file
-diff --git a/.claude/skills/debug-ima/SKILL.md b/.claude/skills/debug-ima/SKILL.md
-new file mode 100644
-index 0000000..8f329ed
---- /dev/null
-+++ b/.claude/skills/debug-ima/SKILL.md
-@@ -0,0 +1,9 @@
-+---
-+name: debug-ima
-+description: Debug CUDA illegal memory access (IMA) errors in vLLM with CUDA core dumps and cuda-gdb.
-+---
-+
-+# Debug IMA
-+
-+Follow the vLLM guide
-+[CUDA Core Dump: An Effective Tool to Debug Memory Access Issues and Beyond](https://vllm.ai/blog/2025-08-11-cuda-debugging).
-diff --git a/.claude/skills/debug-ima/agents/openai.yaml b/.claude/skills/debug-ima/agents/openai.yaml
-new file mode 100644
-index 0000000..d8b1614
---- /dev/null
-+++ b/.claude/skills/debug-ima/agents/openai.yaml
-@@ -0,0 +1,4 @@
-+interface:
-+  display_name: "Debug IMA"
-+  short_description: "Debug CUDA illegal memory access errors in vLLM."
-+  default_prompt: "Use the vLLM CUDA core-dump guide to debug this illegal memory access error."
-diff --git a/.claude/skills/kernel-microbenchmark b/.claude/skills/kernel-microbenchmark
-deleted file mode 120000
-index c023360..0000000
---- a/.claude/skills/kernel-microbenchmark
-+++ /dev/null
-@@ -1 +0,0 @@
--../../.agents/skills/kernel-microbenchmark
-\ No newline at end of file
-diff --git a/.claude/skills/kernel-microbenchmark/SKILL.md b/.claude/skills/kernel-microbenchmark/SKILL.md
-new file mode 100644
-index 0000000..f2dd5be
---- /dev/null
-+++ b/.claude/skills/kernel-microbenchmark/SKILL.md
-@@ -0,0 +1,111 @@
-+---
-+name: kernel-microbenchmark
-+description: Build, debug, and interpret vLLM GPU kernel microbenchmarks for CUDA, Triton, and CuteDSL, including CUPTI timing, correctness checks, generated-code inspection, multi-GPU measurements, and SOL sanity checks.
-+---
-+
-+# Kernel Microbenchmark
-+
-+## Workflow
-+
-+1. Create an isolated repro or benchmark when the existing harness is noisy.
-+2. Check correctness before timing. Keep tolerances explicit.
-+3. Time only the operation under study. Exclude allocation, compilation, random
-+   input generation, logging, and host-device transfers unless those are the
-+   target.
-+4. Compare against a baseline and report enough metadata to reproduce the
-+   result: GPU, dtype, shape, command, branch/commit, and relevant env vars.
-+5. Treat explanations as hypotheses until backed by an artifact: ablation,
-+   generated PTX/SASS, profiler output, or controlled benchmark.
-+6. If the result changes the conclusion, preserve the compact lesson in a note,
-+   comment, benchmark table, or final summary. For experiments, a short
-+   `Question / Change / Correctness / Result / Observation / Next` note is
-+   usually enough.
-+
-+## Benchmark Defaults
-+
-+- Use FlashInfer CUPTI timing by default, with CUDA graph and cold L2 cache:
-+  `from flashinfer.testing import bench_gpu_time_with_cupti`.
-+- For compute-heavy kernels, report TFLOPS with the FLOP formula in the
-+  benchmark. For memory-heavy kernels, report estimated bytes moved and GB/s.
-+  For mixed kernels, report the most honest metric available and call out the
-+  caveats. TFLOPS and memory bandwidth should be computed from the theoretical
-+  best for the operation, not from a particular kernel implementation. For
-+  example, memory bandwidth should assume all data is read exactly once from
-+  global memory.
-+- When comparing across shapes, prefer throughput metrics such as TFLOPS or
-+  GB/s as the primary table columns; keep latency for absolute cost.
-+- If a result exceeds expected peak/SOL, first inspect units, FLOP/byte
-+  formulas, skipped work, sparsity, caching, and whether the baseline is doing
-+  the same operation.
-+- Force compilation/autotuning before measuring compiled kernels.
-+- Seed inputs when correctness comparisons matter.
-+- Keep metadata setup, plan construction, allocation, random input generation,
-+  and logging outside the timed region unless that overhead is the experiment.
-+
-+## Sanity-Check Reference Numbers
-+
-+Use these as rough reference points for large, well-shaped workloads, not as
-+gold standards, guaranteed peaks, or hard limits. Hardware SKU, clocks, shape,
-+precision conventions, and the FLOP/byte accounting can move the result. A
-+large gap is a prompt to investigate, not proof that a kernel is poor.
-+
-+| Kernel regime | Hardware | Rough reference |
-+| --- | --- | ---: |
-+| Memory-bound, large batch | Blackwell | 6 TB/s |
-+| BF16 GEMM | Blackwell | 2 PFLOP/s |
-+| BF16 attention | B200 | 1.6 PFLOP/s |
-+| FP8 GEMM | Blackwell | 4 PFLOP/s |
-+| FP8 attention | B300 | 2.8 PFLOP/s |
-+
-+The BF16 attention reference is approximately the 1613 TFLOP/s result reported
-+by the FlashAttention-4 paper. Compare kernels only with matching workload and
-+throughput conventions.
-+
-+## Multi-GPU Benchmarks
-+
-+- State whether the run is local or multi-node and report the GPU topology,
-+  world size, GPUs per node, collective backend, and relevant library versions.
-+- Compare like-for-like TP configurations. Report both per-rank and global
-+  dimensions, and do not compare results from different TP sizes without an
-+  explicit normalization or scaling question.
-+- Define the timed operation boundary before benchmarking. If the production
-+  wrapper performs input staging, flag resets, generation barriers, padding,
-+  or output copies, keep them in the timed region for an end-to-end comparison.
-+  Use a separate, clearly labeled ablation for kernel-only timing.
-+- Check distributed correctness before timing. Seed each rank deliberately,
-+  form the reference with the same collective semantics, and synchronize before
-+  reading or comparing outputs.
-+- Use a device-side barrier immediately before each measured replay. Keep this
-+  common synchronization outside the timed interval, but keep barriers required
-+  by the candidate implementation inside it.
-+- With CUDA graphs, warm up before capture, coordinate capture across ranks,
-+  rotate pointer-distinct graphs when cache reuse matters, and ensure every
-+  collective is issued in the same order on every rank.
-+- Measure every rank and reduce each sample with `MAX`; report the median of
-+  those per-sample maxima. A rank-local event time is not a distributed latency.
-+- Reset reusable symmetric-memory flags before each invocation and establish a
-+  device-side generation barrier before peers may signal them. Otherwise a fast
-+  rank can signal before a slow rank resets its flags, causing a lost arrival
-+  and intermittent deadlock.
-+- Preserve symmetric-memory handles, CUDA graphs, streams, and graph outputs for
-+  the full measurement lifetime. Allocate and rendezvous symmetric buffers in
-+  identical order and with identical shapes on all ranks.
-+- Treat hangs and isolated millisecond outliers as synchronization bugs or rank
-+  skew until disproven. Add stage markers, bounded synchronization checks, and
-+  per-rank diagnostics before blaming compilation or kernel performance.
-+- For multi-node runs, record the scheduler allocation and verify the fabric
-+  supports the required multicast or NVLink-domain assumptions. Do not describe
-+  a two-node TP run as equivalent to a local NVLink-domain run without checking.
-+- Stabilize GPU clocks or run enough untimed work to reach a steady state.
-+  Alternate candidate order so clock, thermal, and rank-skew effects are shared.
-+
-+## Included Examples
-+
-+- Use [benchmarks/cupti_microbenchmark.py](benchmarks/cupti_microbenchmark.py)
-+  as a minimal single-GPU FlashInfer CUPTI timing pattern.
-+- Use
-+  [benchmarks/multi_gpu_gemm_rs.py](benchmarks/multi_gpu_gemm_rs.py) as a
-+  minimal distributed CUDA-graph timing pattern.
-+
-+Adapt the operation, cases, work formula, and correctness tolerances rather
-+than copying either example unchanged.
-diff --git a/.claude/skills/kernel-microbenchmark/agents/openai.yaml b/.claude/skills/kernel-microbenchmark/agents/openai.yaml
-new file mode 100644
-index 0000000..cbd52cc
---- /dev/null
-+++ b/.claude/skills/kernel-microbenchmark/agents/openai.yaml
-@@ -0,0 +1,4 @@
-+interface:
-+  display_name: "Kernel Microbenchmark"
-+  short_description: "Build and debug reliable GPU kernel microbenchmarks."
-+  default_prompt: "Use the kernel microbenchmark workflow to build or debug a vLLM GPU kernel benchmark."
-diff --git a/.claude/skills/kernel-microbenchmark/benchmarks/cupti_microbenchmark.py b/.claude/skills/kernel-microbenchmark/benchmarks/cupti_microbenchmark.py
-new file mode 100644
-index 0000000..74eb611
---- /dev/null
-+++ b/.claude/skills/kernel-microbenchmark/benchmarks/cupti_microbenchmark.py
-@@ -0,0 +1,63 @@
-+# SPDX-License-Identifier: Apache-2.0
-+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-+
-+"""FlashInfer CUPTI microbenchmark template with throughput metrics."""
-+
-+import statistics
-+
-+import pandas as pd
-+import torch
-+from flashinfer.testing import bench_gpu_time_with_cupti
-+
-+WARMUP = 25
-+MATMUL_CASES = [
-+    ("compute-bound", 4096, 4096, 4096),
-+    ("small-M", 16, 16384, 8192),
-+]
-+
-+
-+def bench_us(fn):
-+    for _ in range(WARMUP):
-+        fn()
-+    torch.accelerator.synchronize()
-+    return statistics.median(bench_gpu_time_with_cupti(fn)) * 1e3
-+
-+
-+def main() -> None:
-+    if not torch.accelerator.is_available() or torch.version.cuda is None:
-+        raise RuntimeError("CUDA is required for CUPTI kernel timing.")
-+
-+    torch.set_default_device("cuda")
-+    torch.manual_seed(0)
-+
-+    rows = []
-+    for name, m, n, k in MATMUL_CASES:
-+        a = torch.randn(m, k, dtype=torch.bfloat16)
-+        b = torch.randn(k, n, dtype=torch.bfloat16)
-+        out = torch.empty(m, n, dtype=torch.bfloat16)
-+
-+        def run_matmul(a=a, b=b, out=out):
-+            torch.mm(a, b, out=out)
-+
-+        run_matmul()
-+        ref = torch.mm(a, b)
-+        torch.accelerator.synchronize()
-+        torch.testing.assert_close(out, ref, atol=1e-1, rtol=1e-1)
-+
-+        us = bench_us(run_matmul)
-+        rows.append(
-+            {
-+                "case": name,
-+                "shape": f"{m}x{n}x{k}",
-+                "us": us,
-+                "tflops": 2 * m * n * k / (us * 1e6),
-+                "gbps": 2 * (m * k + k * n + m * n) / (us * 1e3),
-+            }
-+        )
-+
-+    df = pd.DataFrame(rows)
-+    print(df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
-+
-+
-+if __name__ == "__main__":
-+    main()
-diff --git a/.claude/skills/kernel-microbenchmark/benchmarks/multi_gpu_gemm_rs.py b/.claude/skills/kernel-microbenchmark/benchmarks/multi_gpu_gemm_rs.py
-new file mode 100644
-index 0000000..56b503a
---- /dev/null
-+++ b/.claude/skills/kernel-microbenchmark/benchmarks/multi_gpu_gemm_rs.py
-@@ -0,0 +1,324 @@
-+# SPDX-License-Identifier: Apache-2.0
-+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-+
-+"""Minimal multi-GPU GEMM + reduce-scatter microbenchmark.
-+
-+Run on one node with, for example:
-+
-+    torchrun --standalone --nproc-per-node=8 \
-+        .agents/skills/kernel-microbenchmark/benchmarks/multi_gpu_gemm_rs.py
-+"""
-+
-+import argparse
-+import os
-+import statistics
-+from collections.abc import Callable
-+
-+import pandas as pd
-+import torch
-+import torch.distributed as dist
-+import torch.distributed._symmetric_memory as symm_mem
-+
-+from vllm.config import VllmConfig, set_current_vllm_config
-+from vllm.distributed import cleanup_dist_env_and_memory
-+from vllm.distributed.parallel_state import (
-+    get_tp_group,
-+    init_distributed_environment,
-+    initialize_model_parallel,
-+)
-+
-+
-+def parse_args() -> argparse.Namespace:
-+    parser = argparse.ArgumentParser()
-+    parser.add_argument("--m", type=int, nargs="+", default=[128, 512, 2048])
-+    parser.add_argument("--n", type=int, default=4096)
-+    parser.add_argument(
-+        "--k",
-+        type=int,
-+        nargs="+",
-+        default=[4096],
-+        help="Per-rank K values",
-+    )
-+    parser.add_argument("--num-workspaces", type=int, default=10)
-+    parser.add_argument("--warmup-replays", type=int, default=5)
-+    parser.add_argument("--samples", type=int, default=20)
-+    return parser.parse_args()
-+
-+
-+def make_gemm_rs(
-+    x: torch.Tensor,
-+    weight: torch.Tensor,
-+    partial: torch.Tensor,
-+    output: torch.Tensor,
-+    rows: int,
-+    device_group: dist.ProcessGroup,
-+) -> Callable[[], None]:
-+    def run() -> None:
-+        torch.mm(x, weight.T, out=partial[:rows])
-+        dist.reduce_scatter_single(output, partial, group=device_group)
-+
-+    return run
-+
-+
-+def check_correctness(
-+    runs: dict[str, Callable[[], None]],
-+    outputs: dict[str, torch.Tensor],
-+    x: torch.Tensor,
-+    weight: torch.Tensor,
-+    padded_rows: int,
-+    rank: int,
-+    device_group: dist.ProcessGroup,
-+) -> None:
-+    expected_full = torch.zeros(
-+        (padded_rows, weight.shape[0]),
-+        dtype=x.dtype,
-+        device=x.device,
-+    )
-+    torch.mm(x, weight.T, out=expected_full[: x.shape[0]])
-+    dist.all_reduce(expected_full, group=device_group)
-+    expected = expected_full.chunk(dist.get_world_size(device_group))[rank]
-+    for name, run in runs.items():
-+        run()
-+        torch.accelerator.synchronize()
-+        torch.testing.assert_close(
-+            outputs[name],
-+            expected,
-+            rtol=5e-2,
-+            atol=4.0,
-+        )
-+
-+
-+def capture_graph(
-+    run: Callable[[], None],
-+    cpu_group: dist.ProcessGroup,
-+) -> tuple[torch.cuda.CUDAGraph, torch.cuda.Stream]:
-+    stream = torch.cuda.Stream()
-+    stream.wait_stream(torch.cuda.current_stream())
-+    dist.barrier(group=cpu_group)
-+    with torch.cuda.stream(stream):
-+        for _ in range(3):
-+            run()
-+    stream.synchronize()
-+    dist.barrier(group=cpu_group)
-+
-+    graph = torch.cuda.CUDAGraph()
-+    with torch.cuda.graph(graph, stream=stream):
-+        run()
-+    torch.cuda.current_stream().wait_stream(stream)
-+    dist.barrier(group=cpu_group)
-+    return graph, stream
-+
-+
-+def benchmark_graphs(
-+    candidate_graphs: dict[str, list[torch.cuda.CUDAGraph]],
-+    warmup_replays: int,
-+    samples: int,
-+    device_group: dist.ProcessGroup,
-+    device_barrier: Callable[[], None],
-+) -> dict[str, float]:
-+    candidate_names = list(candidate_graphs)
-+    for round_index in range(warmup_replays):
-+        for candidate_index in range(len(candidate_names)):
-+            candidate_id = (round_index + candidate_index) % len(candidate_names)
-+            name = candidate_names[candidate_id]
-+            graphs = candidate_graphs[name]
-+            device_barrier()
-+            graphs[round_index % len(graphs)].replay()
-+    torch.accelerator.synchronize()
-+
-+    timings: dict[str, list[float]] = {name: [] for name in candidate_names}
-+    start = torch.cuda.Event(enable_timing=True)
-+    end = torch.cuda.Event(enable_timing=True)
-+    for sample_index in range(samples):
-+        for candidate_index in range(len(candidate_names)):
-+            candidate_id = (sample_index + candidate_index) % len(candidate_names)
-+            name = candidate_names[candidate_id]
-+            graphs = candidate_graphs[name]
-+            device_barrier()
-+            start.record()
-+            graphs[sample_index % len(graphs)].replay()
-+            end.record()
-+            end.synchronize()
-+
-+            elapsed_us = torch.tensor(
-+                start.elapsed_time(end) * 1000,
-+                dtype=torch.float64,
-+                device=torch.accelerator.current_device_index(),
-+            )
-+            dist.all_reduce(elapsed_us, op=dist.ReduceOp.MAX, group=device_group)
-+            timings[name].append(elapsed_us.item())
-+    return {name: statistics.median(values) for name, values in timings.items()}
-+
-+
-+def benchmark_shape(
-+    m: int,
-+    n: int,
-+    k: int,
-+    num_workspaces: int,
-+    warmup_replays: int,
-+    samples: int,
-+    device: torch.device,
-+    rank: int,
-+    world_size: int,
-+    device_group: dist.ProcessGroup,
-+    cpu_group: dist.ProcessGroup,
-+    device_barrier: Callable[[], None],
-+) -> dict[str, float | int]:
-+    padded_m = (m + world_size - 1) // world_size * world_size
-+    local_m = padded_m // world_size
-+
-+    torch.manual_seed(1000 + rank * 10 + m + k)
-+    inputs = []
-+    weights = []
-+    for _ in range(num_workspaces):
-+        inputs.append(torch.randn(m, k, dtype=torch.bfloat16, device=device))
-+        weights.append(torch.randn(n, k, dtype=torch.bfloat16, device=device))
-+
-+    ring_partial = torch.empty(padded_m, n, dtype=torch.bfloat16, device=device)
-+    ldmc_partial = symm_mem.empty(
-+        (padded_m, n),
-+        dtype=torch.bfloat16,
-+        device=device,
-+    )
-+    ldmc_handle = symm_mem.rendezvous(ldmc_partial, device_group)
-+    ring_output = torch.empty(local_m, n, dtype=torch.bfloat16, device=device)
-+    ldmc_output = torch.empty_like(ring_output)
-+    if padded_m > m:
-+        ring_partial[m:].zero_()
-+        ldmc_partial[m:].zero_()
-+
-+    candidate_runs = {
-+        "ring_ll_us": [
-+            make_gemm_rs(
-+                x,
-+                weight,
-+                ring_partial,
-+                ring_output,
-+                m,
-+                device_group,
-+            )
-+            for x, weight in zip(inputs, weights)
-+        ],
-+        "ldmc_us": [
-+            make_gemm_rs(
-+                x,
-+                weight,
-+                ldmc_partial,
-+                ldmc_output,
-+                m,
-+                device_group,
-+            )
-+            for x, weight in zip(inputs, weights)
-+        ],
-+    }
-+    x = inputs[0]
-+    weight = weights[0]
-+    check_correctness(
-+        {name: runs[0] for name, runs in candidate_runs.items()},
-+        {"ring_ll_us": ring_output, "ldmc_us": ldmc_output},
-+        x,
-+        weight,
-+        padded_m,
-+        rank,
-+        device_group,
-+    )
-+
-+    candidate_graphs = {}
-+    graph_keepalive: list[object] = [ldmc_handle]
-+    for name, runs in candidate_runs.items():
-+        bundles = [capture_graph(run, cpu_group) for run in runs]
-+        candidate_graphs[name] = [graph for graph, _ in bundles]
-+        graph_keepalive.extend(bundles)
-+
-+    times = benchmark_graphs(
-+        candidate_graphs,
-+        warmup_replays,
-+        samples,
-+        device_group,
-+        device_barrier,
-+    )
-+    global_flops = 2 * m * n * k * world_size
-+    return {
-+        "M": m,
-+        "N": n,
-+        "K_per_rank": k,
-+        "K_global": k * world_size,
-+        **times,
-+        "ring_ll_tflops": global_flops / (times["ring_ll_us"] * 1e6),
-+        "ldmc_tflops": global_flops / (times["ldmc_us"] * 1e6),
-+        "ldmc_speedup": times["ring_ll_us"] / times["ldmc_us"],
-+    }
-+
-+
-+def main() -> None:
-+    args = parse_args()
-+    assert args.m and min(args.m) > 0
-+    assert args.k and min(args.k) > 0
-+    assert min(args.n, args.num_workspaces, args.samples) > 0
-+    assert args.warmup_replays >= 0
-+    local_rank = int(os.environ["LOCAL_RANK"])
-+    local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
-+    torch.accelerator.set_device_index(local_rank)
-+    init_distributed_environment()
-+    world_size = dist.get_world_size()
-+    os.environ["VLLM_ALLREDUCE_USE_SYMM_MEM"] = "0"
-+    symm_mem.set_backend("NCCL")
-+    with set_current_vllm_config(VllmConfig()):
-+        initialize_model_parallel(tensor_model_parallel_size=world_size)
-+
-+    tp_group = get_tp_group()
-+    device_group = tp_group.device_group
-+    cpu_group = tp_group.cpu_group
-+    rank = tp_group.rank_in_group
-+    device = torch.device("cuda", local_rank)
-+    group_warmup = torch.zeros(1, device=device)
-+    dist.all_reduce(group_warmup, group=device_group)
-+    pynccl_comm = tp_group.device_communicator.pynccl_comm
-+    assert pynccl_comm is not None
-+    sync_input = torch.zeros(1, device=device)
-+    sync_output = torch.empty_like(sync_input)
-+
-+    def device_barrier() -> None:
-+        # Order the timed launch after a device-side rank rendezvous without
-+        # including the rendezvous itself in the measured event interval.
-+        pynccl_comm.all_reduce(sync_input, sync_output)
-+
-+    results = [
-+        benchmark_shape(
-+            m,
-+            args.n,
-+            k,
-+            args.num_workspaces,
-+            args.warmup_replays,
-+            args.samples,
-+            device,
-+            rank,
-+            world_size,
-+            device_group,
-+            cpu_group,
-+            device_barrier,
-+        )
-+        for k in args.k
-+        for m in args.m
-+    ]
-+
-+    if rank == 0:
-+        metadata = {
-+            "world_size": world_size,
-+            "local_world_size": local_world_size,
-+            "num_nodes": world_size // local_world_size,
-+            "backend": dist.get_backend(device_group),
-+            "gpu": torch.cuda.get_device_name(local_rank),
-+            "torch": torch.__version__,
-+            "cuda": torch.version.cuda,
-+        }
-+        print(pd.Series(metadata, name="value").to_string())
-+        df = pd.DataFrame(results)
-+        print(df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
-+
-+    dist.barrier(group=cpu_group)
-+    cleanup_dist_env_and_memory()
-+
-+
-+if __name__ == "__main__":
-+    main()
-diff --git a/.claude/skills/triton-kernel-writing b/.claude/skills/triton-kernel-writing
-deleted file mode 120000
-index 39e7b6b..0000000
---- a/.claude/skills/triton-kernel-writing
-+++ /dev/null
-@@ -1 +0,0 @@
--../../.agents/skills/triton-kernel-writing
-\ No newline at end of file
-diff --git a/.claude/skills/triton-kernel-writing/SKILL.md b/.claude/skills/triton-kernel-writing/SKILL.md
-new file mode 100644
-index 0000000..6dd6a85
---- /dev/null
-+++ b/.claude/skills/triton-kernel-writing/SKILL.md
-@@ -0,0 +1,62 @@
-+---
-+name: triton-kernel-writing
-+description: Write or review Triton kernels for vLLM, with practical guidance for generated-code inspection, launch grids, indexing, specialization, tuning, and representative performance validation.
-+---
-+
-+# Triton Kernel Writing
-+
-+## Implementation
-+
-+- Follow the official
-+  [Triton semantics](https://triton-lang.org/main/python-api/triton-semantics.html).
-+  Check it when behavior may differ from Python or NumPy, especially type
-+  promotion, integer division and modulo, casts, broadcasting, and variable
-+  scoping.
-+- Use the Triton kernel generated by `torch.compile` as a possible
-+  implementation to inspect. Print Inductor's generated code with
-+  `TORCH_LOGS="output_code" .venv/bin/python <script>` or enable
-+  `torch._logging.set_logs(output_code=True)` before the compiled function
-+  runs. Treat generated code as a reference, not as proof of correctness or
-+  optimality.
-+- Find reasonable defaults for compile-time knobs such as `BLOCK_SIZE`, or use
-+  a small, legible heuristic when workloads need different choices. Use
-+  `triton.autotune` only when tuning is critical to performance, such as for a
-+  matrix multiplication. Otherwise prioritize simple code and fast startup.
-+- Be careful to avoid unintended runtime JIT compilation. For example, put
-+  unimportant runtime integer scalars in `do_not_specialize`, especially those
-+  that may alternate between values such as 0 and 1, which can produce
-+  different specialization keys.
-+- The Triton compiler does not guarantee safe ordering when a kernel writes to
-+  a pointer and subsequently reads from the same pointer. This pattern must
-+  have a `tl.debug_barrier()` between the write and read. The barrier
-+  synchronizes threads in the block; it does not synchronize separate program
-+  instances.
-+
-+## Launch and Indexing
-+
-+- `grid[1]` and `grid[2]` must be at most 65,535. Choose or flatten the grid
-+  order so those dimensions cannot exceed the limit for supported shapes.
-+  For example, `num_tokens` is commonly 8K or 16K, but users may configure 32K
-+  or more. If `num_tokens` is a grid dimension, it is safe to put it in
-+  `grid[0]` (or tile it).
-+- Use `int64` for offset arithmetic when an index can exceed 32-bit range,
-+  especially for KV-cache addressing. Cast operands before multiplication or
-+  addition so an intermediate does not overflow in 32-bit arithmetic.
-+- A `[num_tokens, num_heads]` grid can be a good low-latency mapping for decode,
-+  but it can be very slow for prefill. If the kernel serves prefill, consider
-+  tiling tokens or otherwise increasing the work and locality per program.
-+
-+## Validation
-+
-+- Check correctness at boundary shapes and at sizes that exercise masks and
-+  large offsets.
-+- Choose accumulation and intermediate dtypes explicitly. Test numerically
-+  difficult inputs, not only random, well-scaled tensors.
-+- Use `$kernel-microbenchmark` for benchmark construction, measurement, and
-+  interpretation.
-+- Benchmark a sweep of `num_tokens` covering decode and representative prefill
-+  workloads. Include relevant head counts and dimensions when they affect the
-+  launch shape, and do not select an implementation or tuning heuristic from a
-+  single setup.
-+- Include compilation or autotuning overhead when evaluating startup behavior;
-+  report steady-state kernel performance separately.
-diff --git a/.claude/skills/triton-kernel-writing/agents/openai.yaml b/.claude/skills/triton-kernel-writing/agents/openai.yaml
-new file mode 100644
-index 0000000..259f16a
---- /dev/null
-+++ b/.claude/skills/triton-kernel-writing/agents/openai.yaml
-@@ -0,0 +1,4 @@
-+interface:
-+  display_name: "Triton Kernel Writing"
-+  short_description: "Write robust, practical Triton kernels for vLLM."
-+  default_prompt: "Use $triton-kernel-writing to implement or review this Triton kernel."
 diff --git a/csrc/cuda_compat.h b/csrc/cuda_compat.h
 index d7d589d..3893d6a 100644
 --- a/csrc/cuda_compat.h
@@ -1564,7 +862,7 @@ index de0c505..33be566 100644
    AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
    AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
 diff --git a/csrc/libtorch_stable/activation_kernels.cu b/csrc/libtorch_stable/activation_kernels.cu
-index a7ee87b..c5de37f 100644
+index a7ee87b..8c76eb3 100644
 --- a/csrc/libtorch_stable/activation_kernels.cu
 +++ b/csrc/libtorch_stable/activation_kernels.cu
 @@ -268,7 +268,8 @@ packed_gelu_tanh_kernel(const packed_t& val, const float /*alpha*/) {
@@ -1593,27 +891,24 @@ index a7ee87b..c5de37f 100644
  
  // SITU (Kimi SituGLU) gated activation. Non-interleaved layout:
  // input = [gate(d), up(d)] per token.
-@@ -806,6 +809,7 @@ __device__ __forceinline__ int get_masked_feature_index() {
-   return blockIdx.x * blockDim.x + threadIdx.x;
- }
- 
-+#ifndef USE_MUSA  // upstream masked activation kernels use CUDA-only activation helpers
- template <typename scalar_t, bool BATCHED_EXPERTS>
- __global__ void masked_situ_and_mul_kernel(
-     scalar_t* __restrict__ out, const scalar_t* __restrict__ input,
-@@ -946,8 +950,11 @@ __global__ void masked_activation_kernel(
+@@ -875,7 +878,7 @@ __global__ void masked_swigluoai_and_mul_kernel(
+     const scalar_t* in_ptr = input + row * 2 * d;
+     scalar_t* out_ptr = out + row * d;
+     out_ptr[idx] =
+-        swigluoai_and_mul(in_ptr[2 * idx], in_ptr[2 * idx + 1], alpha, limit);
++        vllm::swigluoai_and_mul(in_ptr[2 * idx], in_ptr[2 * idx + 1], alpha, limit);
    }
  }
  
-+#endif  // !USE_MUSA
+@@ -948,6 +951,7 @@ __global__ void masked_activation_kernel(
+ 
  }  // namespace vllm
  
-+
 +#ifndef USE_MUSA  // fatrelu/swigluoai kernels crash mcc
  #define LAUNCH_ACTIVATION_GATE_KERNEL_WITH_PARAM(KERNEL, PACKED_KERNEL, PARAM) \
    auto dtype = input.scalar_type();                                            \
    int d = input.size(-1) / 2;                                                  \
-@@ -1035,6 +1042,7 @@ void swigluoai_and_mul(torch::stable::Tensor& out,    // [..., d]
+@@ -1035,6 +1039,7 @@ void swigluoai_and_mul(torch::stable::Tensor& out,    // [..., d]
                         double alpha, double limit) {
    LAUNCH_SIGLUOAI_AND_MUL(vllm::swigluoai_and_mul, alpha, limit);
  }
@@ -1621,24 +916,7 @@ index a7ee87b..c5de37f 100644
  
  // Kimi SITU gated activation. `linear_beta <= 0` means "unset" (up passed
  // through), matching SituAndMul(linear_beta=None) on the Python side.
-@@ -1059,6 +1067,7 @@ void situ_and_mul(torch::stable::Tensor& out,    // [..., d]
-       });
- }
- 
-+#ifndef USE_MUSA  // masked activation ops are CUDA-only on the MUSA path
- void masked_situ_and_mul(torch::stable::Tensor& out,    // [E, T, d]
-                          torch::stable::Tensor& input,  // [E, T, 2 * d]
-                          const torch::stable::Tensor& expert_num_tokens,
-@@ -1194,6 +1203,8 @@ void masked_moe_activation(
- // Fused SITU activation and block-FP8 quantization for Humming w2.
- // `num_valid_tokens` is the int32 DeepEP token count (psum[-1]); rows = it *
- // `topk`, so padding is excluded on-device and skipped rows receive scale 1.
-+#endif  // !USE_MUSA
-+
- void situ_and_mul_quant(torch::stable::Tensor& out,    // [..., d]  (fp8)
-                         torch::stable::Tensor& scale,  // [..., 1 or d/128]
-                         torch::stable::Tensor& input,  // [..., 2 * d]
-@@ -1373,7 +1384,8 @@ __global__ void activation_kernel(
+@@ -1373,7 +1378,8 @@ __global__ void activation_kernel(
      dim3 block(std::min(d / vec_size, 1024));                                  \
      if (CUDA_VERSION >= 12090 && cc_major >= 10 && num_tokens > 128) {         \
        VLLM_STABLE_DISPATCH_FLOATING_TYPES(dtype, "activation_kernel", [&] {    \
@@ -2548,35 +1826,73 @@ index c17b06a..b35a4b2 100644
          selective_scan_fwd_cuda<input_t, weight_t, state_t>(params, stream);
      });
 diff --git a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-index d66b78f..f665bd7 100644
+index d66b78f..6bc861b 100644
 --- a/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
 +++ b/csrc/libtorch_stable/moe/moe_align_sum_kernels.cu
-@@ -2,15 +2,15 @@
+@@ -1,18 +1,15 @@
+-#include <array>
++#include <torch/all.h>
++#include <ATen/cuda/CUDAContext.h>
++#include <c10/cuda/CUDAGuard.h>
  #include <cub/cub.cuh>
  
- #include <cuda_runtime.h>
+-#include <cuda_runtime.h>
 -#include <torch/csrc/stable/macros.h>
 -#include <torch/csrc/stable/accelerator.h>
 -#include <torch/csrc/stable/ops.h>
 -#include <torch/csrc/stable/tensor.h>
 -#include <torch/headeronly/core/ScalarType.h>
--
++#include <ATen/ATen.h>
++#include <ATen/cuda/Atomic.cuh>
+ 
 -#include "../../cuda_compat.h"
 -#include "libtorch_stable/core/math.hpp"
 -#include "libtorch_stable/dispatch_utils.h"
-+#include <torch/all.h>
-+#include <ATen/cuda/CUDAContext.h>
-+#include <c10/cuda/CUDAGuard.h>
-+#include <ATen/ATen.h>
-+#include <ATen/cuda/Atomic.cuh>
-+
-+#include "cuda_compat.h"
-+#include "../core/math.hpp"
-+#include "dispatch_utils.h"
  #include "libtorch_stable/quantization/vectorization.cuh"
- #include "libtorch_stable/torch_utils.h"
+-#include "libtorch_stable/torch_utils.h"
++#include "cuda_compat.h"
++#include "dispatch_utils.h"
++#include "../core/math.hpp"
  
-@@ -659,14 +659,13 @@ __global__ void moe_lora_align_block_size_small_batch_expert_kernel(
+ #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
+ 
+@@ -131,7 +128,7 @@ __device__ __forceinline__ int get_local_expert_id(
+   return expert_id;
+ }
+ 
+-template <typename scalar_t>
++template <typename scalar_t, int32_t block_threads = 1024>
+ __device__ void _moe_align_block_size(
+     const scalar_t* __restrict__ topk_ids,
+     int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
+@@ -189,7 +186,7 @@ __device__ void _moe_align_block_size(
+   __syncthreads();
+ 
+   // Compute prefix sum over token counts per expert
+-  using BlockScan = cub::BlockScan<int32_t, 1024>;
++  using BlockScan = cub::BlockScan<int32_t, block_threads>;
+   __shared__ typename BlockScan::TempStorage temp_storage;
+ 
+   int expert_count = 0;
+@@ -356,7 +353,7 @@ __device__ void _count_and_sort_expert_tokens(
+   }
+ }
+ 
+-template <typename scalar_t>
++template <typename scalar_t, int32_t block_threads = 1024>
+ __global__ void moe_align_block_size_kernel(
+     const scalar_t* __restrict__ topk_ids,
+     int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
+@@ -365,7 +362,7 @@ __global__ void moe_align_block_size_kernel(
+     int32_t padded_num_experts, int32_t experts_per_warp, int32_t block_size,
+     size_t numel, int32_t* __restrict__ cumsum, int32_t max_num_tokens_padded,
+     int32_t topk_num, bool has_expert_map) {
+-  _moe_align_block_size(
++  _moe_align_block_size<scalar_t, block_threads>(
+       topk_ids, sorted_token_ids, expert_ids, total_tokens_post_pad, expert_map,
+       num_experts, padded_num_experts, experts_per_warp, block_size, numel,
+       cumsum, max_num_tokens_padded, CEILDIV(max_num_tokens_padded, block_size),
+@@ -659,34 +656,35 @@ __global__ void moe_lora_align_block_size_small_batch_expert_kernel(
  // taken from
  // https://github.com/sgl-project/sglang/blob/8b5f83ed3b7d2a49ad5c5cd5aa61c5d502f47dbc
  void moe_align_block_size(
@@ -2586,24 +1902,32 @@ index d66b78f..f665bd7 100644
 -    std::optional<torch::stable::Tensor> maybe_expert_map) {
 -  const torch::stable::accelerator::DeviceGuard device_guard(
 -      topk_ids.get_device_index());
+-  const cudaStream_t stream =
+-      get_current_cuda_stream(topk_ids.get_device_index());
 +    torch::Tensor topk_ids, int64_t num_experts, int64_t block_size,
 +    torch::Tensor sorted_token_ids, torch::Tensor experts_ids,
 +    torch::Tensor num_tokens_post_pad,
 +    std::optional<torch::Tensor> maybe_expert_map) {
 +  const at::cuda::OptionalCUDAGuard device_guard(device_of(topk_ids));
-   const cudaStream_t stream =
--      get_current_cuda_stream(topk_ids.get_device_index());
-+      at::cuda::getCurrentCUDAStream();
++  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
  
    int64_t padded_num_experts =
        ((num_experts + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
-@@ -675,18 +674,17 @@ void moe_align_block_size(
-   threads = ((threads + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
+   int experts_per_warp = WARP_SIZE;
+-  int threads = 1024;
+-  threads = ((threads + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
++  constexpr int32_t default_threads = 1024;
++  // e256 needs one lane beyond the last expert to materialize the final
++  // prefix sum. 288 is the smallest warp-aligned block that provides it.
++  constexpr int32_t small_batch_e256_threads = 288;
  
    // BlockScan uses 1024 threads and assigns one thread per expert.
 -  STD_TORCH_CHECK(padded_num_experts < 1024,
+-                  "padded_num_experts must be less than 1024");
 +  TORCH_CHECK(padded_num_experts < 1024,
-                   "padded_num_experts must be less than 1024");
++              "padded_num_experts must be less than 1024");
++  auto options_int =
++      torch::TensorOptions().dtype(torch::kInt).device(topk_ids.device());
    bool has_expert_map = maybe_expert_map.has_value();
 -  torch::stable::Tensor expert_map;
 +  torch::Tensor expert_map;
@@ -2612,7 +1936,7 @@ index d66b78f..f665bd7 100644
    } else {
 -    expert_map = torch::stable::new_empty(topk_ids, {0},
 -                                          torch::headeronly::ScalarType::Int);
-+    expert_map = torch::empty({0}, topk_ids.options().dtype(torch::kInt));
++    expert_map = torch::empty({0}, options_int);
    }
  
 -  VLLM_STABLE_DISPATCH_INTEGRAL_AND_UNSIGNED_TYPES(
@@ -2620,17 +1944,101 @@ index d66b78f..f665bd7 100644
        topk_ids.scalar_type(), "moe_align_block_size_kernel", [&] {
          // calc needed amount of shared mem for `cumsum` tensors
          bool small_batch_expert_mode =
-@@ -715,8 +713,7 @@ void moe_align_block_size(
-               num_experts, block_size, topk_ids.numel(),
-               sorted_token_ids.size(0), topk_ids.size(1), has_expert_map);
+@@ -706,18 +704,22 @@ void moe_align_block_size(
+                   scalar_t, fill_threads>;
+           small_batch_expert_kernel<<<1, fill_threads + threads,
+                                       shared_mem_size, stream>>>(
+-              reinterpret_cast<const scalar_t*>(topk_ids.const_data_ptr()),
+-              reinterpret_cast<int32_t*>(sorted_token_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(experts_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(
+-                  num_tokens_post_pad.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(expert_map.mutable_data_ptr()),
+-              num_experts, block_size, topk_ids.numel(),
+-              sorted_token_ids.size(0), topk_ids.size(1), has_expert_map);
++              topk_ids.data_ptr<scalar_t>(),
++              sorted_token_ids.data_ptr<int32_t>(),
++              experts_ids.data_ptr<int32_t>(),
++              num_tokens_post_pad.data_ptr<int32_t>(),
++              expert_map.data_ptr<int32_t>(), num_experts, block_size,
++              topk_ids.numel(), sorted_token_ids.size(0), topk_ids.size(1),
++              has_expert_map);
          } else {
 -          torch::stable::Tensor cumsum_buffer = torch::stable::new_empty(
 -              topk_ids, {num_experts + 1}, torch::headeronly::ScalarType::Int);
-+          torch::Tensor cumsum_buffer = torch::empty({num_experts + 1}, topk_ids.options().dtype(torch::kInt));
-           auto align_kernel = vllm::moe::moe_align_block_size_kernel<scalar_t>;
+-          auto align_kernel = vllm::moe::moe_align_block_size_kernel<scalar_t>;
++          torch::Tensor cumsum_buffer =
++              torch::empty({num_experts + 1}, options_int);
++          const bool small_batch_e256_mode =
++              topk_ids.size(0) <= 16 &&
++              (num_experts == 256 || num_experts == 257);
++          const int32_t threads = small_batch_e256_mode
++                                      ? small_batch_e256_threads
++                                      : default_threads;
  
            size_t num_warps = CEILDIV(padded_num_experts, experts_per_warp);
-@@ -760,26 +757,25 @@ void moe_align_block_size(
+           size_t shared_mem_size =
+@@ -726,17 +728,34 @@ void moe_align_block_size(
+           // launch two threadblocks
+           // blockIdx.x == 0: counting experts and aligning
+           // blockIdx.x == 1: filling sorted_token_ids
+-          align_kernel<<<2, threads, shared_mem_size, stream>>>(
+-              reinterpret_cast<const scalar_t*>(topk_ids.const_data_ptr()),
+-              reinterpret_cast<int32_t*>(sorted_token_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(experts_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(
+-                  num_tokens_post_pad.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(expert_map.mutable_data_ptr()),
+-              num_experts, padded_num_experts, experts_per_warp, block_size,
+-              topk_ids.numel(),
+-              reinterpret_cast<int32_t*>(cumsum_buffer.mutable_data_ptr()),
+-              sorted_token_ids.size(0), topk_ids.size(1), has_expert_map);
++          if (small_batch_e256_mode) {
++            auto align_kernel =
++                vllm::moe::moe_align_block_size_kernel<
++                    scalar_t, small_batch_e256_threads>;
++            align_kernel<<<2, small_batch_e256_threads, shared_mem_size,
++                           stream>>>(
++                topk_ids.data_ptr<scalar_t>(),
++                sorted_token_ids.data_ptr<int32_t>(),
++                experts_ids.data_ptr<int32_t>(),
++                num_tokens_post_pad.data_ptr<int32_t>(),
++                expert_map.data_ptr<int32_t>(), num_experts,
++                padded_num_experts, experts_per_warp, block_size,
++                topk_ids.numel(), cumsum_buffer.data_ptr<int32_t>(),
++                sorted_token_ids.size(0), topk_ids.size(1), has_expert_map);
++          } else {
++            auto align_kernel =
++                vllm::moe::moe_align_block_size_kernel<scalar_t,
++                                                        default_threads>;
++            align_kernel<<<2, default_threads, shared_mem_size, stream>>>(
++                topk_ids.data_ptr<scalar_t>(),
++                sorted_token_ids.data_ptr<int32_t>(),
++                experts_ids.data_ptr<int32_t>(),
++                num_tokens_post_pad.data_ptr<int32_t>(),
++                expert_map.data_ptr<int32_t>(), num_experts,
++                padded_num_experts, experts_per_warp, block_size,
++                topk_ids.numel(), cumsum_buffer.data_ptr<int32_t>(),
++                sorted_token_ids.size(0), topk_ids.size(1), has_expert_map);
++          }
+ 
+           const int block_threads = std::min(256, (int)threads);
+           const int num_blocks =
+@@ -748,10 +767,9 @@ void moe_align_block_size(
+           auto sort_kernel =
+               vllm::moe::count_and_sort_expert_tokens_kernel<scalar_t>;
+           sort_kernel<<<gridDims, block_threads, 0, stream>>>(
+-              reinterpret_cast<const scalar_t*>(topk_ids.const_data_ptr()),
+-              reinterpret_cast<int32_t*>(sorted_token_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(cumsum_buffer.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(expert_map.mutable_data_ptr()),
++              topk_ids.data_ptr<scalar_t>(),
++              sorted_token_ids.data_ptr<int32_t>(),
++              cumsum_buffer.data_ptr<int32_t>(), expert_map.data_ptr<int32_t>(),
+               topk_ids.numel(), num_experts, sorted_token_ids.size(0),
+               topk_ids.size(1), has_expert_map);
+         }
+@@ -760,26 +778,24 @@ void moe_align_block_size(
  
  void batched_moe_align_block_size(int64_t max_tokens_per_batch,
                                    int64_t block_size,
@@ -2638,7 +2046,7 @@ index d66b78f..f665bd7 100644
 -                                  torch::stable::Tensor sorted_ids,
 -                                  torch::stable::Tensor batch_ids,
 -                                  torch::stable::Tensor num_tokens_post_pad) {
-+                                  const torch::Tensor& batch_num_tokens,
++                                  torch::Tensor const& batch_num_tokens,
 +                                  torch::Tensor sorted_ids,
 +                                  torch::Tensor batch_ids,
 +                                  torch::Tensor num_tokens_post_pad) {
@@ -2646,10 +2054,10 @@ index d66b78f..f665bd7 100644
  
 -  const torch::stable::accelerator::DeviceGuard device_guard(
 -      batch_num_tokens.get_device_index());
-+  const at::cuda::OptionalCUDAGuard device_guard(device_of(batch_num_tokens));
-   const cudaStream_t stream =
+-  const cudaStream_t stream =
 -      get_current_cuda_stream(batch_num_tokens.get_device_index());
-+      at::cuda::getCurrentCUDAStream();
++  const at::cuda::OptionalCUDAGuard device_guard(device_of(batch_num_tokens));
++  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
    int32_t const B = batch_num_tokens.size(0);
    int32_t const num_blocks_per_batch =
        round_to_next_multiple_of(max_tokens_per_batch, block_size) / block_size;
@@ -2667,8 +2075,18 @@ index d66b78f..f665bd7 100644
  
    // Avoid coordination overhead for small capacities or many batches.
    int64_t const cooperative_threshold = std::max<int64_t>(256, 8 * B);
-@@ -798,14 +794,14 @@ void batched_moe_align_block_size(int64_t max_tokens_per_batch,
-       reinterpret_cast<int32_t*>(num_tokens_post_pad.mutable_data_ptr()));
+@@ -791,23 +807,19 @@ void batched_moe_align_block_size(int64_t max_tokens_per_batch,
+           : batched_kernel::batched_moe_align_block_size_kernel<false>;
+   kernel<<<batched_kernel::num_blocks, batched_kernel::num_threads, 0,
+            stream>>>(
+-      B, max_tokens_per_batch, block_size,
+-      reinterpret_cast<const int32_t*>(batch_num_tokens.const_data_ptr()),
+-      reinterpret_cast<int32_t*>(sorted_ids.mutable_data_ptr()),
+-      reinterpret_cast<int32_t*>(batch_ids.mutable_data_ptr()),
+-      reinterpret_cast<int32_t*>(num_tokens_post_pad.mutable_data_ptr()));
++      B, max_tokens_per_batch, block_size, batch_num_tokens.data_ptr<int32_t>(),
++      sorted_ids.data_ptr<int32_t>(), batch_ids.data_ptr<int32_t>(),
++      num_tokens_post_pad.data_ptr<int32_t>());
  }
  
 -void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
@@ -2683,28 +2101,31 @@ index d66b78f..f665bd7 100644
    // is read by its strides (no copy); only the hidden dim needs to be
    // contiguous to take the vectorized path.
 -  STD_TORCH_CHECK(output.is_contiguous(),
-+  TORCH_CHECK(output.is_contiguous(),
-                   "moe_sum expects a contiguous output");
- 
+-                  "moe_sum expects a contiguous output");
+-
++  TORCH_CHECK(output.is_contiguous(), "moe_sum expects a contiguous output");
    const int hidden_size = input.size(-1);
-@@ -815,23 +811,22 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
+   const int64_t num_tokens = output.numel() / hidden_size;
+   const int topk = input.size(1);
+@@ -815,26 +827,22 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
    const int64_t stride_topk = input.stride(1);
    const int64_t stride_hidden = input.stride(2);
  
 -  const torch::stable::accelerator::DeviceGuard device_guard(
 -      output.get_device_index());
-+  const at::cuda::OptionalCUDAGuard device_guard(device_of(output));
-   const cudaStream_t stream =
+-  const cudaStream_t stream =
 -      get_current_cuda_stream(output.get_device_index());
-+      at::cuda::getCurrentCUDAStream();
++  const at::cuda::OptionalCUDAGuard device_guard(device_of(output));
++  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
  
    if (topk_ids.has_value()) {
      // Pad-aware reduce path
 -    const torch::stable::Tensor& tk = topk_ids.value();
 -    STD_TORCH_CHECK(tk.size(0) == num_tokens && tk.size(1) == topk,
+-                    "moe_sum: topk_ids must have shape [num_tokens, topk]");
 +    const torch::Tensor& tk = topk_ids.value();
 +    TORCH_CHECK(tk.size(0) == num_tokens && tk.size(1) == topk,
-                     "moe_sum: topk_ids must have shape [num_tokens, topk]");
++                "moe_sum: topk_ids must have shape [num_tokens, topk]");
      const int64_t stride_tk_token = tk.stride(0);
      const int64_t stride_tk_k = tk.stride(1);
  
@@ -2712,12 +2133,16 @@ index d66b78f..f665bd7 100644
      if (expert_map.has_value()) {
 -      STD_TORCH_CHECK(
 -          expert_map->scalar_type() == torch::headeronly::ScalarType::Int,
-+      TORCH_CHECK(
-+          expert_map->scalar_type() == at::ScalarType::Int,
-           "moe_sum: expert_map must be int32");
-       expert_map_ptr =
-           reinterpret_cast<const int32_t*>(expert_map->const_data_ptr());
-@@ -843,7 +838,7 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
+-          "moe_sum: expert_map must be int32");
+-      expert_map_ptr =
+-          reinterpret_cast<const int32_t*>(expert_map->const_data_ptr());
++      TORCH_CHECK(expert_map->scalar_type() == torch::kInt,
++                  "moe_sum: expert_map must be int32");
++      expert_map_ptr = expert_map->data_ptr<int32_t>();
+     }
+ 
+ #define LAUNCH_MOE_SUM_PAD_AWARE_VEC(TOPK)                                     \
+@@ -843,14 +851,12 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
            out_ptr, in_ptr, num_tokens, hidden_size, stride_token, stride_topk, \
            topk_ids_ptr, expert_map_ptr, stride_tk_token, stride_tk_k)
  
@@ -2726,16 +2151,29 @@ index d66b78f..f665bd7 100644
          input.scalar_type(), "moe_sum_pad_aware", [&] {
            constexpr int VEC = vllm::moe::MOE_SUM_VEC<scalar_t>;
            constexpr int WIDTH = VEC * sizeof(scalar_t);
-@@ -858,7 +853,7 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
+-          auto* out_ptr =
+-              reinterpret_cast<scalar_t*>(output.mutable_data_ptr());
+-          auto* in_ptr =
+-              reinterpret_cast<const scalar_t*>(input.const_data_ptr());
++          auto* out_ptr = output.data_ptr<scalar_t>();
++          auto* in_ptr = input.data_ptr<scalar_t>();
+ 
+           const bool can_vec =
+               (stride_hidden == 1) && (hidden_size % VEC == 0) &&
+@@ -858,10 +864,9 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
                (reinterpret_cast<uintptr_t>(in_ptr) % WIDTH == 0) &&
                (reinterpret_cast<uintptr_t>(out_ptr) % WIDTH == 0);
  
 -          VLLM_STABLE_DISPATCH_IDX_TYPES(
 +          VLLM_DISPATCH_IDX_TYPES(
                tk.scalar_type(), "moe_sum_pad_aware_idx", [&] {
-                 auto* topk_ids_ptr =
-                     reinterpret_cast<const idx_t*>(tk.const_data_ptr());
-@@ -917,7 +912,7 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
+-                auto* topk_ids_ptr =
+-                    reinterpret_cast<const idx_t*>(tk.const_data_ptr());
++                auto* topk_ids_ptr = tk.data_ptr<idx_t>();
+                 if (can_vec) {
+                   const int64_t n_vec = hidden_size / VEC;
+                   const int64_t total = num_tokens * n_vec;
+@@ -917,11 +922,11 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
                                           hidden_size, stride_token,   \
                                           stride_topk, nullptr, nullptr, 0, 0)
  
@@ -2743,8 +2181,14 @@ index d66b78f..f665bd7 100644
 +  VLLM_DISPATCH_FLOATING_TYPES(input.scalar_type(), "moe_sum", [&] {
      constexpr int VEC = vllm::moe::MOE_SUM_VEC<scalar_t>;
      constexpr int WIDTH = VEC * sizeof(scalar_t);  // 16 bytes
-     auto* out_ptr = reinterpret_cast<scalar_t*>(output.mutable_data_ptr());
-@@ -974,44 +969,43 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
+-    auto* out_ptr = reinterpret_cast<scalar_t*>(output.mutable_data_ptr());
+-    auto* in_ptr = reinterpret_cast<const scalar_t*>(input.const_data_ptr());
++    auto* out_ptr = output.data_ptr<scalar_t>();
++    auto* in_ptr = input.data_ptr<scalar_t>();
+ 
+     // Vectorize along hidden only when it is contiguous (innermost stride 1),
+     // a whole number of vectors, and every row offset stays 16B-aligned.
+@@ -974,44 +979,43 @@ void moe_sum(torch::stable::Tensor& input,   // [num_tokens, topk, hidden_size]
  }
  
  void moe_lora_align_block_size(
@@ -2757,9 +2201,8 @@ index d66b78f..f665bd7 100644
 -    torch::stable::Tensor adapter_enabled, torch::stable::Tensor lora_ids,
 -    std::optional<torch::stable::Tensor> maybe_expert_map) {
 +    torch::Tensor sorted_token_ids, torch::Tensor expert_ids,
-+    torch::Tensor num_tokens_post_pad,
-+    torch::Tensor adapter_enabled, torch::Tensor lora_ids,
-+    std::optional<torch::Tensor> maybe_expert_map) {
++    torch::Tensor num_tokens_post_pad, torch::Tensor adapter_enabled,
++    torch::Tensor lora_ids, std::optional<torch::Tensor> maybe_expert_map) {
    const int topk_num = topk_ids.size(1);
  
 -  STD_TORCH_CHECK(block_size > 0, "block_size should be greater than 0. ");
@@ -2780,15 +2223,17 @@ index d66b78f..f665bd7 100644
  
    // BlockScan uses 1024 threads and assigns one thread per expert.
 -  STD_TORCH_CHECK(padded_num_experts < 1024,
+-                  "padded_num_experts must be less than 1024");
 +  TORCH_CHECK(padded_num_experts < 1024,
-                   "padded_num_experts must be less than 1024");
++              "padded_num_experts must be less than 1024");
  
 -  torch::stable::Tensor token_mask =
 -      torch::stable::new_empty(topk_ids, {max_loras * topk_ids.size(0)},
 -                               torch::headeronly::ScalarType::Int);
++  auto options_int =
++      torch::TensorOptions().dtype(torch::kInt).device(topk_ids.device());
 +  torch::Tensor token_mask =
-+      torch::empty({max_loras * topk_ids.size(0)},
-+                    topk_ids.options().dtype(torch::kInt));
++      torch::empty({max_loras * topk_ids.size(0)}, options_int);
    bool has_expert_map = maybe_expert_map.has_value();
 -  torch::stable::Tensor expert_map;
 +  torch::Tensor expert_map;
@@ -2797,7 +2242,7 @@ index d66b78f..f665bd7 100644
    } else {
 -    expert_map = torch::stable::new_empty(topk_ids, {0},
 -                                          torch::headeronly::ScalarType::Int);
-+    expert_map = torch::empty({0}, topk_ids.options().dtype(torch::kInt));
++    expert_map = torch::empty({0}, options_int);
    }
  
 -  VLLM_STABLE_DISPATCH_INTEGRAL_TYPES(
@@ -2805,7 +2250,7 @@ index d66b78f..f665bd7 100644
        topk_ids.scalar_type(), "moe_lora_align_sum_kernel", [&] {
          bool small_batch_expert_mode =
              (topk_ids.numel() < 1024) && (num_experts <= 64);
-@@ -1022,7 +1016,7 @@ void moe_lora_align_block_size(
+@@ -1022,7 +1026,7 @@ void moe_lora_align_block_size(
                (num_thread + 1) * num_experts * sizeof(int32_t) +
                (num_experts + 1) * sizeof(int32_t);
            if (shared_mem > device_max_shared_mem) {
@@ -2814,7 +2259,7 @@ index d66b78f..f665bd7 100644
            }
  
            // threadIdx.x >= fill_threads: counting experts and aligning
-@@ -1033,7 +1027,7 @@ void moe_lora_align_block_size(
+@@ -1033,7 +1037,7 @@ void moe_lora_align_block_size(
            auto kernel =
                vllm::moe::moe_lora_align_block_size_small_batch_expert_kernel<
                    scalar_t, fill_threads>;
@@ -2823,23 +2268,111 @@ index d66b78f..f665bd7 100644
                (void*)kernel, shared_mem));
            // Grid size is (max_loras + 1) because active_lora_ids has length
            // max_loras + 1: sorted-unique values of token_lora_mapping, which
-@@ -1067,9 +1061,8 @@ void moe_lora_align_block_size(
+@@ -1044,21 +1048,15 @@ void moe_lora_align_block_size(
+           // MoE-LoRA kernels. This mirrors the fix made for the Triton
+           // _fused_moe_lora_kernel grid in vllm-project/vllm#32277.
+           kernel<<<max_loras + 1, blockDim, shared_mem, stream>>>(
+-              reinterpret_cast<scalar_t*>(topk_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(token_lora_mapping.mutable_data_ptr()),
+-              block_size,
+-              reinterpret_cast<int32_t*>(expert_map.mutable_data_ptr()),
+-              num_experts, max_loras, topk_ids.numel(), max_num_tokens_padded,
+-              max_num_m_blocks,
+-              reinterpret_cast<int32_t*>(sorted_token_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(expert_ids.mutable_data_ptr()),
+-              topk_num,
+-              reinterpret_cast<int32_t*>(
+-                  num_tokens_post_pad.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(adapter_enabled.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(lora_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(token_mask.mutable_data_ptr()),
+-              has_expert_map);
++              topk_ids.data_ptr<scalar_t>(),
++              token_lora_mapping.data_ptr<int32_t>(), block_size,
++              expert_map.data_ptr<int32_t>(), num_experts, max_loras,
++              topk_ids.numel(), max_num_tokens_padded, max_num_m_blocks,
++              sorted_token_ids.data_ptr<int32_t>(),
++              expert_ids.data_ptr<int32_t>(), topk_num,
++              num_tokens_post_pad.data_ptr<int32_t>(),
++              adapter_enabled.data_ptr<int32_t>(), lora_ids.data_ptr<int32_t>(),
++              token_mask.data_ptr<int32_t>(), has_expert_map);
+         } else {
+           int num_thread = 1024;
+           dim3 blockDim(num_thread);
+@@ -1067,9 +1065,8 @@ void moe_lora_align_block_size(
            size_t shared_mem_size = num_warps * WARP_SIZE * sizeof(int32_t);
  
            // cumsum buffer
 -          torch::stable::Tensor cumsum = torch::stable::new_zeros(
 -              topk_ids, {max_loras * (num_experts + 1)},
 -              torch::headeronly::ScalarType::Int);
-+          torch::Tensor cumsum = torch::zeros({max_loras * (num_experts + 1)},
-+                    topk_ids.options().dtype(torch::kInt));
++          torch::Tensor cumsum =
++              torch::zeros({max_loras * (num_experts + 1)}, options_int);
  
            auto align_kernel =
                vllm::moe::moe_lora_align_block_size_kernel<scalar_t>;
+@@ -1085,23 +1082,16 @@ void moe_lora_align_block_size(
+           // blockIdx.x % 2 == 1: filling sorted_token_ids
+           align_kernel<<<(max_loras + 1) * 2, blockDim, shared_mem_size,
+                          stream>>>(
+-              reinterpret_cast<scalar_t*>(topk_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(token_lora_mapping.mutable_data_ptr()),
+-              block_size,
+-              reinterpret_cast<int32_t*>(expert_map.mutable_data_ptr()),
+-              num_experts, max_loras, topk_ids.numel(), max_num_tokens_padded,
+-              max_num_m_blocks,
+-              reinterpret_cast<int32_t*>(sorted_token_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(expert_ids.mutable_data_ptr()),
+-              topk_num,
+-              reinterpret_cast<int32_t*>(
+-                  num_tokens_post_pad.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(adapter_enabled.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(cumsum.mutable_data_ptr()), WARP_SIZE,
+-              padded_num_experts,
+-              reinterpret_cast<int32_t*>(lora_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(token_mask.mutable_data_ptr()),
+-              has_expert_map);
++              topk_ids.data_ptr<scalar_t>(),
++              token_lora_mapping.data_ptr<int32_t>(), block_size,
++              expert_map.data_ptr<int32_t>(), num_experts, max_loras,
++              topk_ids.numel(), max_num_tokens_padded, max_num_m_blocks,
++              sorted_token_ids.data_ptr<int32_t>(),
++              expert_ids.data_ptr<int32_t>(), topk_num,
++              num_tokens_post_pad.data_ptr<int32_t>(),
++              adapter_enabled.data_ptr<int32_t>(), cumsum.data_ptr<int32_t>(),
++              WARP_SIZE, padded_num_experts, lora_ids.data_ptr<int32_t>(),
++              token_mask.data_ptr<int32_t>(), has_expert_map);
+ 
+           const int block_threads = std::min(256, (int)num_thread);
+           const int num_blocks =
+@@ -1118,16 +1108,12 @@ void moe_lora_align_block_size(
+               vllm::moe::lora_count_and_sort_expert_tokens_kernel<scalar_t>;
+ 
+           sort_kernel<<<gridDims, block_threads, 0, stream>>>(
+-              reinterpret_cast<const scalar_t*>(topk_ids.const_data_ptr()),
+-              reinterpret_cast<int32_t*>(sorted_token_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(cumsum.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(expert_map.mutable_data_ptr()),
+-              topk_ids.numel(), num_experts, max_num_tokens_padded, topk_num,
+-              reinterpret_cast<int32_t*>(token_mask.mutable_data_ptr()),
+-              max_loras,
+-              reinterpret_cast<int32_t*>(lora_ids.mutable_data_ptr()),
+-              reinterpret_cast<int32_t*>(adapter_enabled.mutable_data_ptr()),
+-              has_expert_map);
++              topk_ids.data_ptr<scalar_t>(),
++              sorted_token_ids.data_ptr<int32_t>(), cumsum.data_ptr<int32_t>(),
++              expert_map.data_ptr<int32_t>(), topk_ids.numel(), num_experts,
++              max_num_tokens_padded, topk_num, token_mask.data_ptr<int32_t>(),
++              max_loras, lora_ids.data_ptr<int32_t>(),
++              adapter_enabled.data_ptr<int32_t>(), has_expert_map);
+         }
+       });
+ }
 diff --git a/csrc/libtorch_stable/moe/moe_ops.h b/csrc/libtorch_stable/moe/moe_ops.h
-index 03057c3..5df4432 100644
+index 03057c3..8986d5d 100644
 --- a/csrc/libtorch_stable/moe/moe_ops.h
 +++ b/csrc/libtorch_stable/moe/moe_ops.h
-@@ -1,76 +1,76 @@
+@@ -1,76 +1,74 @@
  #pragma once
  
 -#include <torch/csrc/stable/tensor.h>
@@ -2888,12 +2421,11 @@ index 03057c3..5df4432 100644
 -    const std::optional<torch::stable::Tensor>& tid2eid,
 -    const std::optional<torch::stable::Tensor>& is_padding,
 -    const std::optional<torch::stable::Tensor>& bias_vl,
+-    int64_t image_sentinel_lo);
 +    const std::optional<torch::Tensor>& correction_bias,
 +    const std::optional<torch::Tensor>& input_ids,
 +    const std::optional<torch::Tensor>& tid2eid,
-+    const std::optional<torch::Tensor>& is_padding,
-+    const std::optional<torch::Tensor>& bias_vl,
-     int64_t image_sentinel_lo);
++    const std::optional<torch::Tensor>& is_padding);
  
 -void moe_sum(torch::stable::Tensor& input, torch::stable::Tensor& output,
 -             std::optional<torch::stable::Tensor> topk_ids,
@@ -2962,7 +2494,7 @@ index 03057c3..5df4432 100644
  #endif
  
  bool moe_permute_unpermute_supported();
-@@ -78,6 +78,6 @@ bool moe_permute_unpermute_supported();
+@@ -78,6 +76,18 @@ bool moe_permute_unpermute_supported();
  int64_t moe_permute_sort_workspace_size(int64_t num_expanded_rows,
                                          int64_t num_expert);
  
@@ -2972,6 +2504,18 @@ index 03057c3..5df4432 100644
 +void shuffle_rows(const torch::Tensor& input_tensor,
 +                  const torch::Tensor& dst2src_map,
 +                  torch::Tensor& output_tensor);
++
++#ifndef USE_ROCM
++// DeepSeek V3 optimized router GEMM kernel for SM90+
++// Computes output = mat_a @ mat_b.T where:
++//   mat_a: [num_tokens, hidden_dim] in bf16
++//   mat_b: [num_experts, hidden_dim] in bf16
++//   output: [num_tokens, num_experts] in bf16 or fp32
++// Supports num_tokens in [1, 16], num_experts in {256, 384}, hidden_dim = 7168
++void dsv3_router_gemm(torch::Tensor& output,
++                      const torch::Tensor& mat_a,
++                      const torch::Tensor& mat_b);
++#endif
 diff --git a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
 index 098644a..7bae15b 100644
 --- a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
@@ -3203,7 +2747,7 @@ index 098644a..7bae15b 100644
      }
  }
 diff --git a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
-index fbb0721..bf78b9c 100644
+index fbb0721..0f81332 100644
 --- a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 +++ b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
 @@ -20,14 +20,13 @@
@@ -3235,7 +2779,7 @@ index fbb0721..bf78b9c 100644
      }
    }
  }
-@@ -848,15 +847,15 @@ void topkGatingSoftplusSqrtKernelLauncher(
+@@ -848,75 +847,50 @@ void topkGatingSoftplusSqrtKernelLauncher(
  
  template <typename ComputeType>
  void dispatch_topk_softplus_sqrt_launch(
@@ -3251,107 +2795,88 @@ index fbb0721..bf78b9c 100644
 -    const std::optional<torch::stable::Tensor>& tid2eid, cudaStream_t stream,
 -    const std::optional<torch::stable::Tensor>& is_padding,
 -    const std::optional<torch::stable::Tensor>& bias_vl,
+-    int64_t image_sentinel_lo) {
 +    const std::optional<torch::Tensor>& correction_bias,
 +    const std::optional<torch::Tensor>& input_ids,
 +    const std::optional<torch::Tensor>& tid2eid, cudaStream_t stream,
-+    const std::optional<torch::Tensor>& is_padding,
-+    const std::optional<torch::Tensor>& bias_vl,
-     int64_t image_sentinel_lo) {
++    const std::optional<torch::Tensor>& is_padding) {
    const float* bias_ptr = nullptr;
    if (correction_bias.has_value()) {
-@@ -865,16 +864,16 @@ void dispatch_topk_softplus_sqrt_launch(
- 
-   const float* bias_vl_ptr = nullptr;
-   if (bias_vl.has_value()) {
+     bias_ptr = correction_bias.value().const_data_ptr<float>();
+   }
+-
+-  const float* bias_vl_ptr = nullptr;
+-  if (bias_vl.has_value()) {
 -    const torch::stable::Tensor& bias_vl_tensor = bias_vl.value();
 -    STD_TORCH_CHECK(input_ids.has_value(),
-+    const torch::Tensor& bias_vl_tensor = bias_vl.value();
-+    TORCH_CHECK(input_ids.has_value(),
-                     "input_ids is required when bias_vl is set");
+-                    "input_ids is required when bias_vl is set");
 -    STD_TORCH_CHECK(
 -        bias_vl_tensor.scalar_type() == torch::headeronly::ScalarType::Float,
-+    TORCH_CHECK(
-+        bias_vl_tensor.scalar_type() == at::ScalarType::Float,
-         "bias_vl tensor must be float32");
+-        "bias_vl tensor must be float32");
 -    STD_TORCH_CHECK(bias_vl_tensor.dim() == 1, "bias_vl tensor must be 1D");
 -    STD_TORCH_CHECK(bias_vl_tensor.size(0) == num_experts,
-+    TORCH_CHECK(bias_vl_tensor.dim() == 1, "bias_vl tensor must be 1D");
-+    TORCH_CHECK(bias_vl_tensor.size(0) == num_experts,
-                     "bias_vl size mismatch, expected: ", num_experts);
+-                    "bias_vl size mismatch, expected: ", num_experts);
 -    STD_TORCH_CHECK(bias_vl_tensor.is_contiguous(),
-+    TORCH_CHECK(bias_vl_tensor.is_contiguous(),
-                     "bias_vl tensor must be contiguous");
-     bias_vl_ptr = bias_vl_tensor.const_data_ptr<float>();
-   }
-@@ -885,27 +884,27 @@ void dispatch_topk_softplus_sqrt_launch(
+-                    "bias_vl tensor must be contiguous");
+-    bias_vl_ptr = bias_vl_tensor.const_data_ptr<float>();
+-  }
+-
+   auto launch = [&](auto* topk_indices_ptr) {
+     using OutIndType =
+         typename std::remove_pointer<decltype(topk_indices_ptr)>::type;
  
      const bool* is_padding_ptr = nullptr;
      if (is_padding.has_value()) {
 -      const torch::stable::Tensor& is_padding_tensor = is_padding.value();
 -      STD_TORCH_CHECK(is_padding_tensor.scalar_type() ==
 -                          torch::headeronly::ScalarType::Bool,
-+      const torch::Tensor& is_padding_tensor = is_padding.value();
-+      TORCH_CHECK(is_padding_tensor.scalar_type() ==
-+                          at::ScalarType::Bool,
-                       "is_padding tensor must be bool");
+-                      "is_padding tensor must be bool");
 -      STD_TORCH_CHECK(is_padding_tensor.dim() == 1,
-+      TORCH_CHECK(is_padding_tensor.dim() == 1,
-                       "is_padding tensor must be 1D");
+-                      "is_padding tensor must be 1D");
 -      STD_TORCH_CHECK(is_padding_tensor.size(0) == num_tokens,
-+      TORCH_CHECK(is_padding_tensor.size(0) == num_tokens,
-                       "is_padding size mismatch, expected: ", num_tokens);
+-                      "is_padding size mismatch, expected: ", num_tokens);
 -      STD_TORCH_CHECK(is_padding_tensor.is_contiguous(),
+-                      "is_padding tensor must be contiguous");
++      const torch::Tensor& is_padding_tensor = is_padding.value();
++      TORCH_CHECK(is_padding_tensor.scalar_type() == at::ScalarType::Bool,
++                  "is_padding tensor must be bool");
++      TORCH_CHECK(is_padding_tensor.dim() == 1,
++                  "is_padding tensor must be 1D");
++      TORCH_CHECK(is_padding_tensor.size(0) == num_tokens,
++                  "is_padding size mismatch, expected: ", num_tokens);
 +      TORCH_CHECK(is_padding_tensor.is_contiguous(),
-                       "is_padding tensor must be contiguous");
++                  "is_padding tensor must be contiguous");
        is_padding_ptr = is_padding_tensor.const_data_ptr<bool>();
      }
- 
+-
      if (tid2eid.has_value()) {
 -      STD_TORCH_CHECK(input_ids.has_value(),
-+      TORCH_CHECK(input_ids.has_value(),
-                       "input_ids is required for hash MoE");
+-                      "input_ids is required for hash MoE");
 -      STD_TORCH_CHECK(
++      TORCH_CHECK(input_ids.has_value(), "input_ids is required for hash MoE");
 +      TORCH_CHECK(
            input_ids.value().scalar_type() == tid2eid.value().scalar_type(),
            "input_ids and tid2eid must have the same dtype");
-       if (tid2eid.value().scalar_type() ==
+-      if (tid2eid.value().scalar_type() ==
 -          torch::headeronly::ScalarType::Long) {
-+          at::ScalarType::Long) {
++      if (tid2eid.value().scalar_type() == at::ScalarType::Long) {
          vllm::moe::topkGatingSoftplusSqrtKernelLauncher<OutIndType, ComputeType,
                                                          int64_t>(
              gating_output, topk_weights.mutable_data_ptr<float>(),
-@@ -915,8 +914,8 @@ void dispatch_topk_softplus_sqrt_launch(
-             tid2eid.value().const_data_ptr<int64_t>(), stream, is_padding_ptr,
-             bias_vl_ptr, image_sentinel_lo);
+             topk_indices_ptr, token_expert_indices.mutable_data_ptr<int>(),
+             num_tokens, num_experts, topk, renormalize, routed_scaling_factor,
+             bias_ptr, true, input_ids.value().const_data_ptr<int64_t>(),
+-            tid2eid.value().const_data_ptr<int64_t>(), stream, is_padding_ptr,
+-            bias_vl_ptr, image_sentinel_lo);
++            tid2eid.value().const_data_ptr<int64_t>(), stream, is_padding_ptr);
        } else {
 -        STD_TORCH_CHECK(tid2eid.value().scalar_type() ==
 -                        torch::headeronly::ScalarType::Int);
-+        TORCH_CHECK(tid2eid.value().scalar_type() ==
-+                        at::ScalarType::Int);
++        TORCH_CHECK(tid2eid.value().scalar_type() == at::ScalarType::Int);
          vllm::moe::topkGatingSoftplusSqrtKernelLauncher<OutIndType, ComputeType,
                                                          int>(
              gating_output, topk_weights.mutable_data_ptr<float>(),
-@@ -932,7 +931,7 @@ void dispatch_topk_softplus_sqrt_launch(
-       // drives the per-row branch, so
-       // dispatch the hash-index type on its dtype.
-       if (input_ids.value().scalar_type() ==
--          torch::headeronly::ScalarType::Long) {
-+          at::ScalarType::Long) {
-         vllm::moe::topkGatingSoftplusSqrtKernelLauncher<OutIndType, ComputeType,
-                                                         int64_t>(
-             gating_output, topk_weights.mutable_data_ptr<float>(),
-@@ -942,8 +941,8 @@ void dispatch_topk_softplus_sqrt_launch(
-             static_cast<const int64_t*>(nullptr), stream, is_padding_ptr,
-             bias_vl_ptr, image_sentinel_lo);
-       } else {
--        STD_TORCH_CHECK(input_ids.value().scalar_type() ==
--                        torch::headeronly::ScalarType::Int);
-+        TORCH_CHECK(input_ids.value().scalar_type() ==
-+                        at::ScalarType::Int);
-         vllm::moe::topkGatingSoftplusSqrtKernelLauncher<OutIndType, ComputeType,
-                                                         int>(
-             gating_output, topk_weights.mutable_data_ptr<float>(),
-@@ -964,60 +963,59 @@ void dispatch_topk_softplus_sqrt_launch(
+@@ -964,60 +938,56 @@ void dispatch_topk_softplus_sqrt_launch(
      }
    };
  
@@ -3365,8 +2890,7 @@ index fbb0721..bf78b9c 100644
    } else {
 -    STD_TORCH_CHECK(topk_indices.scalar_type() ==
 -                    torch::headeronly::ScalarType::Long);
-+    TORCH_CHECK(topk_indices.scalar_type() ==
-+                    at::ScalarType::Long);
++    TORCH_CHECK(topk_indices.scalar_type() == at::ScalarType::Long);
      launch(topk_indices.mutable_data_ptr<int64_t>());
    }
  }
@@ -3386,12 +2910,11 @@ index fbb0721..bf78b9c 100644
 -    const std::optional<torch::stable::Tensor>& tid2eid,
 -    const std::optional<torch::stable::Tensor>& is_padding,
 -    const std::optional<torch::stable::Tensor>& bias_vl,
+-    int64_t image_sentinel_lo) {
 +    const std::optional<torch::Tensor>& correction_bias,
 +    const std::optional<torch::Tensor>& input_ids,
 +    const std::optional<torch::Tensor>& tid2eid,
-+    const std::optional<torch::Tensor>& is_padding,
-+    const std::optional<torch::Tensor>& bias_vl,
-     int64_t image_sentinel_lo) {
++    const std::optional<torch::Tensor>& is_padding) {
    const int num_experts = gating_output.size(-1);
    const auto num_tokens = gating_output.numel() / num_experts;
    const int topk = topk_weights.size(-1);
@@ -3408,7 +2931,8 @@ index fbb0721..bf78b9c 100644
          gating_output.const_data_ptr<float>(), topk_weights, topk_indices,
          token_expert_indices, num_tokens, num_experts, topk, renormalize,
          routed_scaling_factor, correction_bias, input_ids, tid2eid, stream,
-         is_padding, bias_vl, image_sentinel_lo);
+-        is_padding, bias_vl, image_sentinel_lo);
++        is_padding);
    } else if (gating_output.scalar_type() ==
 -             torch::headeronly::ScalarType::Half) {
 +             at::ScalarType::Half) {
@@ -3416,7 +2940,8 @@ index fbb0721..bf78b9c 100644
          reinterpret_cast<const __half*>(gating_output.const_data_ptr()),
          topk_weights, topk_indices, token_expert_indices, num_tokens,
          num_experts, topk, renormalize, routed_scaling_factor, correction_bias,
-         input_ids, tid2eid, stream, is_padding, bias_vl, image_sentinel_lo);
+-        input_ids, tid2eid, stream, is_padding, bias_vl, image_sentinel_lo);
++        input_ids, tid2eid, stream, is_padding);
    } else if (gating_output.scalar_type() ==
 -             torch::headeronly::ScalarType::BFloat16) {
 +             at::ScalarType::BFloat16) {
@@ -3424,7 +2949,8 @@ index fbb0721..bf78b9c 100644
          reinterpret_cast<const __nv_bfloat16*>(gating_output.const_data_ptr()),
          topk_weights, topk_indices, token_expert_indices, num_tokens,
          num_experts, topk, renormalize, routed_scaling_factor, correction_bias,
-         input_ids, tid2eid, stream, is_padding, bias_vl, image_sentinel_lo);
+-        input_ids, tid2eid, stream, is_padding, bias_vl, image_sentinel_lo);
++        input_ids, tid2eid, stream, is_padding);
    } else {
 -    STD_TORCH_CHECK(false, "Unsupported gating_output data type: ",
 +    TORCH_CHECK(false, "Unsupported gating_output data type: ",
@@ -3432,7 +2958,7 @@ index fbb0721..bf78b9c 100644
    }
  }
 diff --git a/csrc/libtorch_stable/moe/torch_bindings.cpp b/csrc/libtorch_stable/moe/torch_bindings.cpp
-index c0e966b..68ddf72 100644
+index c0e966b..187f841 100644
 --- a/csrc/libtorch_stable/moe/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/moe/torch_bindings.cpp
 @@ -1,20 +1,20 @@
@@ -3503,7 +3029,7 @@ index c0e966b..68ddf72 100644
    m.def(
        "moe_wna16_gemm(Tensor input, Tensor! output, Tensor b_qweight, "
        "Tensor b_scales, Tensor? b_qzeros, "
-@@ -74,17 +81,20 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -74,6 +81,8 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "int top_k, int BLOCK_SIZE_M, int BLOCK_SIZE_N, int BLOCK_SIZE_K, "
        "int bit) -> Tensor");
  
@@ -3512,21 +3038,7 @@ index c0e966b..68ddf72 100644
    m.def(
        "moe_wna16_marlin_gemm(Tensor! a, Tensor? c_or_none,"
        "Tensor! b_q_weight, Tensor? b_bias_or_none,"
-       "Tensor! b_scales, Tensor? a_scales, Tensor? global_scale, Tensor? "
-       "b_zeros_or_none,"
--      "Tensor! workspace,"
-+      "Tensor? g_idx_or_none, Tensor? perm_or_none, Tensor! workspace,"
-       "Tensor sorted_token_ids,"
-       "Tensor! expert_ids, Tensor! num_tokens_past_padded,"
-       "Tensor! topk_weights, int moe_block_size, int top_k, "
-       "bool mul_topk_weights, int b_type_id,"
--      "int size_m, int size_n, int size_k, bool use_atomic_add,"
-+      "int size_m, int size_n, int size_k,"
-+      "bool is_full_k, bool use_atomic_add,"
-       "bool use_fp32_reduce, bool is_zp_float,"
-       "int thread_k, int thread_n, int blocks_per_sm) -> Tensor");
- 
-@@ -96,29 +106,19 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -96,29 +105,19 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "expert_first_token_offset, Tensor! inv_permuted_idx, Tensor! "
        "permuted_idx)->()");
  
@@ -3558,7 +3070,7 @@ index c0e966b..68ddf72 100644
  
    // Apply grouped topk routing to select experts.
    m.def(
-@@ -126,33 +126,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
+@@ -126,33 +125,9 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_moe_C, m) {
        "topk_group, int topk, bool renormalize, float "
        "routed_scaling_factor, Tensor bias, int scoring_func) -> (Tensor, "
        "Tensor)");
@@ -3579,9 +3091,6 @@ index c0e966b..68ddf72 100644
 -  m.impl("moe_wna16_gemm", TORCH_BOX(&moe_wna16_gemm));
 -  m.impl("shuffle_rows", TORCH_BOX(&shuffle_rows));
 -  m.impl("grouped_topk", TORCH_BOX(&grouped_topk));
-+  // DeepSeek V3 optimized router GEMM for SM90+
-+  m.def("dsv3_router_gemm(Tensor! output, Tensor mat_a, Tensor mat_b) -> ()");
-+  // conditionally compiled so impl registration is in source file
  #endif
  }
  
@@ -3599,10 +3108,10 @@ index c0e966b..68ddf72 100644
 +REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
-index 0000000..76a18de
+index 0000000..fcd5c5d
 --- /dev/null
 +++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,317 @@
 +// MUSA: regular-ABI registration of the _C_cache_ops library.
 +//
 +// The cache/MLA kernels in libtorch_stable/cache_kernels{,_fused}.cu take
@@ -3663,9 +3172,7 @@ index 0000000..76a18de
 +                                  stable::Tensor& kv_cache_ptrs,
 +                                  stable::Tensor& slot_mapping,
 +                                  int64_t block_size, int64_t block_stride,
-+                                  int64_t entry_stride,
-+                                  std::optional<stable::Tensor> kv_scales,
-+                                  const std::string& kv_cache_dtype);
++                                  int64_t entry_stride);
 +void concat_and_cache_mla_rope_fused(
 +    stable::Tensor& positions, stable::Tensor& q_pe, stable::Tensor& k_pe,
 +    stable::Tensor& kv_c, stable::Tensor& rope_cos_sin_cache, bool rope_is_neox,
@@ -3686,10 +3193,7 @@ index 0000000..76a18de
 +void cp_gather_and_upconvert_fp8_kv_cache(
 +    stable::Tensor const& src_cache, stable::Tensor const& dst,
 +    stable::Tensor const& block_table, stable::Tensor const& workspace_starts,
-+    int64_t batch_size, std::optional<stable::Tensor> seq_starts,
-+    std::optional<stable::Tensor> host_cache,
-+    std::optional<stable::Tensor> host_row_ids,
-+    std::optional<stable::Tensor> device_row_ids);
++    int64_t batch_size, std::optional<stable::Tensor> seq_starts);
 +void indexer_k_quant_and_cache(stable::Tensor& k, stable::Tensor& kv_cache,
 +                               stable::Tensor& slot_mapping,
 +                               int64_t quant_block_size,
@@ -3740,12 +3244,10 @@ index 0000000..76a18de
 +void concat_and_cache_mla_grouped(at::Tensor& kv_c, at::Tensor& k_pe,
 +                                  at::Tensor& cache_ptrs, at::Tensor& slot,
 +                                  int64_t block_size, int64_t block_stride,
-+                                  int64_t entry_stride,
-+                                  const std::optional<at::Tensor>& kv_scales,
-+                                  const std::string& kv_cache_dtype) {
++                                  int64_t entry_stride) {
 +  auto a = S(kv_c), b = S(k_pe), c = S(cache_ptrs), d = S(slot);
 +  ::concat_and_cache_mla_grouped(a, b, c, d, block_size, block_stride,
-+                                 entry_stride, S(kv_scales), kv_cache_dtype);
++                                 entry_stride);
 +}
 +void concat_and_cache_mla_rope_fused(at::Tensor& positions, at::Tensor& q_pe,
 +                                     at::Tensor& k_pe, at::Tensor& kv_c,
@@ -3778,13 +3280,9 @@ index 0000000..76a18de
 +void cp_gather_and_upconvert_fp8_kv_cache(at::Tensor& src, at::Tensor& dst,
 +                                          at::Tensor& bt, at::Tensor& ws,
 +                                          int64_t bs,
-+                                          std::optional<at::Tensor> seq_starts,
-+                                          std::optional<at::Tensor> host_cache,
-+                                          std::optional<at::Tensor> host_row_ids,
-+                                          std::optional<at::Tensor> device_row_ids) {
-+  ::cp_gather_and_upconvert_fp8_kv_cache(
-+      S(src), S(dst), S(bt), S(ws), bs, S(seq_starts), S(host_cache),
-+      S(host_row_ids), S(device_row_ids));
++                                          std::optional<at::Tensor> seq_starts) {
++  ::cp_gather_and_upconvert_fp8_kv_cache(S(src), S(dst), S(bt), S(ws), bs,
++                                         S(seq_starts));
 +}
 +void indexer_k_quant_and_cache(at::Tensor& k, at::Tensor& cache,
 +                               at::Tensor& slot, int64_t qbs,
@@ -3855,8 +3353,7 @@ index 0000000..76a18de
 +      "                             Tensor kv_cache_ptrs,"
 +      "                             Tensor slot_mapping,"
 +      "                             int block_size, int block_stride,"
-+      "                             int entry_stride, Tensor? kv_scales=None,"
-+      "                             str kv_cache_dtype=\"auto\") -> ()");
++      "                             int entry_stride) -> ()");
 +  m.impl("concat_and_cache_mla_grouped", torch::kPrivateUse1,
 +         &mcb::concat_and_cache_mla_grouped);
 +
@@ -3898,8 +3395,7 @@ index 0000000..76a18de
 +  m.def(
 +      "cp_gather_and_upconvert_fp8_kv_cache(Tensor src_cache, Tensor! dst, "
 +      "Tensor block_table, Tensor workspace_starts, int batch_size, Tensor? "
-+      "seq_starts, Tensor? host_cache=None, Tensor? host_row_ids=None, "
-+      "Tensor? device_row_ids=None) -> ()");
++      "seq_starts) -> ()");
 +  m.impl("cp_gather_and_upconvert_fp8_kv_cache", torch::kPrivateUse1,
 +         &mcb::cp_gather_and_upconvert_fp8_kv_cache);
 +
@@ -4361,7 +3857,7 @@ index b3e1a86..e774969 100644
  #endif
  }
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
-index 54548df..db7d3e6 100644
+index 54548df..7ac6fe1 100644
 --- a/csrc/libtorch_stable/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
 @@ -181,10 +181,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
@@ -4472,18 +3968,7 @@ index 54548df..db7d3e6 100644
  STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
    // LongCat n-gram embedding index kernel.
    ops.impl("ngram_compute_n_gram_ids", TORCH_BOX(&ngram_compute_n_gram_ids));
-@@ -877,8 +894,10 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
-   ops.impl("swigluoai_and_mul", TORCH_BOX(&swigluoai_and_mul));
-   ops.impl("situ_and_mul", TORCH_BOX(&situ_and_mul));
-   ops.impl("situ_and_mul_quant", TORCH_BOX(&situ_and_mul_quant));
-+#ifndef USE_MUSA
-   ops.impl("masked_situ_and_mul", TORCH_BOX(&masked_situ_and_mul));
-   ops.impl("masked_moe_activation", TORCH_BOX(&masked_moe_activation));
-+#endif
-   ops.impl("gelu_new", TORCH_BOX(&gelu_new));
-   ops.impl("gelu_fast", TORCH_BOX(&gelu_fast));
-   ops.impl("gelu_quick", TORCH_BOX(&gelu_quick));
-@@ -907,6 +926,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CPU, ops) {
+@@ -907,6 +924,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CPU, ops) {
    ops.impl("get_cuda_view_from_cpu_tensor",
             TORCH_BOX(&get_cuda_view_from_cpu_tensor));
  }
@@ -4491,7 +3976,7 @@ index 54548df..db7d3e6 100644
  
  STABLE_TORCH_LIBRARY_FRAGMENT(_C_cuda_utils, cuda_utils) {
    cuda_utils.def("get_device_attribute(int attribute, int device_id) -> int");
-@@ -925,6 +945,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
+@@ -925,6 +943,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
  // there is no device to dispatch on. CompositeExplicitAutograd makes them
  // available for all backends. This is the stable ABI equivalent of calling
  // ops.impl("op_name", &func) without a dispatch key in the non-stable API.
@@ -4499,7 +3984,7 @@ index 54548df..db7d3e6 100644
  STABLE_TORCH_LIBRARY_IMPL(_C, CompositeExplicitAutograd, ops) {
  #ifndef USE_ROCM
    ops.impl("cutlass_scaled_mm_supports_fp8",
-@@ -1168,5 +1189,60 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
+@@ -1168,5 +1187,58 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
    ops.impl("cp_gather_indexer_k_quant_cache",
             TORCH_BOX(&cp_gather_indexer_k_quant_cache));
  }
@@ -4520,9 +4005,7 @@ index 54548df..db7d3e6 100644
 +  ops.impl("gelu_and_mul", TORCH_BOX(&gelu_and_mul));
 +  ops.impl("gelu_tanh_and_mul", TORCH_BOX(&gelu_tanh_and_mul));
 +  ops.impl("situ_and_mul", TORCH_BOX(&situ_and_mul));
-+#ifndef USE_MUSA
 +  ops.impl("masked_situ_and_mul", TORCH_BOX(&masked_situ_and_mul));
-+#endif
 +  ops.impl("gelu_new", TORCH_BOX(&gelu_new));
 +  ops.impl("gelu_fast", TORCH_BOX(&gelu_fast));
 +  ops.impl("gelu_quick", TORCH_BOX(&gelu_quick));
@@ -5361,26 +4844,6 @@ index 94456fc..e205f57 100644
  
      @classmethod
      def deserialize_graph_module(
-diff --git a/vllm/compilation/cuda_graph.py b/vllm/compilation/cuda_graph.py
-index 5577160..f8f97e7 100644
---- a/vllm/compilation/cuda_graph.py
-+++ b/vllm/compilation/cuda_graph.py
-@@ -315,7 +315,14 @@ class CUDAGraphWrapper:
-                 with torch.cuda.graph(
-                     cudagraph,
-                     pool=self.graph_pool,
--                    stream=current_stream(),
-+                    # torch_musa selects a dedicated non-default capture
-+                    # stream when stream is None. Capturing on the current
-+                    # default stream raises in MUSA graph capture.
-+                    stream=(
-+                        None
-+                        if current_platform.device_type == "musa"
-+                        else current_stream()
-+                    ),
-                 ):
-                     # `output` is managed by pytorch's cudagraph pool
-                     output = self.runnable(*args, **kwargs)
 diff --git a/vllm/compilation/passes/pass_manager.py b/vllm/compilation/passes/pass_manager.py
 index 4a65376..abeaaf4 100644
 --- a/vllm/compilation/passes/pass_manager.py
@@ -5960,25 +5423,6 @@ index d3c41f9..2825846 100644
  
      # Apply --linear-backend filtering when set.
      platform_kernels = _resolve_backend_kernels(
-diff --git a/vllm/model_executor/kernels/linear/scaled_mm/BlockScaledMMLinearKernel.py b/vllm/model_executor/kernels/linear/scaled_mm/BlockScaledMMLinearKernel.py
-index 3a05341..8b6557b 100644
---- a/vllm/model_executor/kernels/linear/scaled_mm/BlockScaledMMLinearKernel.py
-+++ b/vllm/model_executor/kernels/linear/scaled_mm/BlockScaledMMLinearKernel.py
-@@ -124,10 +124,10 @@ class Fp8BlockScaledMMLinearKernel(
-             q_input = input_2d
-             # Provide a concrete placeholder so apply_block_scaled_mm args are
-             # always Tensors. Subclasses with apply_input_quant=False must not
--            # use As in apply_block_scaled_mm.
--            input_scale = (
--                input_scale if input_scale is not None else input_2d.new_empty(1)
--            )
-+            # use As in apply_block_scaled_mm. Reuse an existing scale tensor
-+            # because MUSA cannot allocate a new placeholder during graph
-+            # capture.
-+            input_scale = input_scale if input_scale is not None else weight_scale
- 
-         output = self.apply_block_scaled_mm(
-             A=q_input,
 diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
 index cea186e..27336e5 100644
 --- a/vllm/model_executor/kernels/mhc/tilelang.py
@@ -7012,18 +6456,10 @@ index afae19c..37dd63e 100644
          assert comm_size > 0, "comm_size must be positive"
  
 diff --git a/vllm/model_executor/layers/quantization/fp8.py b/vllm/model_executor/layers/quantization/fp8.py
-index d8bef73..03d6456 100644
+index d8bef73..1ada5f0 100644
 --- a/vllm/model_executor/layers/quantization/fp8.py
 +++ b/vllm/model_executor/layers/quantization/fp8.py
-@@ -7,7 +7,6 @@ import torch
- 
- import vllm.envs as envs
- from vllm.config import get_current_vllm_config
--from vllm.distributed import get_tensor_model_parallel_world_size
- from vllm.logger import init_logger
- from vllm.model_executor.kernels.linear import (
-     init_fp8_linear_kernel,
-@@ -146,7 +145,7 @@ class Fp8Config(QuantizationConfig):
+@@ -146,7 +146,7 @@ class Fp8Config(QuantizationConfig):
  
      @classmethod
      def get_min_capability(cls) -> int:
@@ -7032,22 +6468,6 @@ index d8bef73..03d6456 100644
  
      @classmethod
      def get_config_filenames(cls) -> list[str]:
-@@ -588,11 +587,10 @@ class Fp8MoEMethod(FusedMoEMethodBase):
-             else:
-                 # Use the refined block grid for the scale parameters; the
-                 # loader upsamples the checkpoint scales accordingly.
--                tp_size = get_tensor_model_parallel_world_size()
--                if intermediate_size_per_partition % block_n != 0:
--                    block_n, block_k = moe_block_shape
--                if tp_size > 1 and intermediate_size_per_partition % block_k != 0:
--                    block_n, block_k = moe_block_shape
-+                # Both axes are refined by weight_loader. Keep the parameter
-+                # grid aligned with that full refinement even when only one
-+                # axis caused the TP-shard incompatibility.
-+                block_n, block_k = moe_block_shape
- 
-         # WEIGHTS
-         w13_weight = torch.nn.Parameter(
 diff --git a/vllm/model_executor/layers/quantization/modelopt.py b/vllm/model_executor/layers/quantization/modelopt.py
 index e3e8b37..6de64f4 100644
 --- a/vllm/model_executor/layers/quantization/modelopt.py
@@ -9258,17 +8678,19 @@ index 495650e..42503f2 100644
          return output
  
 diff --git a/vllm/model_executor/models/qwen3_vl.py b/vllm/model_executor/models/qwen3_vl.py
-index 644fd13..8f3f88a 100644
+index 644fd13..c6c3ebe 100644
 --- a/vllm/model_executor/models/qwen3_vl.py
 +++ b/vllm/model_executor/models/qwen3_vl.py
-@@ -24,6 +24,7 @@
+@@ -24,7 +24,8 @@
  # limitations under the License.
  """Inference-only Qwen3VL model compatible with HuggingFace weights."""
  
+-from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 +import os
- from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
++from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
  from functools import lru_cache, partial
  from itertools import islice
+ from typing import Any
 @@ -48,6 +49,7 @@ from transformers.models.qwen3_vl.video_processing_qwen3_vl import (
  )
  from transformers.video_utils import VideoMetadata
@@ -9544,18 +8966,10 @@ index 91ae7c4..46bb8f4 100644
      mixed_tokens = _clamp_warmup_tokens(_SPARSE_MLA_MIXED_WARMUP_TOKENS, max_tokens)
      if mixed_tokens <= 0:
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index bcb2dd7..04e1a88 100644
+index bcb2dd7..a510243 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
-@@ -6,6 +6,7 @@ This is useful specifically for JIT'ed kernels as we don't want JIT'ing to
- happen during model execution.
- """
- 
-+import os
- import sys
- import time
- from typing import TYPE_CHECKING
-@@ -99,118 +100,54 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
+@@ -99,118 +99,47 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
      )
  
  
@@ -9616,9 +9030,6 @@ index bcb2dd7..04e1a88 100644
 -
 -
  def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
-+    if os.environ.get("VLLM_SKIP_KERNEL_WARMUP") == "1":
-+        logger.info_once("Skipping kernel warmup by VLLM_SKIP_KERNEL_WARMUP=1")
-+        return
      from vllm.model_executor.warmup.minimax_m3_msa_warmup import (
          minimax_m3_msa_warmup,
      )
@@ -9660,37 +9071,33 @@ index bcb2dd7..04e1a88 100644
      compilation_config = worker.vllm_config.compilation_config
      cudagraph_capture_sizes = list(compilation_config.cudagraph_capture_sizes or [])
  
--    # Run next so input-prep kernels JIT against pristine runner state.
++    # DSv4 mHC TileLang kernels (hc_pre/hc_post/hc_head_op) run every decoder
++    # layer per token; warm them across token sizes first so the first real
++    # request doesn't pay JIT cost. No-op for non-DSv4 models (gated inside).
++    deepseek_v4_mhc_warmup(
++        worker.get_model(),
++        max_tokens=worker.scheduler_config.max_num_batched_tokens,
++        cudagraph_capture_sizes=cudagraph_capture_sizes,
++    )
++
+     # Run next so input-prep kernels JIT against pristine runner state.
 -    if enable_jit_warmup:
--        kimi_k3_triton_warmup(worker)
++    if worker.vllm_config.kernel_config.enable_jit_warmup:
+         kimi_k3_triton_warmup(worker)
 -        watermark_sample_warmup(worker)
 -        qwen4_exp_qsa_triton_warmup(worker)
 -
 -    if enable_jit_warmup and current_platform.is_device_capability_family(100):
 -        _warmup_bf16x3_router_gemm(
-+    # DSv4 mHC TileLang kernels (hc_pre/hc_post/hc_head_op) run every decoder
-+    # layer per token; warm them across token sizes first so the first real
-+    # request doesn't pay JIT cost. No-op for non-DSv4 models (gated inside).
-+    mhc_warmup = globals().get("deepseek_v4_mhc_warmup")
-+    if mhc_warmup is not None:
-+        mhc_warmup(
-             worker.get_model(),
+-            worker.get_model(),
 -            worker.scheduler_config.max_num_batched_tokens,
-+            max_tokens=worker.scheduler_config.max_num_batched_tokens,
-+            cudagraph_capture_sizes=cudagraph_capture_sizes,
-         )
- 
-+    # Run next so input-prep kernels JIT against pristine runner state.
-+    if worker.vllm_config.kernel_config.enable_jit_warmup:
-+        kimi_k3_triton_warmup(worker)
+-        )
 +        if not current_platform.is_musa():
 +            fa4_cutedsl_warmup(worker)
 +        else:
 +            logger.info_once("Skipping CUDA-only FA4 CuTeDSL warmup on MUSA.")
-+        sparse_mla_warmup = globals().get("sparse_mla_triton_warmup")
-+        if sparse_mla_warmup is not None:
-+            sparse_mla_warmup(worker)
-+
++        sparse_mla_triton_warmup(worker)
+ 
      if current_platform.has_device_capability(90):
          _warmup_ll_bf16_router_gemm(worker.get_model())
  
@@ -9699,23 +9106,6 @@ index bcb2dd7..04e1a88 100644
      if worker.vllm_config.kernel_config.enable_cutedsl_warmup:
          # TODO(roberto): Remove after registered CuTeDSL warmups are migrated
          # to the shared JIT warmup infrastructure.
-@@ -220,8 +157,14 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
-     if process_local_only:
-         return
- 
--    flashinfer_sparse_mla_decode_autotune_warmup(worker)
--    deepseek_v4_sparse_mla_attention_warmup(worker)
-+    flashinfer_mla_warmup = globals().get(
-+        "flashinfer_sparse_mla_decode_autotune_warmup"
-+    )
-+    if flashinfer_mla_warmup is not None:
-+        flashinfer_mla_warmup(worker)
-+    deepseek_mla_warmup = globals().get("deepseek_v4_sparse_mla_attention_warmup")
-+    if deepseek_mla_warmup is not None:
-+        deepseek_mla_warmup(worker)
- 
-     # Deep GEMM warmup
-     do_deep_gemm_warmup = (
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
 index 9c77980..f58154d 100644
 --- a/vllm/models/deepseek_v4/attention.py
@@ -10790,29 +10180,6 @@ index abe8a34..f4c49d3 100644
      "XPU": torch.profiler.ProfilerActivity.XPU,
  }
  
-diff --git a/vllm/third_party/flash_linear_attention/ops/layernorm_guard.py b/vllm/third_party/flash_linear_attention/ops/layernorm_guard.py
-index 79f5abf..2ada453 100644
---- a/vllm/third_party/flash_linear_attention/ops/layernorm_guard.py
-+++ b/vllm/third_party/flash_linear_attention/ops/layernorm_guard.py
-@@ -26,6 +26,7 @@ from vllm.model_executor.warmup.jit_warmup_triton_helper import (
-     TritonWarmupTensor,
-     triton_scalar_specialization_rep,
- )
-+from vllm.platforms import current_platform
- from vllm.triton_utils import tl, triton
- from vllm.utils.math_utils import cdiv, next_power_of_2
- from vllm.utils.platform_utils import num_compute_units
-@@ -332,6 +333,10 @@ class LayerNormFwdKernel(VllmJitKernel["LayerNormFwdKernel.CompileKey"]):
- 
-     def compile(self, compile_key: CompileKey) -> None:
-         warmup = getattr(self.kernel, "warmup", None)
-+        # MUSA Triton kernels compile on their first invocation, but the
-+        # wrapper does not expose Triton's precompile-only warmup method.
-+        if warmup is None and current_platform.device_type == "musa":
-+            return
-         assert warmup is not None
-         variant = compile_key.input_variant
- 
 diff --git a/vllm/tilelang_utils/__init__.py b/vllm/tilelang_utils/__init__.py
 index 803409b..031a300 100644
 --- a/vllm/tilelang_utils/__init__.py
@@ -11428,65 +10795,6 @@ index c4f3cd8..80d30d5 100644
          tl.store(swa_lens_ptr + pid, 0)
          # Clear the row so a padded token cannot gather through stale indices.
          for i in range(0, index_width, TRITON_BLOCK_SIZE):
-diff --git a/vllm/v1/attention/backends/utils.py b/vllm/v1/attention/backends/utils.py
-index e656343..6440850 100644
---- a/vllm/v1/attention/backends/utils.py
-+++ b/vllm/v1/attention/backends/utils.py
-@@ -1,3 +1,4 @@
-+import functools
- # SPDX-License-Identifier: Apache-2.0
- # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
- import math
-@@ -251,6 +252,24 @@ def record_kv_cache_layout(cache_config: CacheConfig, layout_name: str) -> None:
-     cache_config.kv_cache_layout = layout.name
- 
- 
-+_KV_CACHE_LAYOUT_OVERRIDE: str | None = None
-+
-+
-+@functools.lru_cache
-+def get_kv_cache_layout() -> str:
-+    """Compatibility accessor for MUSA backends ported from v0.28."""
-+    if _KV_CACHE_LAYOUT_OVERRIDE is not None:
-+        return _KV_CACHE_LAYOUT_OVERRIDE
-+    requested = getattr(envs, "VLLM_KV_CACHE_LAYOUT", None)
-+    return requested or "NHD"
-+
-+
-+def set_kv_cache_layout(layout: str | None) -> None:
-+    global _KV_CACHE_LAYOUT_OVERRIDE
-+    _KV_CACHE_LAYOUT_OVERRIDE = layout
-+    get_kv_cache_layout.cache_clear()
-+
-+
- def resolve_kv_cache_layout(
-     vllm_config: VllmConfig,
-     supported_layouts: list[list[str]],
-diff --git a/vllm/v1/attention/ops/common.py b/vllm/v1/attention/ops/common.py
-index b561817..722ed45 100644
---- a/vllm/v1/attention/ops/common.py
-+++ b/vllm/v1/attention/ops/common.py
-@@ -385,3 +385,10 @@ def unpack_seq_triton(
- 
- _PACK_SEQ_TRITON_KERNEL = PackSeqTritonKernel()
- _UNPACK_SEQ_TRITON_KERNEL = UnpackSeqTritonKernel()
-+
-+# v0.28 MUSA backends imported the DCP combine helper from this module.
-+# v0.30 moved it to dcp.py; retain the compatibility export.
-+try:
-+    from vllm.v1.attention.ops.dcp import cp_lse_ag_out_rs  # noqa: F401
-+except ImportError:
-+    cp_lse_ag_out_rs = None
-diff --git a/vllm/v1/attention/ops/dcp_alltoall.py b/vllm/v1/attention/ops/dcp_alltoall.py
-new file mode 100644
-index 0000000..2cef956
---- /dev/null
-+++ b/vllm/v1/attention/ops/dcp_alltoall.py
-@@ -0,0 +1,4 @@
-+"""Compatibility exports for v0.28 MUSA attention backends."""
-+from vllm.v1.attention.ops.dcp import dcp_a2a_lse_reduce
-+
-+__all__ = ["dcp_a2a_lse_reduce"]
 diff --git a/vllm/v1/attention/ops/flashmla.py b/vllm/v1/attention/ops/flashmla.py
 index c84a495..bbba514 100644
 --- a/vllm/v1/attention/ops/flashmla.py
@@ -11733,7 +11041,7 @@ index e2a06e7..03391ce 100644
                  block_hash_with_group_id,
                  blk,
 diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
-index afb03ac..32e2c33 100644
+index afb03ac..181bbe7 100644
 --- a/vllm/v1/core/kv_cache_coordinator.py
 +++ b/vllm/v1/core/kv_cache_coordinator.py
 @@ -12,6 +12,7 @@ from vllm.v1.core.kv_cache_utils import (
@@ -11782,66 +11090,7 @@ index afb03ac..32e2c33 100644
              if isinstance(manager, CrossAttentionManager):
                  # For cross-attention, we issue a single static allocation
                  # of blocks based on the number of encoder input tokens.
-@@ -230,6 +246,58 @@ class KVCacheCoordinator(ABC):
-                 )
-         return num_blocks_to_allocate
- 
-+    def get_num_blocks_to_allocate_by_pool(
-+        self,
-+        request_id: str,
-+        num_tokens: int,
-+        new_computed_blocks: tuple[Sequence[KVCacheBlock], ...],
-+        num_encoder_tokens: int,
-+        total_computed_tokens: int,
-+        num_local_computed_tokens: int,
-+        num_tokens_main_model: int,
-+        apply_admission_cap: bool = False,
-+    ) -> tuple[tuple[BlockPool, int], ...]:
-+        """Return allocation requirements grouped by owning block pool.
-+
-+        The upstream coordinator has one ``BlockPool``, so its aggregate
-+        admission count is sufficient.  MUSA hybrid models may place Mamba
-+        groups in independent pools; omitting those groups from the aggregate
-+        count avoids constraining attention admission, but used to let the
-+        later Mamba allocation fail inside ``BlockPool.get_new_blocks``.  Keep
-+        the legacy aggregate API unchanged and expose the per-pool counts for
-+        the scheduler's admission gate.
-+        """
-+        requirements: dict[int, tuple[BlockPool, int]] = {}
-+        for i, manager in enumerate(self.single_type_managers):
-+            if isinstance(manager, CrossAttentionManager):
-+                required = manager.get_num_blocks_to_allocate(
-+                    request_id,
-+                    num_encoder_tokens,
-+                    [],
-+                    0,
-+                    0,
-+                    num_encoder_tokens,
-+                    apply_admission_cap=apply_admission_cap,
-+                )
-+            else:
-+                required = manager.get_num_blocks_to_allocate(
-+                    request_id,
-+                    num_tokens,
-+                    new_computed_blocks[i],
-+                    total_computed_tokens,
-+                    num_local_computed_tokens,
-+                    num_tokens_main_model,
-+                    apply_admission_cap=apply_admission_cap,
-+                )
-+            pool = manager.block_pool
-+            pool_id = id(pool)
-+            previous = requirements.get(pool_id)
-+            if previous is None:
-+                requirements[pool_id] = (pool, required)
-+            else:
-+                requirements[pool_id] = (pool, previous[1] + required)
-+        return tuple(requirements.values())
-+
-     def allocate_new_computed_blocks(
-         self,
-         request_id: str,
-@@ -754,6 +822,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+@@ -754,6 +770,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
              for idx, group in enumerate(self.attention_groups):
                  if (
                      group.spec == spec
@@ -11966,42 +11215,218 @@ index 226da3a..b710d7b 100644
              return None
  
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index 28478b6..3bbcc37 100644
+index 28478b6..043285a 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
-@@ -1120,6 +1120,28 @@ def _pool_bytes_per_block(kv_cache_groups: list[KVCacheGroupSpec]) -> int:
-     return _get_kv_cache_bytes_per_block(kv_cache_groups)
+@@ -1575,74 +1575,247 @@ def _get_kv_cache_groups_uniform_page_size(
+     return create_kv_cache_group_specs(kv_cache_spec, grouped_layers)
  
  
-+def get_num_blocks(
+-def _get_per_layer_spec(
+-    group: KVCacheGroupSpec,
+-    layer_name: str,
+-) -> KVCacheSpec:
+-    spec = group.kv_cache_spec
+-    if isinstance(spec, UniformTypeKVCacheSpecs):
+-        return spec.kv_cache_specs[layer_name]
+-    return spec
++def _get_packed_kv_cache_layout(
++    kv_cache_groups: list[KVCacheGroupSpec],
++) -> tuple[int, dict[int, list[str]]]:
++    """Lay out each cache group densely in one shared block slab.
++
++    A block ID is owned by one cache group at a time, so layouts from different
++    groups may overlap. Layers within a group remain disjoint.
++    """
++    layers_by_offset: dict[int, list[str]] = defaultdict(list)
++    block_stride = 0
++    for group in kv_cache_groups:
++        spec = group.kv_cache_spec
++        byte_offset = 0
++        for layer_name in group.layer_names:
++            if isinstance(spec, UniformTypeKVCacheSpecs):
++                page_size = spec.kv_cache_specs[layer_name].page_size_bytes
++            else:
++                page_size = spec.page_size_bytes
++            layers_by_offset[byte_offset].append(layer_name)
++            byte_offset += page_size
++        block_stride = max(block_stride, byte_offset)
++    assert block_stride > 0
++    return block_stride, layers_by_offset
+ 
+ 
+-def _get_kv_cache_bytes_per_block(
++def _bucket_layers_by_page_size(
+     kv_cache_groups: list[KVCacheGroupSpec],
+-) -> int:
+-    """Return the largest cache group's bytes per block."""
+-    if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+-        _, _, mla_names, idx_names, mla_page, idx_page, _, _ = glm5_layout
+-        return len(mla_names) * mla_page + len(idx_names) * idx_page
+-
+-    bytes_per_block = max(
+-        sum(
+-            _get_per_layer_spec(group, layer_name).page_size_bytes
+-            for layer_name in group.layer_names
+-        )
++) -> dict[int, list[list[str]]]:
++    """Bucket layers by page size: ``result[ps][slot_idx] = layer_names``."""
++    buckets: dict[int, list[list[str]]] = defaultdict(list)
++    for group in kv_cache_groups:
++        spec = group.kv_cache_spec
++        slot_count: dict[int, int] = defaultdict(int)
++        for layer_name in group.layer_names:
++            if isinstance(spec, UniformTypeKVCacheSpecs):
++                page_size = spec.kv_cache_specs[layer_name].page_size_bytes
++            else:
++                page_size = spec.page_size_bytes
++            slot_idx = slot_count[page_size]
++            slot_count[page_size] += 1
++            if slot_idx == len(buckets[page_size]):
++                buckets[page_size].append([])
++            buckets[page_size][slot_idx].append(layer_name)
++    return buckets
++
++
++def _use_packed_kv_cache_config(
 +    vllm_config: VllmConfig,
-+    num_layers: int,
++    kv_cache_groups: list[KVCacheGroupSpec],
++) -> bool:
++    is_dsv4 = all(
++        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+         for group in kv_cache_groups
+     )
+-    assert bytes_per_block > 0
+-    hot_page_sizes = [
+-        group.kv_cache_spec.page_size_bytes
+-        for group in kv_cache_groups
+-        if isinstance(group.kv_cache_spec, HiSparseHotSpec)
+-    ]
+-    if hot_page_sizes:
+-        bytes_per_block = round_up(bytes_per_block, math.lcm(*hot_page_sizes))
+-    return bytes_per_block
++    kv_transfer_config = vllm_config.kv_transfer_config
++    extra_config = (
++        kv_transfer_config.kv_connector_extra_config
++        if kv_transfer_config is not None
++        else {}
++    )
++    # NOTE: enable_cross_layers_blocks is an experimental API and subject to change with
++    # https://github.com/vllm-project/vllm/issues/42082
++    enable_cross_layers = (
++        str(extra_config.get("enable_cross_layers_blocks", "False")).lower() == "true"
++    )
++    return is_dsv4 or (enable_cross_layers and len(kv_cache_groups) > 1)
+ 
+ 
+-def validate_kv_cache_layout(
+-    layout: KVCacheLayout,
++def _get_kv_cache_config_packed(
++    vllm_config: VllmConfig,
+     kv_cache_groups: list[KVCacheGroupSpec],
+-) -> None:
+-    """Validate that the resolved layout can express this model's packing.
 +    available_memory: int,
-+    page_size: int,
-+) -> int:
++) -> tuple[int, list[KVCacheTensor]]:
++    """Plan a packed per-block KV cache tensor layout.
++
++    Cache groups use dense, overlapping layouts within one block slab. Each
++    emitted tensor aliases the same physical backing allocation.
 +    """
-+    Get the number of kv cache blocks.
-+
-+    Args:
-+        vllm_config: The global VllmConfig
-+        num_layers: The number of layers
-+        available_memory: Memory available for KV cache in bytes.
-+        page_size: The page size of the KV cache.
-+    """
-+    num_blocks = int(available_memory // page_size // num_layers)
-+    num_blocks = max(num_blocks, 0)
-+    return may_override_num_blocks(vllm_config, num_blocks)
-+
-+
-+
-+
- def get_uniform_page_size(kv_cache_specs: Iterable[KVCacheSpec]) -> int:
-     """
-     Get the page size of the KV cache.
-@@ -1611,6 +1633,102 @@ def _get_kv_cache_bytes_per_block(
-     return bytes_per_block
++    if _use_musa_deepseek_v4_zero_offset_kv_tensors(kv_cache_groups):
++        # MATE sparse FlashMLA decode rebuilds page views from the cache tensor
++        # storage. Offset aliases from the packed backing tensor overrun there,
++        # so keep the same per-page layout but give each page-size slot an
++        # offset-zero allocation on MUSA.
++        buckets = _bucket_layers_by_page_size(kv_cache_groups)
++        bytes_per_block = sum(
++            page_size * len(slots) for page_size, slots in buckets.items()
++        )
++        num_blocks = available_memory // bytes_per_block
++        num_blocks = may_override_num_blocks(vllm_config, num_blocks)
++        return num_blocks, [
++            KVCacheTensor(size=page_size * num_blocks, shared_by=slot)
++            for page_size, slots in buckets.items()
++            for slot in slots
++        ]
  
+-    The layout was chosen once in the engine core from the backends' supported
+-    sets; a backend whose model packs pages side by side (e.g. the DeepSeek-V4
+-    indexer) declares block-outermost layouts there, so an inexpressible
+-    layout reaching this point is an error.
+-    """
+-    page_sizes = {
+-        _get_per_layer_spec(group, layer_name).page_size_bytes
+-        for group in kv_cache_groups
+-        for layer_name in group.layer_names
+-    }
+-    if len(page_sizes) == 1:
+-        # A rectangular layer dim exists; every layout can express it.
+-        return
++    block_stride, layers_by_offset = _get_packed_kv_cache_layout(kv_cache_groups)
++    num_blocks = available_memory // block_stride
++    num_blocks = may_override_num_blocks(vllm_config, num_blocks)
++    total_size = block_stride * num_blocks
++
++    kv_cache_tensors: list[KVCacheTensor] = []
++    for byte_offset in sorted(layers_by_offset):
++        kv_cache_tensors.append(
++            KVCacheTensor(
++                size=total_size,
++                shared_by=layers_by_offset[byte_offset],
++                offset=byte_offset,
++                block_stride=block_stride,
++            )
++        )
  
+-    # Mixed page sizes pack pages side by side within a block, which needs each page
+-    # to be one contiguous chunk inside its block (a block-compact layout) and, with
+-    # multiple KV cache groups, the layer dim inside the block dim.
+-    if not layout.is_block_compact or (
+-        len(kv_cache_groups) > 1 and layout.is_layer_compact
+-    ):
+-        raise ValueError(
+-            f"KV cache layout {layout.name} cannot express this model's "
+-            f"mixed page sizes ({sorted(page_sizes)}); a backend should "
+-            "declare block-outermost supported layouts (e.g. BLHNC), or "
+-            "set VLLM_KV_CACHE_LAYOUT=BLHNC."
++    return num_blocks, kv_cache_tensors
++
++
++def _use_musa_deepseek_v4_zero_offset_kv_tensors(
++    kv_cache_groups: list[KVCacheGroupSpec],
++) -> bool:
++    try:
++        from vllm.platforms import current_platform
++    except Exception:
++        return False
++
++    is_musa = getattr(current_platform, "is_musa", None)
++    if not callable(is_musa) or not is_musa():
++        return False
++
++    found_deepseek_v4 = False
++    found_sparse_swa = False
++    for group in kv_cache_groups:
++        spec = group.kv_cache_spec
++        specs: Iterable[KVCacheSpec]
++        if isinstance(spec, UniformTypeKVCacheSpecs):
++            specs = spec.kv_cache_specs.values()
++        else:
++            specs = (spec,)
++        for layer_spec in specs:
++            if getattr(layer_spec, "model_version", None) != "deepseek_v4":
++                continue
++            found_deepseek_v4 = True
++            if isinstance(layer_spec, SlidingWindowMLASpec):
++                found_sparse_swa = True
++
++    return found_deepseek_v4 and found_sparse_swa
++
++
++_get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
++
++
 +def musa_mamba_separate_pool_enabled() -> bool:
 +    """Whether MUSA may assign Mamba groups dedicated block-id pools."""
 +    try:
@@ -12052,7 +11477,7 @@ index 28478b6..3bbcc37 100644
 +        cdiv(
 +            group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
 +            mamba_page,
-+        )
+         )
 +        for group in mamba_groups
 +    )
 +    mamba_num_blocks = max_num_seqs * mamba_blocks_per_request + 1
@@ -12095,56 +11520,425 @@ index 28478b6..3bbcc37 100644
 +            )
 +        )
 +    return kv_cache_tensors, attn_num_blocks, mamba_num_blocks
-+
-+
-+
- def validate_kv_cache_layout(
-     layout: KVCacheLayout,
-     kv_cache_groups: list[KVCacheGroupSpec],
-@@ -1742,6 +1860,22 @@ def get_kv_cache_config_from_groups(
-             ),
+ 
+ 
+ def get_kv_cache_config_from_groups(
+@@ -1668,142 +1841,78 @@ def get_kv_cache_config_from_groups(
+             num_blocks=1,
+             kv_cache_tensors=[],
+             kv_cache_groups=kv_cache_groups,
+-            prefix_cache_retention_interval=(
+-                vllm_config.cache_config.prefix_cache_retention_interval
+-            ),
          )
  
-+    if _musa_separate_pool_eligible(vllm_config, kv_cache_groups):
+-    if vllm_config.attention_config.hisparse_config is not None:
+-        host_budget = get_hisparse_host_pool_bytes(vllm_config)
+-        return get_hisparse_kv_cache_config(
+-            vllm_config, kv_cache_groups, available_memory, host_budget
++    # Determine how model runners should initialize the KV cache tensors.
++    if len(kv_cache_groups) == 1 and isinstance(
++        kv_cache_groups[0].kv_cache_spec, UniformTypeKVCacheSpecs
++    ):
++        # Special case: all layers have the same type of KV cache but with
++        # different hidden sizes. Allocate different amount of memory for each
++        # layer based on its hidden size.
++        num_blocks = (
++            available_memory // kv_cache_groups[0].kv_cache_spec.page_size_bytes
+         )
+-
+-    if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+-        (
+-            attn_group,
+-            mamba_groups,
+-            mla_names,
+-            idx_names,
+-            mla_page,
+-            idx_page,
+-            tail_names,
+-            _,
+-        ) = glm5_layout
+-        bytes_per_block = len(mla_names) * mla_page + len(idx_names) * idx_page
+-        num_blocks = may_override_num_blocks(
+-            vllm_config, available_memory // bytes_per_block
++        num_blocks = may_override_num_blocks(vllm_config, num_blocks)
++        per_layer_specs = kv_cache_groups[0].kv_cache_spec.kv_cache_specs
++        kv_cache_tensors = [
++            KVCacheTensor(
++                size=per_layer_specs[layer_name].page_size_bytes * num_blocks,
++                shared_by=[layer_name],
++            )
++            for layer_name in kv_cache_groups[0].layer_names
++        ]
++    elif _use_packed_kv_cache_config(vllm_config, kv_cache_groups):
++        # DeepSeek V4 uses the packed layout by default. Other multi-group
++        # layouts can opt in with --enable-cross-layers.
++        num_blocks, kv_cache_tensors = _get_kv_cache_config_packed(
++            vllm_config, kv_cache_groups, available_memory
+         )
+-        size = bytes_per_block * num_blocks
+-        attn_specs = cast(
+-            UniformTypeKVCacheSpecs, attn_group.kv_cache_spec
+-        ).kv_cache_specs
+-
+-        kv_cache_tensors: list[KVCacheTensor] = []
+-
+-        def add_tensor(layer_name: str, spec: KVCacheSpec, offset: int) -> None:
+-            kv_cache_tensors.append(
+-                KVCacheTensor(
+-                    size=size,
+-                    layers=[layer_name],
+-                    layer_stride=spec.page_size_bytes * num_blocks,
+-                    block_stride=spec.page_size_bytes,
+-                    offset=offset,
+-                )
++    elif _musa_separate_pool_eligible(vllm_config, kv_cache_groups):
++        # MUSA: mamba state on its own contiguous pool (own block-id space).
 +        kv_cache_tensors, num_blocks, musa_mamba_num_blocks = (
 +            _musa_separated_mamba_attn_tensors(
 +                vllm_config, kv_cache_groups, available_memory
-+            )
+             )
+-
+-        for index, mla_name in enumerate(mla_names):
+-            offset = index * mla_page * num_blocks
+-            add_tensor(mla_name, attn_specs[mla_name], offset)
+-            for group in mamba_groups:
+-                if index < len(group.layer_names):
+-                    add_tensor(group.layer_names[index], group.kv_cache_spec, offset)
+-
+-        idx_base = len(mla_names) * mla_page * num_blocks
+-        for index, idx_name in enumerate(idx_names):
+-            offset = idx_base + index * idx_page * num_blocks
+-            add_tensor(idx_name, attn_specs[idx_name], offset)
+-            if tail_names:
+-                tail_name = tail_names[index]
+-                tail_group = next(
+-                    group for group in kv_cache_groups if tail_name in group.layer_names
+-                )
+-                tail_specs = cast(
+-                    UniformTypeKVCacheSpecs, tail_group.kv_cache_spec
+-                ).kv_cache_specs
+-                add_tensor(tail_name, tail_specs[tail_name], offset)
+-
 +        )
-+        return KVCacheConfig(
-+            num_blocks=num_blocks,
-+            kv_cache_tensors=kv_cache_tensors,
-+            kv_cache_groups=kv_cache_groups,
-+            prefix_cache_retention_interval=(
-+                vllm_config.cache_config.prefix_cache_retention_interval
-+            ),
+         return KVCacheConfig(
+             num_blocks=num_blocks,
+             kv_cache_tensors=kv_cache_tensors,
+             kv_cache_groups=kv_cache_groups,
+-            prefix_cache_retention_interval=(
+-                vllm_config.cache_config.prefix_cache_retention_interval
+-            ),
 +            musa_mamba_num_blocks=musa_mamba_num_blocks,
-+        )
+         )
+-
+-    layout = vllm_config.cache_config.get_resolved_kv_cache_layout()
+-    validate_kv_cache_layout(layout, kv_cache_groups)
+-    bytes_per_block = _get_kv_cache_bytes_per_block(kv_cache_groups)
+-    interleaved_block_stride = bytes_per_block if layout.is_block_outermost else None
+-
+-    num_blocks = available_memory // bytes_per_block
+-    num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+-    size = bytes_per_block * num_blocks
+-
+-    # Groups alias from byte 0. Spec regions are laid out differently:
+-    #
+-    # block-outer (the same packing repeats for every block):
+-    # group 0: | blk 0 [ A | B  | pad ] | blk 1 [ A | B  | pad ] | ...
+-    # group 1: | blk 0 [  C  |    D   ] | blk 1 [  C  |    D   ] | ...
+-    #          |<--- bytes_per_block -->|
+-    #
+-    # layer-outer (only supported for uniform page sizes or single-group models):
+-    # group 0: | A [ blk 0 | blk 1 | ... ] | B [ blk 0 | blk 1 | ... ] |
+-    # group 1: | C [ blk 0 | blk 1 | ... ] | D [ blk 0 | blk 1 | ... ] |
+-
+-    kv_cache_tensors = []
+-    for group in kv_cache_groups:
+-        group_spec = group.kv_cache_spec
+-        layers_by_spec: defaultdict[KVCacheSpec, list[str]] = defaultdict(list)
+-        if isinstance(group_spec, UniformTypeKVCacheSpecs):
+-            for layer_name, spec in group_spec.kv_cache_specs.items():
+-                layers_by_spec[spec].append(layer_name)
+-        elif group.layer_names:
+-            layers_by_spec[group_spec].extend(group.layer_names)
+-
+-        byte_offset = 0
+-        for spec, layer_names in layers_by_spec.items():
+-            layer_stride, block_stride, _, _, _ = compute_layout_strides(
+-                spec,
+-                num_blocks,
+-                len(layer_names),
+-                layout,
+-                fixed_strides=(None, interleaved_block_stride, None, None, None),
+-            )
+-            offset = (
+-                byte_offset
+-                * max(layer_stride, spec.page_size_bytes)
+-                // spec.page_size_bytes
+-            )
++    else:
++        # General case:
++        # We will have group_size memory pools, each is shared by one layer from
++        # each group. As layers of different groups have different block table,
++        # they will use different parts of the shared Tensor.
++        # The memory layout for 3 groups (full.0, full.1), (sw.0, sw.2),
++        # (sw.1, padding) will be: (group_size = 2)
++        # full.0, sw.0, sw.1: share a Tensor with size=available_memory//2
++        # full.1, sw.2: share another Tensor with size=available_memory//2
++        group_size = max(len(group.layer_names) for group in kv_cache_groups)
 +
-     layout = vllm_config.cache_config.get_resolved_kv_cache_layout()
-     validate_kv_cache_layout(layout, kv_cache_groups)
-     bytes_per_block = _get_kv_cache_bytes_per_block(kv_cache_groups)
-@@ -2694,6 +2828,20 @@ def get_kv_cache_configs(
-         for worker_spec in kv_cache_specs
-     ]
++        page_size = get_uniform_page_size(
++            [group.kv_cache_spec for group in kv_cache_groups]
++        )
++        assert group_size > 0, "group_size must be greater than 0"
++        num_blocks = get_num_blocks(
++            vllm_config, group_size, available_memory, page_size
++        )
++        kv_cache_tensors = []
++        for i in range(group_size):
++            shared_by = []
++            for j in range(len(kv_cache_groups)):
++                if i < len(kv_cache_groups[j].layer_names):
++                    shared_by.append(kv_cache_groups[j].layer_names[i])
+             kv_cache_tensors.append(
+-                KVCacheTensor(
+-                    size=size,
+-                    layers=layer_names,
+-                    layer_stride=layer_stride,
+-                    block_stride=block_stride,
+-                    offset=offset,
+-                )
++                KVCacheTensor(size=page_size * num_blocks, shared_by=shared_by)
+             )
+-            byte_offset += len(layer_names) * spec.page_size_bytes
  
-+    # The MUSA Mamba pool has a fixed cost outside the attention block pool.
-+    # Replanning each TP rank from a common block count can therefore produce
-+    # different final counts when their profiled free memory differs. For
-+    # identical cache groups, plan from the smallest rank budget instead.
+     return KVCacheConfig(
+         num_blocks=num_blocks,
+         kv_cache_tensors=kv_cache_tensors,
+         kv_cache_groups=kv_cache_groups,
+-        prefix_cache_retention_interval=(
+-            vllm_config.cache_config.prefix_cache_retention_interval
+-        ),
+     )
+ 
+ 
+@@ -2298,24 +2407,30 @@ def get_kv_cache_groups(
+         if not isinstance(v, HiddenStateCacheSpec)
+     }
+ 
+-    if packed_groups := _get_packed_kv_cache_groups(vllm_config, filtered_spec):
+-        # Block-outermost blocks are strided by the widest group, so hidden
+-        # groups need no page alignment.
+-        packed_groups += [
+-            KVCacheGroupSpec([name], spec) for name, spec in hidden_specs.items()
+-        ]
+-        return packed_groups
+-
+-    # Prefer preserving each layer's cache semantics. If physical pages cannot
+-    # be unified, try a supported allocation-only fallback before failing.
+-    try:
+-        filtered_spec = unify_kv_cache_spec_page_size(filtered_spec)
+-    except NotImplementedError:
+-        fallback_groups = _try_get_full_allocation_fallback_groups(kv_cache_spec)
+-        if fallback_groups is None:
+-            raise
+-        return fallback_groups
+-    groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
 +    if (
-+        projected_groups_per_worker
-+        and all(
-+            groups == projected_groups_per_worker[0]
-+            for groups in projected_groups_per_worker[1:]
-+        )
-+        and _musa_separate_pool_eligible(vllm_config, projected_groups_per_worker[0])
++        musa_mamba_separate_pool_enabled()
++        and vllm_config.kv_transfer_config is None
++        and not hidden_specs
++        and any(isinstance(spec, MambaSpec) for spec in filtered_spec.values())
++        and any(not isinstance(spec, MambaSpec) for spec in filtered_spec.values())
 +    ):
-+        available_memory = [min(available_memory)] * len(available_memory)
++        # MUSA: the dedicated Mamba BlockPools have independent page sizes and
++        # block-id spaces. Keep the attention spec at its backend-preferred
++        # block size instead of expanding every attention page to one full
++        # recurrent-state page. The grouping algorithm itself does not require
++        # equal page sizes; the separated allocator below handles each family.
++        groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
++    else:
++        # Prefer preserving each layer's cache semantics. If physical pages
++        # cannot be unified, try a supported allocation-only fallback.
++        try:
++            filtered_spec = unify_kv_cache_spec_page_size(filtered_spec)
++        except NotImplementedError:
++            fallback_groups = _try_get_full_allocation_fallback_groups(kv_cache_spec)
++            if fallback_groups is None:
++                raise
++            return fallback_groups
++        groups = _get_kv_cache_groups_uniform_page_size(filtered_spec)
+ 
+     # Add hidden-state layers back with page aligned to the common page.
+     if hidden_specs:
+@@ -2412,53 +2527,103 @@ def _max_memory_usage_bytes_from_groups(
+     This correctly accounts for padding in hybrid models. For example, if a
+     model has 8 full attention layers and 9 sliding window layers, they will
+     be padded to 9 full + 9 sliding window for uniform group sizes.
+-
+-    Each group independently claims blocks from the shared pool, so a request consumes
+-    the sum of the per-group block counts, i.e. ``bytes_per_block * total_blocks``.
+     """
+     if not kv_cache_groups:
+         return 0
+ 
+-    if vllm_config.attention_config.hisparse_config is not None:
+-        return get_hisparse_gpu_memory_usage(vllm_config, kv_cache_groups)
++    if len(kv_cache_groups) == 1 and isinstance(
++        kv_cache_groups[0].kv_cache_spec, UniformTypeKVCacheSpecs
++    ):
++        # UniformTypeKVCacheSpecs special case (single group, per-layer specs)
++        per_layer_specs = kv_cache_groups[0].kv_cache_spec.kv_cache_specs
++        return sum(
++            spec.max_memory_usage_bytes(vllm_config)
++            for spec in per_layer_specs.values()
++        )
++    elif all(
++        isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
++        for group in kv_cache_groups
++    ):
++        # Special case (only DeepseekV4 for now): all groups are
++        # UniformTypeKVCacheSpecs.
++        # They must already be page_size aligned and share a common padded
++        # layer-tuple layout. Even groups with fewer actual tuples still reserve
++        # the global number of tuple slots in the shared tensor layout.
++        full_mla_spec = cast(UniformTypeKVCacheSpecs, kv_cache_groups[0].kv_cache_spec)
++        layer_tuple_bytes = sum(full_mla_spec.get_page_sizes())
++        num_layer_tuples = max(
++            cast(UniformTypeKVCacheSpecs, group.kv_cache_spec).get_num_layer_tuples()
++            for group in kv_cache_groups
++        )
+ 
+-    if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+-        (
+-            attn_group,
+-            mamba_groups,
+-            mla_names,
+-            idx_names,
+-            mla_page,
+-            idx_page,
+-            tail_names,
+-            _,
+-        ) = glm5_layout
+-        uniform_spec = cast(UniformTypeKVCacheSpecs, attn_group.kv_cache_spec)
+-        total_blocks = uniform_spec.max_memory_usage_pages(vllm_config)
+-        total_blocks += sum(
+-            cdiv(
+-                group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
+-                group.kv_cache_spec.page_size_bytes,
++        total_max_mem_usage_bytes = 0
++        for group in kv_cache_groups:
++            group_spec = cast(UniformTypeKVCacheSpecs, group.kv_cache_spec)
++            g_max_mem_usage_pages = group_spec.max_memory_usage_pages(vllm_config)
++            g_max_mem_usage_page_bytes = (
++                num_layer_tuples * g_max_mem_usage_pages * layer_tuple_bytes
+             )
++            total_max_mem_usage_bytes += g_max_mem_usage_page_bytes
++        return total_max_mem_usage_bytes
 +
-     # If `num_gpu_blocks_override` is set, the cache size that will actually
-     # be allocated is decoupled from the profiled `available_memory`:
-     # `may_override_num_blocks` in `get_kv_cache_config_from_groups` clamps
++    if (
++        musa_mamba_separate_pool_enabled()
++        and _musa_has_mamba_and_attention(kv_cache_groups)
++    ):
++        # MUSA: separate Mamba BlockPools intentionally keep attention and
++        # recurrent-state page sizes independent. Account for the exact fixed
++        # Mamba reservation plus the minimum attention capacity instead of
++        # calling get_uniform_page_size() across both cache families.
++        mamba_groups = [
++            group
++            for group in kv_cache_groups
++            if isinstance(group.kv_cache_spec, MambaSpec)
++        ]
++        attn_groups = [
++            group
++            for group in kv_cache_groups
++            if not isinstance(group.kv_cache_spec, MambaSpec)
++        ]
++        mamba_page = get_uniform_page_size(
++            [group.kv_cache_spec for group in mamba_groups]
++        )
++        mamba_blocks_per_request = max(
++            cdiv(group.kv_cache_spec.max_memory_usage_bytes(vllm_config), mamba_page)
+             for group in mamba_groups
+         )
+-        if tail_names:
+-            total_blocks += 1
+-        return total_blocks * (len(mla_names) * mla_page + len(idx_names) * idx_page)
++        mamba_num_blocks = (
++            vllm_config.scheduler_config.max_num_seqs
++            * mamba_blocks_per_request
++            + 1
++        )
++        mamba_layers = [
++            layer_name for group in mamba_groups for layer_name in group.layer_names
++        ]
++        mamba_required_bytes = mamba_page * mamba_num_blocks * len(mamba_layers)
+ 
+-    bytes_per_block = _pool_bytes_per_block(kv_cache_groups)
+-    total_blocks = 0
+-    for group in kv_cache_groups:
+-        spec = group.kv_cache_spec
+-        if isinstance(spec, UniformTypeKVCacheSpecs):
+-            total_blocks += spec.max_memory_usage_pages(vllm_config)
+-        else:
+-            total_blocks += cdiv(
+-                spec.max_memory_usage_bytes(vllm_config),
+-                spec.page_size_bytes,
+-            )
++        attn_page = get_uniform_page_size(
++            [group.kv_cache_spec for group in attn_groups]
++        )
++        attn_group_size = max(len(group.layer_names) for group in attn_groups)
++        attn_blocks_needed = sum(
++            cdiv(group.kv_cache_spec.max_memory_usage_bytes(vllm_config), attn_page)
++            for group in attn_groups
++        )
++        attn_required_bytes = attn_group_size * attn_page * attn_blocks_needed
++        return mamba_required_bytes + attn_required_bytes
++
++    # General case: group_size pools, each shared by one layer per group
++    # Memory = group_size * page_size * blocks_for_max_len
++    group_size = max(len(group.layer_names) for group in kv_cache_groups)
++    page_size = get_uniform_page_size(
++        [group.kv_cache_spec for group in kv_cache_groups]
++    )
++    blocks_needed = sum(
++        cdiv(group.kv_cache_spec.max_memory_usage_bytes(vllm_config), page_size)
++        for group in kv_cache_groups
++    )
+ 
+-    return bytes_per_block * total_blocks
++    return group_size * page_size * blocks_needed
+ 
+ 
+ def _estimate_max_model_len_from_groups(
+@@ -2760,15 +2925,18 @@ def get_kv_cache_configs(
+     min_num_blocks = min(
+         kv_cache_config.num_blocks for kv_cache_config in kv_cache_configs
+     )
+-    for i, kv_cache_config in enumerate(kv_cache_configs):
+-        if kv_cache_config.num_blocks == min_num_blocks:
+-            continue
+-        # Re-plan with exactly the memory the smallest rank can afford, so
+-        # strides and offsets stay consistent with the shrunken allocation.
+-        groups = kv_cache_config.kv_cache_groups
+-        kv_cache_configs[i] = get_kv_cache_config_from_groups(
+-            vllm_config, groups, min_num_blocks * _pool_bytes_per_block(groups)
+-        )
++    for kv_cache_config in kv_cache_configs:
++        num_blocks_old = kv_cache_config.num_blocks
++        kv_cache_config.num_blocks = min_num_blocks
++
++        # Shrink tensor size proportionally
++        for tensor in kv_cache_config.kv_cache_tensors:
++            if getattr(tensor, "musa_mamba_pool", False):
++                # MUSA: mamba pool size is rank-invariant (from max_num_seqs),
++                # not shrunk with the attention pool's num_blocks.
++                continue
++            assert tensor.size % num_blocks_old == 0
++            tensor.size = tensor.size // num_blocks_old * min_num_blocks
+ 
+     return kv_cache_configs
+ 
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
 index daf2b31..9a7d8ba 100644
 --- a/vllm/v1/core/sched/scheduler.py
@@ -12266,7 +12060,7 @@ index 6a48b62..356c008 100644
  
          if CUDAGraphMode.FULL in allowed_modes:
 diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
-index 8cd867e..b0b0002 100644
+index 8cd867e..a1d0c99 100644
 --- a/vllm/v1/kv_cache_interface.py
 +++ b/vllm/v1/kv_cache_interface.py
 @@ -1380,6 +1380,7 @@ class KVCacheTensor:
@@ -12286,21 +12080,6 @@ index 8cd867e..b0b0002 100644
      """Resolved retention policy for local prefix-cache checkpoints."""
      kv_cache_layout: str | None = None
      """The KV cache layout resolved by the engine core, adopted by all workers."""
-@@ -1505,6 +1508,14 @@ class KVCacheConfig:
-     def num_blocks_of(self, tensor: KVCacheTensor) -> int:
-         """Number of blocks addressable by the pool backing ``tensor``."""
-         if not tensor.host_resident:
-+            if self.musa_mamba_num_blocks is not None:
-+                tensor_layers = set(tensor.layers)
-+                if any(
-+                    isinstance(group.kv_cache_spec, MambaSpec)
-+                    and tensor_layers.intersection(group.layer_names)
-+                    for group in self.kv_cache_groups
-+                ):
-+                    return self.musa_mamba_num_blocks
-             return self.num_blocks
-         assert self.hisparse_host_num_blocks is not None
-         return self.hisparse_host_num_blocks
 diff --git a/vllm/v1/sample/metadata.py b/vllm/v1/sample/metadata.py
 index fa4ceac..98fc48d 100644
 --- a/vllm/v1/sample/metadata.py
@@ -12926,29 +12705,6 @@ index c01895e..e4e9aac 100644
 +    ptr = tl.load(ptr_to_ptr)
 +    ptr = ptr.to(tl.pointer_type(tl.int32))
 +    return tl.multiple_of(ptr, 16)
-diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
-index 9657c28..1fff0c6 100644
---- a/vllm/v1/worker/gpu/cudagraph_utils.py
-+++ b/vllm/v1/worker/gpu/cudagraph_utils.py
-@@ -387,11 +387,17 @@ class CudaGraphManager:
-     def needs_capture(self) -> bool:
-         return len(self._capture_descs) > 0
- 
--    def _capture_stream(self, desc: BatchExecutionDescriptor) -> torch.cuda.Stream:
-+    def _capture_stream(
-+        self, desc: BatchExecutionDescriptor
-+    ) -> torch.cuda.Stream | None:
-         """Capture on the stream used by the microbatch threads."""
-         if desc.num_ubatches > 1:
-             assert self.ubatch_runner is not None
-             return self.ubatch_runner.capture_stream
-+        # torch_musa.graph uses its own non-default stream when none is
-+        # supplied; capturing on the current default stream is unsupported.
-+        if current_platform.device_type == "musa":
-+            return None
-         return current_stream()
- 
-     @torch.inference_mode()
 diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.py
 index d3c65bd..43f753f 100644
 --- a/vllm/v1/worker/gpu/input_batch.py
@@ -12989,7 +12745,7 @@ index d3c65bd..43f753f 100644
      )
  
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index b66d552..612d8ab 100644
+index b66d552..9aabefd 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -441,64 +441,38 @@ class GPUModelRunner(LoRAModelRunnerMixin):
@@ -13077,7 +12833,7 @@ index b66d552..612d8ab 100644
              self.prompt_logprobs_worker = PromptLogprobsWorker(
                  self.max_num_reqs,
                  logprobs_mode=self.model_config.logprobs_mode,
-@@ -1384,20 +1358,50 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1384,30 +1358,50 @@ class GPUModelRunner(LoRAModelRunnerMixin):
          )
          seq_lens = self.input_buffers.seq_lens[:num_reqs_padded]
  
@@ -13108,6 +12864,15 @@ index b66d552..612d8ab 100644
 -            total_num_logits,
 -            self.model_state.num_new_sampled_tokens_per_step,
 -        )
+-
+-        fast_prefill = None
+-        if self.fast_prefill is not None:
+-            fast_prefill = self.fast_prefill.prepare(
+-                logits_indices,
+-                num_reqs,
+-                cu_num_logits_np,
+-                batch_req_state.has_prefill,
+-                batch_desc,
 +        selector = getattr(self, "_musa_select_uniform_decode_model_inputs", None)
 +        model_inputs = None
 +        if selector is not None:
@@ -13120,7 +12885,7 @@ index b66d552..612d8ab 100644
 +                num_tokens,
 +                num_tokens_after_padding,
 +                num_reqs_padded,
-+            )
+             )
 +        if model_inputs is None:
 +            logits_indices = combine_sampled_and_draft_tokens(
 +                self.input_buffers.input_ids,
@@ -13138,21 +12903,9 @@ index b66d552..612d8ab 100644
 +        else:
 +            input_ids, logits_indices = model_inputs
  
-         fast_prefill = None
-         if self.fast_prefill is not None:
-@@ -1419,6 +1423,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
-         )
-         seq_lens_cpu_upper_bound = torch.from_numpy(seq_lens_cpu_upper_bound_np)
- 
-+        max_seq_len_np = None
-+        if self.use_pp:
-+            # Used only by pipeline-parallel sampled-mask handling.
-+            max_seq_len_np = self.req_states.max_seq_len[idx_mapping_np]
-+
-         prompt_lens = None
-         if self.model_config.rswa_window is not None:
-             # prompt_lens is only used in R-SWA case.
-@@ -1441,13 +1450,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         # CPU upper bound on seq_lens; padded entries left at zero.
+         num_computed_tokens_np = self.req_states.num_computed_tokens_np[idx_mapping_np]
+@@ -1441,13 +1435,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc_np=query_start_loc_np,
              seq_lens=seq_lens,
              seq_lens_cpu_upper_bound=seq_lens_cpu_upper_bound,
@@ -13164,25 +12917,44 @@ index b66d552..612d8ab 100644
              is_prefilling_np=batch_req_state.is_prefilling_np,
              has_prefill=batch_req_state.has_prefill,
 -            input_ids=self.input_buffers.input_ids[:num_tokens_after_padding],
++            max_seq_len_np=max_seq_len_np,
 +            input_ids=input_ids,
              positions=self.input_buffers.positions[:num_tokens_after_padding],
              is_padding=self.input_buffers.is_padding[:num_tokens_after_padding],
              logits_indices=logits_indices,
-@@ -1531,7 +1540,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
-             logits = all_to_all_logits(local_logits, shard_metadata)
-             logits = logits[:, : self.vocab_size]
-         else:
--            sample_hidden_states = hidden_states[input_batch.logits_indices]
-+            selector = getattr(self, "_musa_select_sample_hidden_states", None)
-+            sample_hidden_states = (
-+                None if selector is None else selector(hidden_states, input_batch)
-+            )
-+            if sample_hidden_states is None:
-+                sample_hidden_states = hidden_states[input_batch.logits_indices]
-             logits = self.model.compute_logits(sample_hidden_states)
- 
+@@ -1515,25 +1510,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         input_batch: InputBatch,
+         grammar_output: GrammarOutput | None,
+     ) -> tuple[SamplerOutput, torch.Tensor, torch.Tensor]:
+-        shard_metadata = None
+-        global_input_batch = input_batch
+-        if self.batch_sharder is not None:
+-            # Shard the inputs along the batch dimension to sample in parallel
+-            # across TP ranks.
+-            input_batch, sorted_logits_indices, grammar_output, shard_metadata = (
+-                self.batch_sharder.shard_sampler_inputs(input_batch, grammar_output)
+-            )
+-            # The hidden states must be gathered in rank-owner-sorted order
+-            # before computing the partial-vocab logits, so that the all-to-all
+-            # produces full-vocab logits for just the locally-owned requests.
+-            sample_hidden_states = hidden_states[sorted_logits_indices]
+-            local_logits = self.model.compute_logits_local(sample_hidden_states)
+-            logits = all_to_all_logits(local_logits, shard_metadata)
+-            logits = logits[:, : self.vocab_size]
+-        else:
++        selector = getattr(self, "_musa_select_sample_hidden_states", None)
++        sample_hidden_states = (
++            None if selector is None else selector(hidden_states, input_batch)
++        )
++        if sample_hidden_states is None:
+             sample_hidden_states = hidden_states[input_batch.logits_indices]
+-            logits = self.model.compute_logits(sample_hidden_states)
+-
++        logits = self.model.compute_logits(sample_hidden_states)
          if grammar_output is not None:
-@@ -1601,6 +1615,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # Apply grammar bitmask to the logits in-place.
+             assert self.structured_outputs_worker is not None
+@@ -1601,6 +1584,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              output_bin_counts = self.sampler.penalties_state.output_bin_counts
          else:
              output_bin_counts = None
@@ -13191,7 +12963,7 @@ index b66d552..612d8ab 100644
          post_update(
              idx_mapping,
              self.req_states.num_computed_tokens.gpu,
-@@ -1612,6 +1628,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1612,6 +1597,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              query_start_loc,
              self.req_states.all_token_ids.gpu,
              self.req_states.total_len.gpu,
@@ -14154,45 +13926,3 @@ index 1deb89b..d8739db 100644
  
      # Skip no-op self-copy.
      if src_block_idx == dest_block_idx and accept_token_bias == 0:
-diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
-index df2ebc7..28c5380 100644
---- a/vllm/v1/worker/utils.py
-+++ b/vllm/v1/worker/utils.py
-@@ -401,9 +401,13 @@ def allocate_kv_cache(
-     if not kv_cache_config.kv_cache_tensors:
-         return {}
- 
-+    # MUSA may use separate attention and Mamba pools. Each pool has its own
-+    # backing allocation; the default v0.30 layout continues to share one.
-+    separate_musa_pools = kv_cache_config.musa_mamba_num_blocks is not None
-     sizes = {tensor.size for tensor in kv_cache_config.kv_cache_tensors}
--    assert len(sizes) == 1, "KV cache tensors must share one backing allocation."
--    raw_size = sizes.pop()
-+    if not separate_musa_pools:
-+        assert len(sizes) == 1, "KV cache tensors must share one backing allocation."
-+    raw_size = max(sizes)
-     # wvSplitKrc's process-lifetime static workspaces (csrc/rocm/skinny_gemms.cu)
-     # are created lazily on the first qualifying GEMM. Force that now, before
-     # the giant backing allocation below: if one landed in this segment's
-@@ -418,10 +422,20 @@ def allocate_kv_cache(
-         buf_size = ((raw_size + page_size - 1) // page_size) * page_size
-     else:
-         buf_size = raw_size
--    buf = torch.zeros(buf_size, dtype=torch.int8, device=device)
-+    shared_buf = (
-+        None
-+        if separate_musa_pools
-+        else torch.zeros(buf_size, dtype=torch.int8, device=device)
-+    )
- 
-     kv_caches: dict[str, torch.Tensor] = {}
-     for tensor in kv_cache_config.kv_cache_tensors:
-+        buf = (
-+            torch.zeros(tensor.size, dtype=torch.int8, device=device)
-+            if separate_musa_pools
-+            else shared_buf
-+        )
-+        assert buf is not None
-         layer_name = tensor.layers[0]
-         group_id, group = next(
-             (group_id, group)
