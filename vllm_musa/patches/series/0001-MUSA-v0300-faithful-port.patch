@@ -11380,6 +11380,16 @@ index b561817..722ed45 100644
 +    from vllm.v1.attention.ops.dcp import cp_lse_ag_out_rs  # noqa: F401
 +except ImportError:
 +    cp_lse_ag_out_rs = None
+diff --git a/vllm/v1/attention/ops/dcp_alltoall.py b/vllm/v1/attention/ops/dcp_alltoall.py
+new file mode 100644
+index 0000000..2cef956
+--- /dev/null
++++ b/vllm/v1/attention/ops/dcp_alltoall.py
+@@ -0,0 +1,4 @@
++"""Compatibility exports for v0.28 MUSA attention backends."""
++from vllm.v1.attention.ops.dcp import dcp_a2a_lse_reduce
++
++__all__ = ["dcp_a2a_lse_reduce"]
 diff --git a/vllm/v1/attention/ops/flashmla.py b/vllm/v1/attention/ops/flashmla.py
 index c84a495..bbba514 100644
 --- a/vllm/v1/attention/ops/flashmla.py
