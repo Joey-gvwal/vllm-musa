@@ -2929,10 +2929,10 @@ index c0e966b2b..68ddf7294 100644
 +REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
 diff --git a/csrc/libtorch_stable/musa_cache_ops_reg.cu b/csrc/libtorch_stable/musa_cache_ops_reg.cu
 new file mode 100644
-index 000000000..7a9949509
+index 000000000..76a18dea5
 --- /dev/null
 +++ b/csrc/libtorch_stable/musa_cache_ops_reg.cu
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,330 @@
 +// MUSA: regular-ABI registration of the _C_cache_ops library.
 +//
 +// The cache/MLA kernels in libtorch_stable/cache_kernels{,_fused}.cu take
@@ -3016,7 +3016,10 @@ index 000000000..7a9949509
 +void cp_gather_and_upconvert_fp8_kv_cache(
 +    stable::Tensor const& src_cache, stable::Tensor const& dst,
 +    stable::Tensor const& block_table, stable::Tensor const& workspace_starts,
-+    int64_t batch_size, std::optional<stable::Tensor> seq_starts);
++    int64_t batch_size, std::optional<stable::Tensor> seq_starts,
++    std::optional<stable::Tensor> host_cache,
++    std::optional<stable::Tensor> host_row_ids,
++    std::optional<stable::Tensor> device_row_ids);
 +void indexer_k_quant_and_cache(stable::Tensor& k, stable::Tensor& kv_cache,
 +                               stable::Tensor& slot_mapping,
 +                               int64_t quant_block_size,
@@ -3105,9 +3108,13 @@ index 000000000..7a9949509
 +void cp_gather_and_upconvert_fp8_kv_cache(at::Tensor& src, at::Tensor& dst,
 +                                          at::Tensor& bt, at::Tensor& ws,
 +                                          int64_t bs,
-+                                          std::optional<at::Tensor> seq_starts) {
-+  ::cp_gather_and_upconvert_fp8_kv_cache(S(src), S(dst), S(bt), S(ws), bs,
-+                                         S(seq_starts));
++                                          std::optional<at::Tensor> seq_starts,
++                                          std::optional<at::Tensor> host_cache,
++                                          std::optional<at::Tensor> host_row_ids,
++                                          std::optional<at::Tensor> device_row_ids) {
++  ::cp_gather_and_upconvert_fp8_kv_cache(
++      S(src), S(dst), S(bt), S(ws), bs, S(seq_starts), S(host_cache),
++      S(host_row_ids), S(device_row_ids));
 +}
 +void indexer_k_quant_and_cache(at::Tensor& k, at::Tensor& cache,
 +                               at::Tensor& slot, int64_t qbs,
@@ -3221,7 +3228,8 @@ index 000000000..7a9949509
 +  m.def(
 +      "cp_gather_and_upconvert_fp8_kv_cache(Tensor src_cache, Tensor! dst, "
 +      "Tensor block_table, Tensor workspace_starts, int batch_size, Tensor? "
-+      "seq_starts) -> ()");
++      "seq_starts, Tensor? host_cache=None, Tensor? host_row_ids=None, "
++      "Tensor? device_row_ids=None) -> ()");
 +  m.impl("cp_gather_and_upconvert_fp8_kv_cache", torch::kPrivateUse1,
 +         &mcb::cp_gather_and_upconvert_fp8_kv_cache);
 +
