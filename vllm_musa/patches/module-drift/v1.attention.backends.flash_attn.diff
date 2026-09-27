@@ -614,7 +614,7 @@
 +    ) -> tuple[int, ...]:
 +        if block_size % 16 != 0:
 +            raise ValueError("Block size must be a multiple of 16.")
-+        return (2, num_blocks, block_size, num_kv_heads, head_size)
++        return (num_blocks, num_kv_heads, block_size, 2 * head_size)
 +
 +    @staticmethod
 +    def get_kv_cache_stride_order(
@@ -1680,7 +1680,8 @@
              )
 
 -        # (B, H, N, 2*D) -> ((B, N, H, D), (B, N, H, D))
--        key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
++        # For decoder and cross-attention, use KV cache as before
+         key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 -        # Fix degenerate strides on size-1 dims (e.g. num_kv_heads=1 with TP).
 -        # FA3/4 on H100+ uses TMA, which requires ≥16-byte stride alignment.
 -        # See vllm.utils.torch_utils.canonicalize_singleton_dim_strides.
@@ -1700,8 +1701,6 @@
 -        key_cache, value_cache = fixed_k, fixed_v
 -
 -        if is_quantized_kv_cache(self.kv_cache_dtype):
-+        # For decoder and cross-attention, use KV cache as before
-+        key_cache, value_cache = kv_cache.unbind(0)
 +
 +        if self.kv_cache_dtype.startswith("fp8"):
              # queries are quantized in the attention layer
@@ -2325,7 +2324,7 @@
 +            and get_kv_cache_layout() == "NHD"
 +        )
 +        if can_fuse_cache:
-+            key_cache, value_cache = kv_cache.unbind(0)
++            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 +            expected_tail = (self.num_kv_heads, self.head_size)
 +            flat_cache_supported = (
 +                key_cache.is_contiguous()
@@ -2428,7 +2427,7 @@
 +    ) -> None:
 +        """Apply Qwen2 RoPE and populate its NHD cache in one MUSA launch."""
 +        if query.shape[0] <= 1:
-+            key_cache, value_cache = kv_cache.unbind(0)
++            key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 +            from vllm_musa.kernels.qwen2_rope_kv import try_qwen2_rope_kv_cache
 +
 +            if try_qwen2_rope_kv_cache(
@@ -2467,19 +2466,18 @@
      def do_kv_cache_update(
          self,
          layer: torch.nn.Module,
-@@ -1448,10 +1843,7 @@
+@@ -1448,9 +1843,7 @@
              # we use direct Q, K, V tensors without caching
              return
 
 -        # Scatter write into the KV cache using slot_mapping indices.
 -        # No TMA kernel is invoked here, so stride canonicalization is not needed.
 -        # (B, H, N, 2*D) -> ((B, N, H, D), (B, N, H, D))
--        key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
-+        key_cache, value_cache = kv_cache.unbind(0)
++        # v0.30 packs K and V along the last cache dimension.
+         key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
          # Reshape the input keys and values and store them in the cache.
-         # Skip this if sharing KV cache with an earlier attention layer.
-@@ -1471,182 +1863,6 @@
+@@ -1471,182 +1864,6 @@
              layer._v_scale,
          )
 
@@ -2662,7 +2660,7 @@
      def _forward_encoder_attention(
          self,
          query: torch.Tensor,
-@@ -1666,12 +1882,12 @@
+@@ -1666,12 +1883,12 @@
              attn_metadata: Encoder attention metadata
              layer: The attention layer
          """
@@ -2679,7 +2677,7 @@
              raise NotImplementedError(
                  "quantization is not supported for encoder attention"
              )
-@@ -1682,203 +1898,28 @@
+@@ -1682,203 +1899,28 @@
          max_seqlen_q = attn_metadata.max_query_len
          max_seqlen_k = attn_metadata.max_query_len
 
@@ -2889,7 +2887,7 @@
 
 
  def use_cascade_attention(
-@@ -1987,9 +2028,10 @@
+@@ -1987,9 +2029,10 @@
  ) -> torch.Tensor:
      assert alibi_slopes is None, "Cascade attention does not support ALiBi."
      # TODO: Support sliding window.
@@ -2903,7 +2901,7 @@
 
      num_tokens = query.shape[0]
      block_size = key_cache.shape[-3]
-@@ -2051,6 +2093,3 @@
+@@ -2051,6 +2094,3 @@
 
      # Merge prefix and suffix outputs, and store the result in output.
      merge_attn_states(output, prefix_output, prefix_lse, suffix_output, suffix_lse)
