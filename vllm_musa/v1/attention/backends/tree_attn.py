@@ -349,7 +349,7 @@ class TreeAttentionImpl(AttentionImpl):
         kv_cache: torch.Tensor,
         slot_mapping: torch.Tensor,
     ) -> None:
-        key_cache, value_cache = kv_cache.unbind(0)[:2]
+        key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
         # Reshape the input keys and values and store them in the cache.
         # NOTE(woosuk): Here, key and value are padded while slot_mapping is
@@ -401,7 +401,7 @@ class TreeAttentionImpl(AttentionImpl):
             # Profiling run.
             return output.fill_(0)
 
-        key_cache, value_cache = kv_cache.unbind(0)[:2]
+        key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
 
         num_actual_tokens = attn_metadata.num_actual_tokens
         num_decode_tokens = attn_metadata.num_decode_tokens
