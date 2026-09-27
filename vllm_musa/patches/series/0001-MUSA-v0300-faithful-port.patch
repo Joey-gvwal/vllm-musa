@@ -3678,7 +3678,7 @@ index b3e1a8623..e774969e2 100644
  #endif
  }
 diff --git a/csrc/libtorch_stable/torch_bindings.cpp b/csrc/libtorch_stable/torch_bindings.cpp
-index 54548dfd0..7ac6fe1a1 100644
+index 54548dfd0..db7d3e621 100644
 --- a/csrc/libtorch_stable/torch_bindings.cpp
 +++ b/csrc/libtorch_stable/torch_bindings.cpp
 @@ -181,10 +181,12 @@ STABLE_TORCH_LIBRARY_FRAGMENT(_C, ops) {
@@ -3789,7 +3789,18 @@ index 54548dfd0..7ac6fe1a1 100644
  STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
    // LongCat n-gram embedding index kernel.
    ops.impl("ngram_compute_n_gram_ids", TORCH_BOX(&ngram_compute_n_gram_ids));
-@@ -907,6 +924,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CPU, ops) {
+@@ -877,8 +894,10 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CUDA, ops) {
+   ops.impl("swigluoai_and_mul", TORCH_BOX(&swigluoai_and_mul));
+   ops.impl("situ_and_mul", TORCH_BOX(&situ_and_mul));
+   ops.impl("situ_and_mul_quant", TORCH_BOX(&situ_and_mul_quant));
++#ifndef USE_MUSA
+   ops.impl("masked_situ_and_mul", TORCH_BOX(&masked_situ_and_mul));
+   ops.impl("masked_moe_activation", TORCH_BOX(&masked_moe_activation));
++#endif
+   ops.impl("gelu_new", TORCH_BOX(&gelu_new));
+   ops.impl("gelu_fast", TORCH_BOX(&gelu_fast));
+   ops.impl("gelu_quick", TORCH_BOX(&gelu_quick));
+@@ -907,6 +926,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C, CPU, ops) {
    ops.impl("get_cuda_view_from_cpu_tensor",
             TORCH_BOX(&get_cuda_view_from_cpu_tensor));
  }
@@ -3797,7 +3808,7 @@ index 54548dfd0..7ac6fe1a1 100644
  
  STABLE_TORCH_LIBRARY_FRAGMENT(_C_cuda_utils, cuda_utils) {
    cuda_utils.def("get_device_attribute(int attribute, int device_id) -> int");
-@@ -925,6 +943,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
+@@ -925,6 +945,7 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cuda_utils, CompositeExplicitAutograd,
  // there is no device to dispatch on. CompositeExplicitAutograd makes them
  // available for all backends. This is the stable ABI equivalent of calling
  // ops.impl("op_name", &func) without a dispatch key in the non-stable API.
@@ -3805,7 +3816,7 @@ index 54548dfd0..7ac6fe1a1 100644
  STABLE_TORCH_LIBRARY_IMPL(_C, CompositeExplicitAutograd, ops) {
  #ifndef USE_ROCM
    ops.impl("cutlass_scaled_mm_supports_fp8",
-@@ -1168,5 +1187,58 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
+@@ -1168,5 +1189,60 @@ STABLE_TORCH_LIBRARY_IMPL(_C_cache_ops, CUDA, ops) {
    ops.impl("cp_gather_indexer_k_quant_cache",
             TORCH_BOX(&cp_gather_indexer_k_quant_cache));
  }
@@ -3826,7 +3837,9 @@ index 54548dfd0..7ac6fe1a1 100644
 +  ops.impl("gelu_and_mul", TORCH_BOX(&gelu_and_mul));
 +  ops.impl("gelu_tanh_and_mul", TORCH_BOX(&gelu_tanh_and_mul));
 +  ops.impl("situ_and_mul", TORCH_BOX(&situ_and_mul));
++#ifndef USE_MUSA
 +  ops.impl("masked_situ_and_mul", TORCH_BOX(&masked_situ_and_mul));
++#endif
 +  ops.impl("gelu_new", TORCH_BOX(&gelu_new));
 +  ops.impl("gelu_fast", TORCH_BOX(&gelu_fast));
 +  ops.impl("gelu_quick", TORCH_BOX(&gelu_quick));
