@@ -11947,7 +11947,7 @@ index 226da3a..b710d7b 100644
              return None
  
 diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
-index 28478b6..2d073e5 100644
+index 28478b6..3bbcc37 100644
 --- a/vllm/v1/core/kv_cache_utils.py
 +++ b/vllm/v1/core/kv_cache_utils.py
 @@ -1120,6 +1120,28 @@ def _pool_bytes_per_block(kv_cache_groups: list[KVCacheGroupSpec]) -> int:
@@ -12105,6 +12105,27 @@ index 28478b6..2d073e5 100644
      layout = vllm_config.cache_config.get_resolved_kv_cache_layout()
      validate_kv_cache_layout(layout, kv_cache_groups)
      bytes_per_block = _get_kv_cache_bytes_per_block(kv_cache_groups)
+@@ -2694,6 +2828,20 @@ def get_kv_cache_configs(
+         for worker_spec in kv_cache_specs
+     ]
+ 
++    # The MUSA Mamba pool has a fixed cost outside the attention block pool.
++    # Replanning each TP rank from a common block count can therefore produce
++    # different final counts when their profiled free memory differs. For
++    # identical cache groups, plan from the smallest rank budget instead.
++    if (
++        projected_groups_per_worker
++        and all(
++            groups == projected_groups_per_worker[0]
++            for groups in projected_groups_per_worker[1:]
++        )
++        and _musa_separate_pool_eligible(vllm_config, projected_groups_per_worker[0])
++    ):
++        available_memory = [min(available_memory)] * len(available_memory)
++
+     # If `num_gpu_blocks_override` is set, the cache size that will actually
+     # be allocated is decoupled from the profiled `available_memory`:
+     # `may_override_num_blocks` in `get_kv_cache_config_from_groups` clamps
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
 index daf2b31..9a7d8ba 100644
 --- a/vllm/v1/core/sched/scheduler.py
