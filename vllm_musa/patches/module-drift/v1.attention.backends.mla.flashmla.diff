@@ -55,7 +55,7 @@
 
      @classmethod
      def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
--        return capability.major in [3]
+-        return capability.major in [9, 10]
 +        # MUSA devices use compute capability 3
 +        return capability.major == 3
 
