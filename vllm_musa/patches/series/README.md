@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **173 patches**. This branch includes the Qwen3.6 patches for common
+Currently **174 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -38,7 +38,9 @@ custom operator and provide typed optional pointers for greedy rejection samplin
 They also honor the resolved FP8 expert dtype when converted checkpoints omit
 the HF metadata field. The final five patches adapt the v0.28 Model Runner V2 rejection kernels to MUSA Triton scalar-predicate and
 Gumbel-helper contracts without changing the upstream acceptance or resampling
-algorithm. DeepSeek-V4 remains on Model Runner V1 by default on MUSA for its
+algorithm. DeepSeek-V4 score FP32 projections keep the MUSA DeepGEMM path
+through the DSpark-4 decode graph's M=80 ladder shape; long-prefill shapes
+remain on the existing fallback. DeepSeek-V4 remains on Model Runner V1 by default on MUSA for its
 faster FULL_DECODE_ONLY serving path; users and V2-only speculative paths can
 still opt into Model Runner V2 explicitly. DeepSeek-V4 512-d sparse C4/C128 compression on decode rows
 1..128 is dispatched to a native MUSA kernel, with Triton kept as the
