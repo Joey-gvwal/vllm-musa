@@ -87,8 +87,11 @@ def test_o_proj_gemv_uses_calibrated_capture_ladder_tiles() -> None:
     assert "case 1:" in helper and "case 2:" in helper and "case 8:" in helper
     assert "BlockConfig{4, 32" in helper
     assert "case 4:" in helper and "case 32:" in helper and "case 64:" in helper
+    assert "case 20:" in helper and "case 40:" in helper and "case 80:" in helper
     assert "BlockConfig{8, 16" in helper
     assert "case 16:" in helper and "BlockConfig{32, 4" in helper
+    assert "bseqlen != 20" in source and "bseqlen != 40" in source
+    assert "bseqlen == 80" in source
 
     dispatch = generic[
         generic.index("BlockConfig forced_config") : generic.index("switch (")

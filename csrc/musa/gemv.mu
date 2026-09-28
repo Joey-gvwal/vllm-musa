@@ -656,15 +656,20 @@ bool SelectDeepSeekV4Fp8OProjTile(
 
     // DeepSeek-V4 TP8 O-proj is [M,4096] x [1024,4096]^T.  The platform's
     // VLLM_MUSA_GEMV_MOE_BLOCK=16x8 default belongs to routed MoE, but the
-    // non-MoE GEMV historically consumed it too.  Cold-L2 calibration on an
-    // S5000 mp60 shows that the production graph-capture ladder needs more N
-    // tiles at small M and different K reductions as M grows.  Match only the
-    // exact O-proj contract; unsupported/eager sizes retain the generic path.
+    // non-MoE GEMV historically consumed it too.  MP56/MP60 calibration shows
+    // that the DSpark-4 graph ladder needs the 8x16 reduction for M=20/40/80.
+    // Match only the exact O-proj contract; unsupported/eager sizes retain the
+    // generic path.
     switch (bseqlen) {
         case 1:
         case 2:
         case 8:
             *config = BlockConfig{4, 32, 0.f, true};
+            break;
+        case 20:
+        case 40:
+        case 80:
+            *config = BlockConfig{8, 16, 0.f, true};
             break;
         case 4:
         case 32:
@@ -695,14 +700,18 @@ bool SelectDeepSeekV4Fp8SharedGateUpTile(
     BlockConfig* config) {
     if (current_arch < 300 || !is_fp8 || use_swigelu || use_rms_norm ||
         use_int4_w4a16 || reduce_size != 512 || hidden_size != 4096 ||
-        nr_n != 512 || scale_k_group_tile != 128 || bseqlen != 1) {
+        nr_n != 512 || scale_k_group_tile != 128 ||
+        (bseqlen != 1 && bseqlen != 20 && bseqlen != 40 && bseqlen != 80)) {
         return false;
     }
 
     // Python dispatch already limits this exact contract to the DeepSeek-V4
     // TP8 shared-expert gate-up layer.  Select the cold-L2 winner here before
     // the routed-MoE 16x8 environment default can leak into the dense GEMV.
-    *config = BlockConfig{4, 32, 0.f, true};
+    *config = bseqlen == 80
+        ? BlockConfig{16, 8, 0.f, true}
+        : (bseqlen == 1 ? BlockConfig{4, 32, 0.f, true}
+                        : BlockConfig{8, 16, 0.f, true});
     return IsForcedBlockConfigValid(*config, nr_n, hidden_size, vlen);
 }
 
