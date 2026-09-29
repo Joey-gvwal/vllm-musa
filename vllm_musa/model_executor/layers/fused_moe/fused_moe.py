@@ -1903,6 +1903,24 @@ if not hasattr(_upstream_fused_moe, "_musa_original_fused_experts_impl"):
     )
 
 
+@contextlib.contextmanager
+def _upstream_triton_config_scope(config: dict[str, int] | None):
+    """Override the upstream fused-MoE Triton config for one call."""
+    if config is None:
+        yield
+        return
+    # MUSA: upstream override_config() leaves the override in place when the
+    # body raises, so restore the previous config explicitly.
+    from vllm.model_executor.layers import fused_moe as upstream_fused_moe_pkg
+
+    previous = upstream_fused_moe_pkg.get_config()
+    upstream_fused_moe_pkg._config = config
+    try:
+        yield
+    finally:
+        upstream_fused_moe_pkg._config = previous
+
+
 def _musa_fused_experts_impl_dispatch(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -1930,6 +1948,8 @@ def _musa_fused_experts_impl_dispatch(
     w2_bias: torch.Tensor | None = None,
     gemm1_clamp_limit: float | None = None,
 ) -> torch.Tensor:
+    if gemm1_clamp_limit is not None and gemm1_clamp_limit <= 0:
+        raise ValueError(f"gemm1_clamp_limit must be positive, got {gemm1_clamp_limit}")
     backend = MusaFusedMoeBackend.UPSTREAM
     policy = None
     shape = None
@@ -2367,13 +2387,7 @@ def _musa_fused_experts_impl_dispatch(
         if backend == MusaFusedMoeBackend.UPSTREAM and shape is not None
         else None
     )
-    if triton_config is not None:
-        from vllm.model_executor.layers.fused_moe import override_config
-
-        config_scope = override_config(triton_config)
-    else:
-        config_scope = contextlib.nullcontext()
-    with config_scope:
+    with _upstream_triton_config_scope(triton_config):
         return _upstream_fused_moe._musa_original_fused_experts_impl(
             hidden_states,
             w1,

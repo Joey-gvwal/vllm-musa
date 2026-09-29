@@ -158,26 +158,8 @@ def _dsv4_tp8_shape(multiprocessor_count, graph_mode):
 def test_mp56_dsv4_triton_configs_cover_the_upstream_decode_ladder():
     for graph_mode in ("eager", "capture"):
         shape = _dsv4_tp8_shape(56, graph_mode)
-        # Every upstream-routed target (5R) and draft (4R) decode shape.
-        for num_tokens in (
-            10,
-            12,
-            15,
-            16,
-            20,
-            24,
-            25,
-            28,
-            32,
-            35,
-            40,
-            48,
-            50,
-            60,
-            64,
-            65,
-            80,
-        ):
+        # Every calibrated target (5R) and draft (4R) decode shape.
+        for num_tokens in sorted(POLICY._DSV4_TP8_MP56_TRITON_CONFIGS):
             config = POLICY.triton_config_for_shape(shape, num_tokens)
             assert config is not None, num_tokens
             assert config["BLOCK_SIZE_M"] == 16
@@ -212,7 +194,26 @@ def test_upstream_fallback_applies_calibrated_triton_config_only():
     source = FUSED_MOE_PATH.read_text()
     assert "triton_config_for_shape(shape, hidden_states.shape[0])" in source
     assert "if backend == MusaFusedMoeBackend.UPSTREAM and shape is not None" in source
-    assert "override_config(triton_config)" in source
+    assert "with _upstream_triton_config_scope(triton_config):" in source
+    tree = ast.parse(source)
+    scope = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_upstream_triton_config_scope"
+    )
+    # The previous config is restored even when the fused-experts call raises.
+    tries = [node for node in ast.walk(scope) if isinstance(node, ast.Try)]
+    assert tries and any(
+        "_config = previous" in ast.unparse(stmt)
+        for node in tries
+        for stmt in node.finalbody
+    )
+
+
+def test_fused_experts_dispatch_rejects_non_positive_clamp_limit():
+    source = FUSED_MOE_PATH.read_text()
+    assert "if gemm1_clamp_limit is not None and gemm1_clamp_limit <= 0:" in source
 
 
 def test_grouped_gemm_is_never_selected_during_capture():

@@ -385,21 +385,27 @@ def _try_mhc_fused_post_prenorm_musa(
         residual_cur,
     )
 
+    fused_result = None
     if _mhc_pre_decode_norm_fuse_supported(residual_cur, norm_weight):
-        post_mix_cur, comb_mix_cur, layer_input_cur = _mhc_pre_decode_norm_fuse(
-            gemm_out_mul,
-            gemm_out_sqrsum,
-            hc_scale,
-            hc_base,
-            residual_cur,
-            norm_weight,
-            norm_eps,
-            rms_eps,
-            hc_pre_eps,
-            hc_sinkhorn_eps,
-            hc_post_mult_value,
-            sinkhorn_repeat,
-        )
+        try:
+            fused_result = _mhc_pre_decode_norm_fuse(
+                gemm_out_mul,
+                gemm_out_sqrsum,
+                hc_scale,
+                hc_base,
+                residual_cur,
+                norm_weight,
+                norm_eps,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+            )
+        except (ImportError, OSError, NotImplementedError, RuntimeError):
+            fused_result = None
+    if fused_result is not None:
+        post_mix_cur, comb_mix_cur, layer_input_cur = fused_result
         return (
             residual_cur.view(*outer_shape, hc_mult, hidden_size),
             post_mix_cur.view(*outer_shape, hc_mult, 1),
@@ -962,6 +968,8 @@ def _mhc_pre_decode_norm_fuse_supported(
     return (
         norm_weight is not None
         and residual_flat.device.type == "musa"
+        and residual_flat.dtype == torch.bfloat16
+        and residual_flat.is_contiguous()
         and 0 < num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS
         and hc_mult == 4
         and hidden_size == 4096
