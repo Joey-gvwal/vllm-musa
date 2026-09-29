@@ -187,6 +187,12 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _musa_ops), musa_ops) {
                 &deepseek_v4_indexer_rerank_prefill);
 
   musa_ops.def(
+      "deepseek_v4_sparse_indexer_topk_decode(Tensor logits, Tensor seq_lens, "
+      "Tensor! topk_indices, int topk) -> ()");
+  musa_ops.impl("deepseek_v4_sparse_indexer_topk_decode", torch::kMUSA,
+                &deepseek_v4_sparse_indexer_topk_decode);
+
+  musa_ops.def(
       "sparse_indexer_fill_all(Tensor lengths, Tensor! topk_indices, int topk) "
       "-> ()");
   musa_ops.impl("sparse_indexer_fill_all", torch::kMUSA,

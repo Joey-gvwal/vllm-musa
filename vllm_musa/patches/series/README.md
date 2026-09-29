@@ -17,7 +17,7 @@ is pre-patched.
   Author headers are normalized to the synthetic
   `musa <musa@local>` identity.
 
-Currently **176 patches**. This branch includes the Qwen3.6 patches for common
+Currently **177 patches**. This branch includes the Qwen3.6 patches for common
 GDN decode metadata reuse, uniform-decode SSM slot-mapping removal, and the
 BF16 W1 tile specialization, plus the contract-bound DeepSeek-V4 MTP
 sparse-prefill headroom and mixed-prefill queue-fence patches. It additionally
@@ -44,7 +44,8 @@ remain on the existing fallback. On contract-matched DeepSeek-V4 DSpark
 deployments, Model Runner V2 replays the uniform decode graph for a remote-
 prefilled request's final prompt token padded to the verify shape. The functional
 fused_experts entry point forwards a model's SwiGLU clamp limit to the routed
-expert activation. DeepSeek-V4 remains on Model Runner V1 by default on MUSA for its
+expert activation. DeepSeek-V4 decode rows select their
+indexer top-k with a dedicated MUSA op; GLM-5.2 keeps the shared one. DeepSeek-V4 remains on Model Runner V1 by default on MUSA for its
 faster FULL_DECODE_ONLY serving path; users and V2-only speculative paths can
 still opt into Model Runner V2 explicitly. DeepSeek-V4 512-d sparse C4/C128 compression on decode rows
 1..128 is dispatched to a native MUSA kernel, with Triton kept as the

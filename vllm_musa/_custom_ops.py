@@ -808,6 +808,20 @@ def sparse_indexer_topk_decode(
     )
 
 
+def deepseek_v4_sparse_indexer_topk_decode(
+    logits: torch.Tensor,
+    seq_lens: torch.Tensor,
+    topk_indices: torch.Tensor,
+    topk: int,
+) -> None:
+    return torch.ops._C_musa_ops.deepseek_v4_sparse_indexer_topk_decode(
+        logits,
+        seq_lens,
+        topk_indices,
+        topk,
+    )
+
+
 def glm52_indexer_topk_decode(
     q_quant: torch.Tensor,
     kv_cache: torch.Tensor,
