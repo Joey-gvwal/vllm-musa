@@ -586,6 +586,7 @@ def _silu_mul_per_token_group_fp8_quant_musa_large(
     input_tensor: torch.Tensor,
     output: torch.Tensor,
     group_size: int,
+    swiglu_limit: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     assert input_tensor.dim() == 2
     assert input_tensor.is_contiguous()
@@ -602,6 +603,18 @@ def _silu_mul_per_token_group_fp8_quant_musa_large(
     from vllm_musa.jit_kernel.csrc.quant import per_token_group_quant_8bit
 
     fp8_min, fp8_max = get_fp8_min_max()
+    if swiglu_limit is not None:
+        torch.ops._C_musa_ops.silu_and_mul_clamp_per_token_group_fp8_quant(
+            input_tensor,
+            output,
+            output_s,
+            group_size,
+            1e-10,
+            fp8_min,
+            fp8_max,
+            swiglu_limit,
+        )
+        return output, output_s
     per_token_group_quant_8bit(
         input_tensor,
         output,
@@ -627,6 +640,7 @@ def _musa_fp8_moe_grouped_gemm_impl(
     expert_map: torch.Tensor | None,
     inplace: bool,
     log_selection: bool = True,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor:
     from vllm.model_executor.layers.fused_moe.deep_gemm_utils import (
         deepgemm_moe_permute,
@@ -686,6 +700,7 @@ def _musa_fp8_moe_grouped_gemm_impl(
             mm1_out.view(-1, N),
             a2q,
             group_size=128,
+            swiglu_limit=swiglu_limit,
         )
 
         mm2_out = torch.empty(
@@ -743,6 +758,7 @@ def _maybe_musa_fp8_moe_grouped_gemm(
     block_shape: list[int] | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor | None:
     global _DEEPGEMM_PREFILL_WARNED, _MUSA_GROUPED_GEMM_AVAILABLE
 
@@ -787,6 +803,7 @@ def _maybe_musa_fp8_moe_grouped_gemm(
             w2_scale=w2_scale,
             expert_map=expert_map,
             inplace=inplace,
+            swiglu_limit=swiglu_limit,
         )
     except Exception as exc:
         _MUSA_GROUPED_GEMM_AVAILABLE = False
@@ -811,6 +828,7 @@ def _musa_fp8_moe_deepgemm_prefill_impl(
     w1_scale: torch.Tensor,
     w2_scale: torch.Tensor,
     inplace: bool,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor:
     """Run the fused-glue contiguous DeepGEMM prefill implementation."""
 
@@ -841,6 +859,7 @@ def _musa_fp8_moe_deepgemm_prefill_impl(
             expert_map=None,
             inplace=inplace,
             log_selection=False,
+            swiglu_limit=swiglu_limit,
         )
 
     from vllm.utils.deep_gemm import (
@@ -900,7 +919,7 @@ def _musa_fp8_moe_deepgemm_prefill_impl(
             (all_tokens, N // 2), device=device, dtype=torch.float8_e4m3fn
         )
         a2q, a2q_scale = _silu_mul_per_token_group_fp8_quant_musa_large(
-            mm1_out.view(-1, N), a2q, group_size=128
+            mm1_out.view(-1, N), a2q, group_size=128, swiglu_limit=swiglu_limit
         )
 
         mm2_out = torch.empty((all_tokens, K), device=device, dtype=hidden_states.dtype)
@@ -1051,6 +1070,7 @@ def _maybe_moe_deepgemm_prefill(
     block_shape: list[int] | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    swiglu_limit: float | None = None,
 ) -> torch.Tensor | None:
     global _DEEPGEMM_PREFILL_WARNED
 
@@ -1090,6 +1110,7 @@ def _maybe_moe_deepgemm_prefill(
             w1_scale=w1_scale,
             w2_scale=w2_scale,
             inplace=inplace,
+            swiglu_limit=swiglu_limit,
         )
     except Exception as exc:
         if not _DEEPGEMM_PREFILL_WARNED:
@@ -1648,6 +1669,7 @@ def fused_experts_impl(
     inplace: bool = False,
     _allow_deepgemm_prefill: bool = True,
     _gemv_block: tuple[int, int] = (0, 0),
+    _swiglu_limit: float | None = None,
 ) -> torch.Tensor:
     # Check constraints.
     if use_int4_w4a16:
@@ -1744,6 +1766,7 @@ def fused_experts_impl(
             block_shape=block_shape,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            swiglu_limit=_swiglu_limit,
         )
         if deepgemm_prefill_output is not None:
             return deepgemm_prefill_output
@@ -1844,6 +1867,7 @@ def fused_experts_impl(
             use_swigelu=True,
             block_n=gemv_block_n,
             block_k=gemv_block_k,
+            swiglu_limit=_swiglu_limit or 0.0,
         )
         musa_ops.musa_fused_gemv_moe(
             curr_intermediate_cache2,
@@ -1902,6 +1926,7 @@ def _musa_fused_experts_impl_dispatch(
     block_shape: list[int] | None = None,
     w1_bias: torch.Tensor | None = None,
     w2_bias: torch.Tensor | None = None,
+    gemm1_clamp_limit: float | None = None,
 ) -> torch.Tensor:
     backend = MusaFusedMoeBackend.UPSTREAM
     policy = None
@@ -2168,6 +2193,7 @@ def _musa_fused_experts_impl_dispatch(
             block_shape=block_shape,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            swiglu_limit=gemm1_clamp_limit,
         )
         if grouped_output is not None:
             return grouped_output
@@ -2175,6 +2201,7 @@ def _musa_fused_experts_impl_dispatch(
         gemv_kwargs = {
             "inplace": False,
             "_allow_deepgemm_prefill": False,
+            "_swiglu_limit": gemm1_clamp_limit,
         }
         if requested_gemv_block != (0, 0):
             gemv_kwargs["_gemv_block"] = requested_gemv_block
@@ -2247,6 +2274,7 @@ def _musa_fused_experts_impl_dispatch(
 
     bf16_prefill_candidate = (
         _MUSA_FUSED_MOE_REQUESTED_BACKEND == MusaFusedMoeBackend.AUTO
+        and gemm1_clamp_limit is None
         and not prefer_upstream_qwen_prefill
         and not use_fp8_w8a8
         and hidden_states.shape[0] >= _DEEPGEMM_BF16_PREFILL_MIN_TOKENS
@@ -2327,6 +2355,7 @@ def _musa_fused_experts_impl_dispatch(
             block_shape=block_shape,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            swiglu_limit=gemm1_clamp_limit,
         )
         if deepgemm_prefill_output is not None:
             return deepgemm_prefill_output
@@ -2356,6 +2385,7 @@ def _musa_fused_experts_impl_dispatch(
         block_shape,
         w1_bias,
         w2_bias,
+        gemm1_clamp_limit=gemm1_clamp_limit,
     )
 
 

@@ -19,7 +19,8 @@ void musa_fused_gemv_moe(
     bool use_int4_w4a16,
     bool use_swigelu,
     int64_t block_n,
-    int64_t block_k);
+    int64_t block_k,
+    double swiglu_limit);
 
 void musa_fused_gemv(
     torch::Tensor &A,

@@ -33,6 +33,7 @@ def musa_fused_gemv_moe(
     use_swigelu: bool,
     block_n: int = 0,
     block_k: int = 0,
+    swiglu_limit: float = 0.0,
 ) -> None:
     return torch.ops._C_musa_ops.musa_fused_gemv_moe(
         A,
@@ -48,6 +49,7 @@ def musa_fused_gemv_moe(
         use_swigelu,
         block_n,
         block_k,
+        swiglu_limit,
     )
 
 
