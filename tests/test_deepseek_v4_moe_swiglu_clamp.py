@@ -99,3 +99,28 @@ def test_moe_gemv_swiglu_epilogue_matches_reference(limit: float) -> None:
         d = n2 // 2
         ref = torch.nn.functional.silu(gate_up[:, :d]) * gate_up[:, d:]
     torch.testing.assert_close(out.float(), ref, rtol=2e-2, atol=2e-1)
+
+
+def test_upstream_clamped_activation_matches_reference() -> None:
+    torch = pytest.importorskip("torch")
+    if not (hasattr(torch, "musa") and torch.musa.is_available()):
+        pytest.skip("MUSA-only test")
+    import vllm._custom_ops  # noqa: F401  (loads the stable-ABI activation ops)
+    from vllm.model_executor.layers.fused_moe.activation import (
+        ApplyMoEActivationConfig,
+        MoEActivation,
+        apply_moe_activation,
+    )
+
+    torch.manual_seed(0)
+    x = torch.randn(40, 512, device="musa", dtype=torch.bfloat16) * 12
+    out = torch.empty(40, 256, device="musa", dtype=torch.bfloat16)
+    apply_moe_activation(
+        MoEActivation.SILU,
+        out,
+        x,
+        activation_config=ApplyMoEActivationConfig(clamp_limit=10.0),
+    )
+    torch.testing.assert_close(
+        out.float(), _clamped_swiglu_ref(x.float(), 10.0), rtol=2e-2, atol=5e-2
+    )
