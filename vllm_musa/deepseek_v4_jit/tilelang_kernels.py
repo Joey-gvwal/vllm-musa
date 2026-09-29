@@ -855,13 +855,11 @@ def mhc_pre_decode_norm_fuse_kernel(
                 if role == 0:
                     if tx < hc_mult:
                         rms_for_layer = T.rsqrt(
-                            col_sums[hc_mult3] / float(hc_mult * hidden_size)
-                            + rms_eps
+                            col_sums[hc_mult3] / float(hc_mult * hidden_size) + rms_eps
                         )
                         pre_shared[tx] = (
                             T.sigmoid(
-                                col_sums[tx] * rms_for_layer * hc_scale[0]
-                                + hc_base[tx]
+                                col_sums[tx] * rms_for_layer * hc_scale[0] + hc_base[tx]
                             )
                             + hc_pre_eps
                         )
@@ -1007,9 +1005,7 @@ def mhc_pre_decode_norm_fuse_kernel(
                                 cm[j, k] = cm[j, k] / (row_sum[j] + hc_sinkhorn_eps)
                             T.reduce_sum(cm, col_sum_cm, dim=0)
                             for j, k in T.Parallel(hc_mult, hc_mult):
-                                cm[j, k] = cm[j, k] / (
-                                    col_sum_cm[k] + hc_sinkhorn_eps
-                                )
+                                cm[j, k] = cm[j, k] / (col_sum_cm[k] + hc_sinkhorn_eps)
 
                         for j, k in T.Parallel(hc_mult, hc_mult):
                             comb_mix[token_id, j * hc_mult + k] = cm[j, k]

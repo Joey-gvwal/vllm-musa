@@ -160,9 +160,7 @@ def test_mhc_pre_decode_norm_fuse_is_shape_bounded_and_wired():
     kernels_tree = ast.parse(kernels)
     supported = _function_node(source_tree, "_mhc_pre_decode_norm_fuse_supported")
     with_norm = _function_node(source_tree, "mhc_pre_musa_with_norm")
-    fused_post_prenorm = _function_node(
-        source_tree, "_try_mhc_fused_post_prenorm_musa"
-    )
+    fused_post_prenorm = _function_node(source_tree, "_try_mhc_fused_post_prenorm_musa")
     factory = _function_node(kernels_tree, "mhc_pre_decode_norm_fuse_kernel")
     supported_source = ast.unparse(supported)
 

@@ -10,8 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 FUSED_MOE = ROOT / "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
 SERIES_PATCH = (
-    ROOT
-    / "vllm_musa/patches/series/"
+    ROOT / "vllm_musa/patches/series/"
     "0176-MUSA-pass-the-SwiGLU-clamp-through-functional-fused_.patch"
 )
 
@@ -87,8 +86,18 @@ def test_moe_gemv_swiglu_epilogue_matches_reference(limit: float) -> None:
     out = torch.empty(tokens * topk, n2 // 2, device="musa", dtype=torch.bfloat16)
 
     musa_ops.musa_fused_gemv_moe(
-        a, w, out, None, None, topk_w, topk_ids, False, topk, False,
-        use_swigelu=True, swiglu_limit=limit,
+        a,
+        w,
+        out,
+        None,
+        None,
+        topk_w,
+        topk_ids,
+        False,
+        topk,
+        False,
+        use_swigelu=True,
+        swiglu_limit=limit,
     )
     gate_up = torch.einsum("tk,tjnk->tjn", a.float(), w[topk_ids.long()].float())
     gate_up = gate_up.reshape(tokens * topk, n2)

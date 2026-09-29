@@ -159,7 +159,25 @@ def test_mp56_dsv4_triton_configs_cover_the_upstream_decode_ladder():
     for graph_mode in ("eager", "capture"):
         shape = _dsv4_tp8_shape(56, graph_mode)
         # Every upstream-routed target (5R) and draft (4R) decode shape.
-        for num_tokens in (10, 12, 15, 16, 20, 24, 25, 28, 32, 35, 40, 48, 50, 60, 64, 65, 80):
+        for num_tokens in (
+            10,
+            12,
+            15,
+            16,
+            20,
+            24,
+            25,
+            28,
+            32,
+            35,
+            40,
+            48,
+            50,
+            60,
+            64,
+            65,
+            80,
+        ):
             config = POLICY.triton_config_for_shape(shape, num_tokens)
             assert config is not None, num_tokens
             assert config["BLOCK_SIZE_M"] == 16
