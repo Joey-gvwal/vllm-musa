@@ -82,7 +82,7 @@ def try_musa_deepseek_v4_fp8_einsum_gemv(
     out: torch.Tensor,
     equation: str,
 ) -> tuple[bool, str]:
-    """Dispatch ``bhr,hdr->bhd`` to DeepGEMM (M >= 8) or the fused GEMV."""
+    """Dispatch ``bhr,hdr->bhd`` to DeepGEMM or, for small M, the fused GEMV."""
     if equation != "bhr,hdr->bhd":
         return False, f"unsupported equation {equation!r}"
     if activation.dim() != 3 or out.dim() != 3:

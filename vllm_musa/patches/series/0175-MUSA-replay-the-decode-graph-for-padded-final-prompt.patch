@@ -1,13 +1,13 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Wed, 30 Sep 2026 09:56:31 +0800
+Date: Tue, 29 Sep 2026 11:28:25 +0800
 Subject: [PATCH] MUSA: replay the decode graph for padded final prompt tokens
 
 The scheduler pads a remote-prefilled request's final prompt token with
-placeholder drafts to the uniform verify shape, but MRV2 treated the request
-as prefilling and ran the whole batch eagerly. For contract-matched
-DeepSeek-V4 DSpark deployments such a request keeps its prompt input
-preparation and no longer blocks the uniform decode graph.
+placeholder drafts to the uniform verify shape. For contract-matched
+DeepSeek-V4 DSpark deployments, schedule such a request with the uniform
+decode batch while keeping its prompt input preparation, so the step replays
+the captured decode graph.
 ---
  vllm/v1/worker/gpu/model_runner.py | 34 ++++++++++++++++++++++++++++--
  1 file changed, 32 insertions(+), 2 deletions(-)

@@ -1,14 +1,12 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
-Date: Wed, 30 Sep 2026 09:56:32 +0800
+Date: Tue, 29 Sep 2026 14:30:21 +0800
 Subject: [PATCH] MUSA: shorten the DFlash input-prep padding tail
 
 The last request's program pads the per-request and query-slot buffers up to
-max_num_reqs and max_num_tokens with BLOCK_SIZE-wide stores, where BLOCK_SIZE
-is the per-request token span (16 for a 5-token verify step).  Padding
-max_num_tokens that way runs hundreds of serial iterations in one program on
-every draft step.  Pad with a fixed 1024-wide block instead; the stored
-values are unchanged.
+max_num_reqs and max_num_tokens. The padding loops use a fixed 1024-wide
+block, independent of the per-request token span, so padding max_num_tokens
+takes a few iterations per draft step. The stored values are unchanged.
 ---
  .../gpu/spec_decode/dflash/speculator.py      | 19 +++++++++++--------
  1 file changed, 11 insertions(+), 8 deletions(-)

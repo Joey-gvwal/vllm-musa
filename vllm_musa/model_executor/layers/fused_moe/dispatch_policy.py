@@ -258,14 +258,11 @@ _CALIBRATED_THRESHOLDS.update(
             graph_mode=graph_mode,
         ): _thresholds(
             # Same DSV4 TP8 per-rank shape as MP48/MP60. On MP56 the native
-            # W1/W2 GEMV wins through M=8; from M=10 the calibrated upstream
-            # Triton configs below are faster.
+            # W1/W2 GEMV serves up to 8 tokens; larger batches take the
+            # upstream Triton path with the per-M decode configs below.
             gemv_max_tokens=8,
             grouped_gemm_min_tokens=None,
-            source=(
-                f"s5000-mp56-e256-n512-k4096-{graph_mode}-"
-                "block16-split32-m8"
-            ),
+            source=f"s5000-mp56-e256-n512-k4096-{graph_mode}-block16-split32-m8",
         )
         for graph_mode in ("eager", "capture")
     }
@@ -362,6 +359,7 @@ _CALIBRATED_THRESHOLDS.update(
     }
 )
 
+
 def _triton_config(block_n: int, num_warps: int) -> dict[str, int]:
     return {
         "BLOCK_SIZE_M": 16,
@@ -373,9 +371,9 @@ def _triton_config(block_n: int, num_warps: int) -> dict[str, int]:
     }
 
 
-# Cold-L2 MP56 sweep of the DSV4 TP8 decode ladder (target M=5R, DSpark
-# draft M=4R). The generic tuned table falls back to BLOCK_M=64/BLOCK_K=32
-# around M=24-28, which is 1.8x slower than BLOCK_M=16 here.
+# Per-M Triton configs for the DSV4 TP8 decode ladder on MP56 (target M=5R,
+# DSpark draft M=4R). BLOCK_M=16 keeps these batches off the generic table's
+# BLOCK_M=64/BLOCK_K=32 configs.
 _DSV4_TP8_MP56_TRITON_CONFIGS: Final = {
     10: _triton_config(128, 8),
     12: _triton_config(64, 4),
