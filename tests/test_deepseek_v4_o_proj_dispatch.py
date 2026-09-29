@@ -35,7 +35,8 @@ def test_o_proj_uses_fixed_deepgemm_threshold() -> None:
     )
 
     assert isinstance(threshold.value, ast.Constant)
-    assert threshold.value.value == 128
+    # Multi-request decode batches (M >= 8) must not stay on the per-row GEMV.
+    assert threshold.value.value == 8
     assert "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_IMPL" not in source
     assert "VLLM_MUSA_DEEPSEEK_V4_FP8_EINSUM_DEEPGEMM_MIN_TOKENS" not in source
 
