@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import contextlib
 import json
 import os
 import time
@@ -35,6 +36,7 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     parse_dispatch_backend,
     select_fused_moe_backend,
     thresholds_for_shape,
+    triton_config_for_shape,
 )
 from vllm_musa.optimization_contract import (
     matches_qwen35_moe_bf16_decode_gemv_layer,
@@ -2360,33 +2362,45 @@ def _musa_fused_experts_impl_dispatch(
         if deepgemm_prefill_output is not None:
             return deepgemm_prefill_output
 
-    return _upstream_fused_moe._musa_original_fused_experts_impl(
-        hidden_states,
-        w1,
-        w2,
-        topk_weights,
-        topk_ids,
-        activation,
-        apply_router_weight_on_input,
-        use_fp8_w8a8,
-        use_int8_w8a8,
-        use_int8_w8a16,
-        use_int4_w4a16,
-        ocp_mx_scheme,
-        per_channel_quant,
-        global_num_experts,
-        expert_map,
-        w1_scale,
-        w2_scale,
-        w1_zp,
-        w2_zp,
-        a1_scale,
-        a2_scale,
-        block_shape,
-        w1_bias,
-        w2_bias,
-        gemm1_clamp_limit=gemm1_clamp_limit,
+    triton_config = (
+        triton_config_for_shape(shape, hidden_states.shape[0])
+        if backend == MusaFusedMoeBackend.UPSTREAM and shape is not None
+        else None
     )
+    if triton_config is not None:
+        from vllm.model_executor.layers.fused_moe import override_config
+
+        config_scope = override_config(triton_config)
+    else:
+        config_scope = contextlib.nullcontext()
+    with config_scope:
+        return _upstream_fused_moe._musa_original_fused_experts_impl(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            activation,
+            apply_router_weight_on_input,
+            use_fp8_w8a8,
+            use_int8_w8a8,
+            use_int8_w8a16,
+            use_int4_w4a16,
+            ocp_mx_scheme,
+            per_channel_quant,
+            global_num_experts,
+            expert_map,
+            w1_scale,
+            w2_scale,
+            w1_zp,
+            w2_zp,
+            a1_scale,
+            a2_scale,
+            block_shape,
+            w1_bias,
+            w2_bias,
+            gemm1_clamp_limit=gemm1_clamp_limit,
+        )
 
 
 _upstream_fused_moe.fused_experts_impl = _musa_fused_experts_impl_dispatch
