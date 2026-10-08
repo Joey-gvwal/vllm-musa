@@ -1,30 +1,22 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wzc-claude <wzc-claude@local>
-Date: Wed, 23 Sep 2026 17:20:00 +0800
-Subject: [PATCH] MUSA: make the QSA TileLang kernels the only supported path
+Date: Wed, 8 Oct 2026 10:00:00 +0800
+Subject: [PATCH] MUSA: make the QSA TileLang prefill kernel the default
 
-The prefill and decode TileLang kernels were behind VLLM_MUSA_QSA_TILELANG and
-VLLM_MUSA_QSA_TILELANG_DECODE while their paged-cache addressing was being
-validated. Both dispatches and the pre-capture prewarm now run whenever the
-shape family allows it.
+The prefill kernel is never slower than the Triton path and is 20% better on
+time-to-first-token at short context, so it no longer needs a gate. The decode
+kernel costs 2.5% per output token at every context measured, so it stays behind
+VLLM_MUSA_QSA_TILELANG_DECODE and decode keeps using the Triton path.
 
 The tilelang_ok capability gate is unchanged, so an unsupported dtype, head
 count, head size or non-contiguous page layout still takes the Triton sparse
-paged attention path.
+paged attention path. The pre-capture prewarm now always runs, since the prefill
+kernel it builds is always reachable.
 
 ---
 --- a/vllm/models/qwen4_exp/nvidia/qsa.py
 +++ b/vllm/models/qwen4_exp/nvidia/qsa.py
-@@ -6,8 +6,6 @@
- 
- from typing import ClassVar, cast
- 
--import os
--
- import torch
- from torch import nn
- 
-@@ -190,7 +188,6 @@
+@@ -190,7 +190,6 @@
          if key_cache.dtype != torch.bfloat16 or query.dtype != torch.bfloat16:
              raise NotImplementedError("Qwen4Exp QSA requires BF16 Q/K/V")
  
@@ -32,7 +24,7 @@ paged attention path.
          tilelang_ok = (
              current_platform.is_musa()
              and query.dtype == torch.bfloat16
-@@ -201,19 +198,12 @@
+@@ -201,19 +200,12 @@
              and _is_page_contiguous_cache(value_cache)
          )
  
@@ -57,20 +49,7 @@ paged attention path.
              return qsa_prefill(
                  query[:num_tokens],
                  key_cache,
-@@ -224,11 +214,7 @@
-                 output[:num_tokens],
-             )
- 
--        if (
--            tilelang_ok
--            and not use_prefill_config
--            and os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") == "1"
--        ):
-+        if tilelang_ok and not use_prefill_config:
-             from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
-                 qsa_decode_attention,
-             )
-@@ -430,10 +416,6 @@
+@@ -430,10 +422,6 @@
          """
          if not current_platform.is_musa():
              return
