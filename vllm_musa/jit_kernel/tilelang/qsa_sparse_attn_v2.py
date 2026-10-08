@@ -21,6 +21,8 @@ nondeterministic.
 
 import functools
 
+import os
+
 import tilelang
 import tilelang.language as T
 import torch
@@ -39,12 +41,17 @@ if hasattr(tilelang.PassConfigKey, "TL_DISABLE_THREAD_STORAGE_SYNC"):
     _PASS_CONFIGS[tilelang.PassConfigKey.TL_DISABLE_THREAD_STORAGE_SYNC] = False
 # A page of the packed KV slab is megabytes apart from the next, so a physical
 # block index times that stride leaves the 2 GiB a 32-bit byte offset can reach
-# and wraps to an address below the cache. Global buffer indices must be 64-bit;
-# TileLang keeps the shared-memory indices 32-bit either way.
+# and wraps to an address below the cache. Global buffer indices must then be
+# 64-bit, which costs about 13% of time-to-first-token.
+#
+# One page per block keeps every offset well inside 32 bits, so the narrow
+# indices are safe there. The width is tied to that layout rather than chosen
+# independently: 32-bit indices on the packed slab would fault again.
+_INDEX_BITWIDTH = 32 if os.environ.get("VLLM_MUSA_UNPACKED_KV") == "1" else 64
 for _key, _value in (
     ("TL_DISABLE_SAFE_COPY_PREDICATION", True),
     ("TL_DISABLE_SAFE_ROBUST_COPY_PREDICATION", True),
-    ("TL_CONFIG_INDEX_BITWIDTH", 64),
+    ("TL_CONFIG_INDEX_BITWIDTH", _INDEX_BITWIDTH),
 ):
     if hasattr(tilelang.PassConfigKey, _key):
         _PASS_CONFIGS[getattr(tilelang.PassConfigKey, _key)] = _value
