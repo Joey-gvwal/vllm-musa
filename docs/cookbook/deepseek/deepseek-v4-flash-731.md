@@ -206,7 +206,7 @@ export MC_TE_FILTERS="${RDMA_DEVICES}"
 export MC_ENABLE_DEST_DEVICE_AFFINITY=1
 export VLLM_MOONCAKE_BOOTSTRAP_PORT=8998
 
-CUDAGRAPH_CAPTURE_SIZES="5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80"
+CUDAGRAPH_CAPTURE_SIZES="5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100,105,110,115,120,125,130,135,140,145,150,155,160,200,240,280,320"
 
 vllm serve "${MODEL_PATH}" \
   --trust-remote-code \
@@ -276,9 +276,11 @@ print(response.choices[0].message.content)
   sparse-prefill workspace.
 - Prefill keeps the GPU prefix cache off and relies on the Mooncake store for
   prefix reuse. It does not capture CUDA graphs because it only runs prefill.
-- Decode capture sizes list every DSpark-4 step of 1-16 concurrent requests
-  (5 tokens per request, 5-80 tokens). vLLM rounds a capture size up to a
-  multiple of 5, so a missing size runs the batch in the next larger graph.
+- Decode capture sizes list every DSpark-4 step of 1-32 concurrent requests
+  (5 tokens per request, 5-160 tokens) and 40, 48, 56 and 64 requests, up to
+  `--max-num-seqs 64`. vLLM rounds a capture size up to a multiple of 5, so a
+  missing size runs the batch in the next larger graph; batches above the
+  largest graph run eagerly.
 - `--global_segment_size=400GB` sizes the store for 128K-input traffic up to
   16 concurrent requests. Mooncake starts evicting at 90% of the segment.
 - `MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES` is the SSD staging buffer on the
