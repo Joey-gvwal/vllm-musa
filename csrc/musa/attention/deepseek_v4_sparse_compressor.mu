@@ -174,9 +174,13 @@ deepseek_v4_sparse_save_partial_kernel(
       ape + ape_row * ape_stride, tid);
 }
 
+// The bounds match the launch: one row group for the overlap path, kRowGroups
+// row groups otherwise.
 template <typename WeightT, int kCompressRatio, bool kOverlap,
           int kStateBlockSize>
-__global__ __launch_bounds__(kThreadsPerBlock * kRowGroups) void
+__global__ __launch_bounds__(kOverlap ? kThreadsPerBlock
+                                      : kThreadsPerBlock * kRowGroups,
+                             kOverlap ? 4 : 1) void
 deepseek_v4_sparse_compressor_kernel(
     const float* __restrict__ state_cache, int64_t state_stride0,
     int64_t state_stride1, const void* __restrict__ token_to_req_indices,
