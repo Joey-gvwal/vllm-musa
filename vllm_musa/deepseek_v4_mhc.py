@@ -957,8 +957,17 @@ def _mhc_pre_deepgemm_big_fuse_provider(
     )
 
 
-# The fused kernel runs one block per token; 128 covers the DSpark-4 decode graphs.
-_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 128
+# The fused kernel runs one block per token; 256 tokens covers 51 DSpark-4
+# decode requests. Above that the unfused path with split-K 32 is faster.
+_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 256
+
+
+def _mhc_pre_decode_norm_fuse_split_k(num_tokens: int, hc_hidden_size: int) -> int:
+    # The generic table drops to split-K 8 above 128 tokens, which is slower for
+    # the fused reduction than 16.
+    if hc_hidden_size == 16384 and 64 < num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS:
+        return 16
+    return _get_mhc_pre_deepgemm_split_k(num_tokens, hc_hidden_size)
 
 
 def _mhc_pre_decode_norm_fuse_supported(
@@ -1076,7 +1085,7 @@ def _mhc_pre_deepgemm_norm_fuse_provider(
     if not _mhc_pre_decode_norm_fuse_supported(residual_flat, norm_weight):
         return None
 
-    split_k = _get_mhc_pre_deepgemm_split_k(
+    split_k = _mhc_pre_decode_norm_fuse_split_k(
         residual_flat.shape[0],
         hc_mult * hidden_size,
     )
