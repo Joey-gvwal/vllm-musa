@@ -1,0 +1,223 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Wed, 8 Oct 2026 12:00:00 +0800
+Subject: [PATCH] MUSA: allow the KV cache to be laid out one page per block
+
+The packed layout puts every layer's page inside one block, so a block index
+times the block stride spans the whole cache and any cache above 2 GiB leaves
+what a 32-bit byte offset reaches. Kernels reading it then have to address in
+64 bits, which costs 13% of time-to-first-token.
+
+VLLM_MUSA_UNPACKED_KV=1 routes the layout to the existing page-size-bucketed
+plan instead, where a block is one page from the next, so 32-bit offsets stay in
+range. Capacity is unchanged because the buckets are sized from the same page
+set.
+
+Three places assumed the packed layout and are taught the unpacked one:
+
+- the Mamba page-alignment helper and the mixed-layout aligner both reached a
+  backend block-dim query that is only implemented for packed groups; with no
+  shared slab there is nothing to align, so they return early or skip.
+- padded KV pages rejected kv-first shapes. A page holds a block's K and V
+  together with the padding after V, so the view is built page-first and the
+  dimensions swapped back, matching the packed branch.
+- the QSA side cache was only constructed from a packed slab. Unpacked it owns
+  its allocation, so its pages sit one page apart; the state layout inside a
+  page is unchanged.
+
+---
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 38c6cba..404e7e6 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1406,7 +1406,16 @@ def _use_musa_deepseek_v4_zero_offset_kv_tensors(
+             if isinstance(layer_spec, SlidingWindowMLASpec):
+                 found_sparse_swa = True
+ 
+-    return found_deepseek_v4 and found_sparse_swa
++    if found_deepseek_v4 and found_sparse_swa:
++        return True
++
++    # MUSA: the packed slab puts every layer's page inside one block, so the
++    # block stride is the whole per-block footprint and a block index times it
++    # spans the entire cache. Past 2 GiB that leaves what a 32-bit byte offset
++    # reaches, which forces 64-bit addressing on every kernel that reads the
++    # cache. Bucketing by page size instead keeps a block one page apart, at
++    # the cost of laying the groups out disjointly rather than overlapped.
++    return os.environ.get("VLLM_MUSA_UNPACKED_KV") == "1"
+ 
+ 
+ _get_kv_cache_config_deepseek_v4 = _get_kv_cache_config_packed
+diff --git a/vllm/v1/worker/gpu/attn_utils.py b/vllm/v1/worker/gpu/attn_utils.py
+index db2acf9..d9b1747 100644
+--- a/vllm/v1/worker/gpu/attn_utils.py
++++ b/vllm/v1/worker/gpu/attn_utils.py
+@@ -246,6 +246,13 @@ def _kv_first_layers_sharing_pool_with_mamba(
+         if tensor.block_stride > 0
+         for layer_name in tensor.shared_by
+     }
++    if not packed_layers:
++        # Without a packed slab each tensor is its own allocation, so no block
++        # id can resolve into another group's page and there is nothing to
++        # align. Returning here also keeps the loop below from asking a backend
++        # for a block dim it does not implement.
++        return set()
++
+     kv_first_layers: set[str] = set()
+     mamba_layers: set[str] = set()
+     for group in attn_groups:
+@@ -259,12 +266,16 @@ def _kv_first_layers_sharing_pool_with_mamba(
+             continue
+         if group.kv_cache_group_id >= len(kernel_block_sizes):
+             continue
+-        block_dim = group.backend.get_kv_cache_block_dim(
+-            kernel_block_sizes[group.kv_cache_group_id],
+-            kv_cache_spec.num_kv_heads,
+-            kv_cache_spec.head_size,
+-            cache_dtype_str=cache_dtype,
+-        )
++        try:
++            block_dim = group.backend.get_kv_cache_block_dim(
++                kernel_block_sizes[group.kv_cache_group_id],
++                kv_cache_spec.num_kv_heads,
++                kv_cache_spec.head_size,
++                cache_dtype_str=cache_dtype,
++            )
++        except NotImplementedError:
++            # A backend that does not publish a block dim cannot be aligned.
++            continue
+         if block_dim != 0:
+             kv_first_layers.update(group.layer_names)
+ 
+@@ -336,23 +347,44 @@ def _reshape_attention_kv_cache(
+         # num-blocks-first layout the only stride that must change is the block
+         # stride: every other (contiguous) stride already steps within the
+         # unpadded region of a page, so no further adjustment is needed.
+-        assert kv_cache_shape[0] == num_blocks, (
+-            "Padded KV pages require a num-blocks-first KV cache layout (got "
+-            f"shape {kv_cache_shape} with num_blocks={num_blocks}); "
+-            "kv-first layouts are not supported."
+-        )
+         dtype_size = get_dtype_size(kv_cache_spec.dtype)
+         page_stride = kv_cache_spec.page_size_bytes // dtype_size
+ 
+-        num_blocks_dim = inv_order[0]
+-        strides = list(torch.empty(permuted_kv_cache_shape, device="meta").stride())
+-        strides[num_blocks_dim] = page_stride
++        if kv_cache_shape[0] == num_blocks:
++            num_blocks_dim = inv_order[0]
++            strides = list(torch.empty(permuted_kv_cache_shape, device="meta").stride())
++            strides[num_blocks_dim] = page_stride
+ 
+-        kv_cache = torch.as_strided(
+-            kv_raw_tensor.view(dtype),
+-            size=permuted_kv_cache_shape,
+-            stride=tuple(strides),
+-        )
++            kv_cache = torch.as_strided(
++                kv_raw_tensor.view(dtype),
++                size=permuted_kv_cache_shape,
++                stride=tuple(strides),
++            )
++        else:
++            # A kv-first layout such as ``(2, num_blocks, ...)`` would have the
++            # override above step the kv dimension instead of the block one.
++            # ``page_size_bytes`` covers a block's K and V together and the
++            # padding sits after V, so page ``b`` holds both halves adjacently.
++            # Build the view page-first, stepping pages by the padded stride so
++            # the inter-page padding is skipped, then swap the dims back.
++            assert kv_cache_shape[1] == num_blocks and kv_cache_stride_order == tuple(
++                range(len(kv_cache_shape))
++            ), (
++                "Padded kv-first KV pages expect a default-strided "
++                f"(kv, num_blocks, ...) layout, got shape {kv_cache_shape} with "
++                f"stride order {kv_cache_stride_order} and "
++                f"num_blocks={num_blocks}."
++            )
++            page_first_shape = (
++                num_blocks,
++                kv_cache_shape[0],
++                *kv_cache_shape[2:],
++            )
++            strides = list(torch.empty(page_first_shape, device="meta").stride())
++            strides[0] = page_stride
++            kv_cache = kv_raw_tensor.view(dtype).as_strided(
++                page_first_shape, tuple(strides)
++            ).transpose(0, 1)
+     elif page_aligned_blocks:
+         # A KV-first layout such as ROCm's ``(2, num_blocks, ...)`` puts block
+         # ``b``'s K and V in two far-apart halves of the allocation, so block
+@@ -426,15 +458,7 @@ def _reshape_kv_cache(
+                 assert kv_raw_tensor.numel() % kv_cache_spec.page_size_bytes == 0
+                 num_blocks = kv_raw_tensor.numel() // kv_cache_spec.page_size_bytes
+ 
+-            if (
+-                packing is not None
+-                and group.backend.get_name() == "QWEN4_EXP_EXP_QSA_STATE"
+-            ):
+-                offset, block_stride = packing
+-                page_bytes = kv_cache_spec.unpadded_page_size_bytes
+-                packed_state = kv_raw_tensor.view(-1, block_stride)[
+-                    :, offset : offset + page_bytes
+-                ].view(kv_cache_spec.dtype)
++            if group.backend.get_name() == "QWEN4_EXP_EXP_QSA_STATE":
+                 state_shape = (
+                     num_blocks,
+                     1,
+@@ -445,9 +469,30 @@ def _reshape_kv_cache(
+                 inner_strides = [1] * len(inner_shape)
+                 for i in range(len(inner_shape) - 2, -1, -1):
+                     inner_strides[i] = inner_strides[i + 1] * inner_shape[i + 1]
+-                kv_caches[layer_name] = packed_state.as_strided(
++                if packing is not None:
++                    offset, block_stride = packing
++                    page_bytes = kv_cache_spec.unpadded_page_size_bytes
++                    state_base = kv_raw_tensor.view(-1, block_stride)[
++                        :, offset : offset + page_bytes
++                    ].view(kv_cache_spec.dtype)
++                    block_elems = state_base.stride(0)
++                else:
++                    # Unpacked: this side cache owns its allocation, so its
++                    # pages sit page_size_bytes apart instead of one slab block
++                    # apart. The state layout inside a page is unchanged.
++                    state_base = kv_raw_tensor.view(kv_cache_spec.dtype)
++                    block_elems = kv_cache_spec.page_size_bytes // get_dtype_size(
++                        kv_cache_spec.dtype
++                    )
++                state_elems = inner_strides[0]
++                assert state_elems <= block_elems, (
++                    f"QSA state page for {layer_name} needs {state_elems} "
++                    f"elements but its block stride is only {block_elems}; "
++                    "the view would alias the next block."
++                )
++                kv_caches[layer_name] = state_base.as_strided(
+                     state_shape,
+-                    (packed_state.stride(0), *inner_strides),
++                    (block_elems, *inner_strides),
+                 )
+                 continue
+ 
+@@ -591,12 +636,17 @@ def _align_mixed_attention_kv_cache_views(
+             continue
+         if group.kv_cache_group_id >= len(kernel_block_sizes):
+             continue
+-        block_dim = group.backend.get_kv_cache_block_dim(
+-            kernel_block_sizes[group.kv_cache_group_id],
+-            kv_cache_spec.num_kv_heads,
+-            kv_cache_spec.head_size,
+-            cache_dtype_str=cache_dtype,
+-        )
++        try:
++            block_dim = group.backend.get_kv_cache_block_dim(
++                kernel_block_sizes[group.kv_cache_group_id],
++                kv_cache_spec.num_kv_heads,
++                kv_cache_spec.head_size,
++                cache_dtype_str=cache_dtype,
++            )
++        except NotImplementedError:
++            # A backend that does not publish a block dim is not one of the
++            # mixed blocks-first/kv-first cases this alignment targets.
++            continue
+         for layer_name in group.layer_names:
+             if layer_name in kv_caches:
+                 block_dims_by_layer[layer_name] = block_dim

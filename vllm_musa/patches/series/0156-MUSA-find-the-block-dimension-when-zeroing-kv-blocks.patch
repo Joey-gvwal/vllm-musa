@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Tue, 22 Sep 2026 15:00:00 +0800
+Subject: [PATCH] MUSA: find the block dimension when zeroing KV blocks
+
+KVBlockZeroer read the block stride off dimension 0. A kv-first cache shape
+such as (2, num_blocks, ...) puts the kv dimension there, so the block stride
+became one whole slab block and the page span grew to cover every block: a
+single block zeroing memset megabytes and wiped the recurrent state and the
+side caches other groups hold in the following slab blocks.
+
+Pick the dimension that steps a whole page instead, and treat the remaining
+dimensions as segment offsets or page extent as before.
+
+---
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -158,16 +158,29 @@
+                 dp = kv.data_ptr()
+ 
+                 el = kv.element_size()
+-                block_stride_bytes = kv.stride(0) * el
++                # The block dimension is the one that steps a whole page. A
++                # kv-first cache shape such as (2, num_blocks, ...) puts a
++                # shorter-striding kv dimension in front of it, so taking
++                # dimension 0 would read the kv stride as the block stride and
++                # span every block in one page.
++                block_dim_candidates = [
++                    d for d in range(kv.ndim) if kv.shape[d] > 1
++                ] or [0]
++                block_dim = max(block_dim_candidates, key=kv.stride)
++                block_stride_bytes = kv.stride(block_dim) * el
+                 assert block_stride_bytes % 4 == 0
+-                assert kv.shape[0] % ratio == 0
++                assert kv.shape[block_dim] % ratio == 0
+                 outer_dims = [
+                     d
+-                    for d in range(1, kv.ndim)
+-                    if kv.stride(d) * el > block_stride_bytes
++                    for d in range(kv.ndim)
++                    if d != block_dim and kv.stride(d) * el > block_stride_bytes
+                 ]
+                 outer_strides = [kv.stride(d) * el for d in outer_dims]
+-                inner_dims = [d for d in range(1, kv.ndim) if d not in outer_dims]
++                inner_dims = [
++                    d
++                    for d in range(kv.ndim)
++                    if d != block_dim and d not in outer_dims
++                ]
+                 kernel_page_bytes = el + sum(
+                     (kv.shape[d] - 1) * kv.stride(d) * el for d in inner_dims
+                 )
