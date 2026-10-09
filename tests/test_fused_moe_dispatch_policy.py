@@ -162,12 +162,14 @@ def test_mp56_dsv4_triton_configs_cover_the_upstream_decode_ladder():
         for num_tokens in sorted(POLICY._DSV4_TP8_MP56_TRITON_CONFIGS):
             config = POLICY.triton_config_for_shape(shape, num_tokens)
             assert config is not None, num_tokens
-            assert config["BLOCK_SIZE_M"] == 16
+            assert config["BLOCK_SIZE_M"] in (16, 32)
             assert config["BLOCK_SIZE_K"] == 128
             assert config["GROUP_SIZE_M"] == 1
             assert config["num_stages"] == 1
+        # 64 DSpark-4 requests are 320 target tokens.
+        assert max(POLICY._DSV4_TP8_MP56_TRITON_CONFIGS) == 320
         # Outside the calibrated range the tuned-folder lookup is kept.
-        for num_tokens in (1, 8, 9, 81, 128, 4096):
+        for num_tokens in (1, 8, 9, 321, 4096):
             assert POLICY.triton_config_for_shape(shape, num_tokens) is None
 
 

@@ -360,9 +360,9 @@ _CALIBRATED_THRESHOLDS.update(
 )
 
 
-def _triton_config(block_n: int, num_warps: int) -> dict[str, int]:
+def _triton_config(block_n: int, num_warps: int, block_m: int = 16) -> dict[str, int]:
     return {
-        "BLOCK_SIZE_M": 16,
+        "BLOCK_SIZE_M": block_m,
         "BLOCK_SIZE_N": block_n,
         "BLOCK_SIZE_K": 128,
         "GROUP_SIZE_M": 1,
@@ -372,8 +372,8 @@ def _triton_config(block_n: int, num_warps: int) -> dict[str, int]:
 
 
 # Per-M Triton configs for the DSV4 TP8 decode ladder on MP56 (target M=5R,
-# DSpark draft M=4R). BLOCK_M=16 keeps these batches off the generic table's
-# BLOCK_M=64/BLOCK_K=32 configs.
+# DSpark draft M=4R, up to 64 requests). BLOCK_M 16 or 32 with BLOCK_K 128
+# keeps these batches off the generic table's configs.
 _DSV4_TP8_MP56_TRITON_CONFIGS: Final = {
     10: _triton_config(128, 8),
     12: _triton_config(64, 4),
@@ -393,6 +393,19 @@ _DSV4_TP8_MP56_TRITON_CONFIGS: Final = {
     64: _triton_config(64, 4),
     65: _triton_config(64, 4),
     80: _triton_config(64, 4),
+    90: _triton_config(64, 4, block_m=32),
+    100: _triton_config(64, 4, block_m=32),
+    110: _triton_config(128, 8),
+    120: _triton_config(64, 4, block_m=32),
+    130: _triton_config(128, 8),
+    140: _triton_config(64, 4),
+    150: _triton_config(64, 4, block_m=32),
+    160: _triton_config(64, 4, block_m=32),
+    180: _triton_config(128, 8),
+    200: _triton_config(128, 8),
+    240: _triton_config(128, 8),
+    280: _triton_config(64, 4),
+    320: _triton_config(128, 8),
 }
 
 # Exact-shape upstream Triton launch configs, keyed by token count. They
