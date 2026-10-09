@@ -943,6 +943,13 @@ void musa_fused_gemv_moe(
     TORCH_CHECK(A.dim() == 2, "A must be dim 2.")
     TORCH_CHECK(B.dim() == 3, "B must be dim 3.")
 
+    // Clamp in the activation dtype, as the clamped SwiGLU quantizer does.
+    if (A.scalar_type() == at::ScalarType::BFloat16) {
+        swiglu_limit = static_cast<float>(c10::BFloat16(static_cast<float>(swiglu_limit)));
+    } else if (A.scalar_type() == at::ScalarType::Half) {
+        swiglu_limit = static_cast<float>(c10::Half(static_cast<float>(swiglu_limit)));
+    }
+
     int32_t bseqlen = A.size(0);
     bool is_fp8 = false;
     if (B.dtype() == torch::kFloat8_e4m3fn) {

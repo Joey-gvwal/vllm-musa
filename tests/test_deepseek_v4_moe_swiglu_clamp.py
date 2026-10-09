@@ -69,7 +69,14 @@ def _clamped_swiglu_ref(gate_up, limit: float):
     return gate * torch.sigmoid(gate) * up
 
 
-@pytest.mark.parametrize("limit", [0.0, 10.0])
+def test_moe_gemv_rounds_the_clamp_limit_to_the_activation_dtype() -> None:
+    source = (ROOT / "csrc/musa/gemv.mu").read_text()
+    assert "c10::BFloat16(static_cast<float>(swiglu_limit))" in source
+    assert "c10::Half(static_cast<float>(swiglu_limit))" in source
+
+
+# 7.1 is not exact in bf16: the epilogue clamps at the bf16-rounded limit.
+@pytest.mark.parametrize("limit", [0.0, 10.0, 7.1])
 def test_moe_gemv_swiglu_epilogue_matches_reference(limit: float) -> None:
     torch = pytest.importorskip("torch")
     if not (hasattr(torch, "musa") and torch.musa.is_available()):
@@ -102,7 +109,9 @@ def test_moe_gemv_swiglu_epilogue_matches_reference(limit: float) -> None:
     gate_up = torch.einsum("tk,tjnk->tjn", a.float(), w[topk_ids.long()].float())
     gate_up = gate_up.reshape(tokens * topk, n2)
     if limit > 0:
-        ref = _clamped_swiglu_ref(gate_up, limit)
+        ref = _clamped_swiglu_ref(
+            gate_up, float(torch.tensor(limit, dtype=torch.bfloat16))
+        )
         assert gate_up.abs().max() > limit
     else:
         d = n2 // 2
