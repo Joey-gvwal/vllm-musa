@@ -26,7 +26,7 @@ constexpr int64_t kThreadsPerBlock = 128;
 constexpr int64_t kWarpsPerBlock = 4;
 // Non-overlap compression pools its rows with this many thread groups.
 constexpr int kRowGroups = 4;
-constexpr int64_t kMaxDecodeRows = 128;
+constexpr int64_t kMaxDecodeRows = 320;
 constexpr float kFp8Max = 448.0f;
 constexpr float kLog2E = 1.4426950408889634f;
 
@@ -550,7 +550,7 @@ void deepseek_v4_sparse_compress_cache(
               "state_cache must be 16-byte aligned");
   TORCH_CHECK(state_slot_mapping.numel() > 0 &&
                   state_slot_mapping.numel() <= kMaxDecodeRows,
-              "sparse native path supports 1..128 decode rows");
+              "sparse native path supports 1..320 decode rows");
 
   const int64_t num_tokens = state_slot_mapping.numel();
   TORCH_CHECK(token_to_req_indices.numel() >= num_tokens,

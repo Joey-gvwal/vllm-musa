@@ -16,7 +16,7 @@ _NOPE_DIM = 448
 _TOKEN_STRIDE = 576
 _SCALE_DIM = 8
 _QUANT_BLOCK = 64
-_MAX_DECODE_ROWS = 128
+_MAX_DECODE_ROWS = 320
 _INDEX_DTYPES = (torch.int32, torch.int64)
 _SUPPORTED = {
     4: (4, 1024, 2048),
@@ -102,7 +102,7 @@ def _guard_sparse_compressor(
         return False, "state_slot_mapping must be 1D"
     num_rows = state_slot_mapping.numel()
     if not 0 < num_rows <= _MAX_DECODE_ROWS:
-        return False, f"native sparse path supports 1..128 decode rows, got {num_rows}"
+        return False, f"native sparse path supports 1..{_MAX_DECODE_ROWS} decode rows, got {num_rows}"
     for name, tensor in (
         ("token_to_req_indices", token_to_req_indices),
         ("positions", positions),

@@ -15,7 +15,7 @@ _ROPE_DIM = 64
 _STATE_BLOCK_SIZE = 4
 _STATE_WIDTH = 256
 _STATE_ROW_WIDTH = 512
-_MAX_DECODE_ROWS = 128
+_MAX_DECODE_ROWS = 320
 _SUPPORTED_KV_BLOCK_SIZES = (64, 256)
 _INDEX_DTYPES = (torch.int32, torch.int64)
 
@@ -80,7 +80,7 @@ def _guard_c4_indexer_compressor(
         return False, "state_slot_mapping must be 1D"
     num_rows = state_slot_mapping.numel()
     if not 0 < num_rows <= _MAX_DECODE_ROWS:
-        return False, f"native C4 path supports 1..128 decode rows, got {num_rows}"
+        return False, f"native C4 path supports 1..{_MAX_DECODE_ROWS} decode rows, got {num_rows}"
     for name, tensor in (
         ("token_to_req_indices", token_to_req_indices),
         ("positions", positions),
