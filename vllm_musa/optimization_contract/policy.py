@@ -24,6 +24,9 @@ _DEEPSEEK_V4_LONG_PREFILL_LOGITS_MB = 512
 # Gloo shard of indexer query rows pays off only past ~64k compressed keys
 # (~256k tokens). Below that, per-layer D2H + CPU all_gather dominates.
 _DEEPSEEK_V4_LONG_PREFILL_TP_PARTITION_MIN_SEQ_LEN = 65536
+# DSV4 prefill score GEMMs above the multi-stream token threshold run on
+# DeepGEMM bf16 rather than the FP32 SIMT path.
+_DEEPSEEK_V4_PREFILL_SCORE_DEEPGEMM = True
 _DEEPSEEK_V4_CUSTOM_AR_ALLOCATOR_MARGIN_BYTES = 512 * 1024 * 1024
 _DEEPSEEK_V4_MTP4_TOKENS_PER_REQUEST = 5
 # The exact MTP4 graph ladder is 5 * batch_size. The graph-local CAR contract
@@ -81,6 +84,11 @@ def deepseek_v4_long_prefill_logits_budget_mb() -> int:
 def deepseek_v4_long_prefill_tp_partition_min_seq_len() -> int:
     """Return the compressed-key length where Gloo TP sharding of indexer rows pays off."""
     return _DEEPSEEK_V4_LONG_PREFILL_TP_PARTITION_MIN_SEQ_LEN
+
+
+def deepseek_v4_prefill_score_deepgemm_enabled() -> bool:
+    """Return whether large DSV4 prefill score GEMMs run on DeepGEMM."""
+    return _DEEPSEEK_V4_PREFILL_SCORE_DEEPGEMM
 
 
 def prefers_feature(vllm_config: Any, feature: OptimizationFeature) -> bool:

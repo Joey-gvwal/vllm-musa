@@ -27,12 +27,15 @@ def test_small_m_gate_is_kept_and_prefill_rows_use_deepgemm():
     assert "vllm/models/deepseek_v4/attention.py" in PATCH.read_text()
 
 
-def test_prefill_route_is_default_on_with_a_kill_switch():
+def test_prefill_route_is_an_optimization_contract_variable():
     added = _added_lines()
 
+    assert "deepseek_v4_prefill_score_deepgemm_enabled()" in added
     assert (
-        'os.environ.get("VLLM_MUSA_DSV4_SCORE_DEEPGEMM_PREFILL", "1") == "1"'
-        in added
+        "from vllm_musa.optimization_contract import "
+        "deepseek_v4_prefill_score_deepgemm_enabled" in added
     )
-    assert "_MUSA_DEEPSEEK_V4_SCORE_DEEPGEMM_PREFILL" in added
+    assert not any("os.environ" in line for line in added)
+    policy = (REPO_ROOT / "vllm_musa/optimization_contract/policy.py").read_text()
+    assert "_DEEPSEEK_V4_PREFILL_SCORE_DEEPGEMM = True" in policy
     assert "From: musa <musa@local>" in PATCH.read_text()

@@ -5,6 +5,7 @@ from .qwen import (
 from .policy import (
     deepseek_v4_long_prefill_logits_budget_mb,
     deepseek_v4_long_prefill_tp_partition_min_seq_len,
+    deepseek_v4_prefill_score_deepgemm_enabled,
 )
 from .glm import resolve_glm_contract
 from .resolver import (
@@ -31,6 +32,7 @@ __all__ = [
     "bind_optimization_contract",
     "deepseek_v4_long_prefill_logits_budget_mb",
     "deepseek_v4_long_prefill_tp_partition_min_seq_len",
+    "deepseek_v4_prefill_score_deepgemm_enabled",
     "matches_qwen35_moe_bf16_decode_gemv_layer",
     "matches_qwen35_moe_bf16_prefill_layer",
     "prefers_optimization",
