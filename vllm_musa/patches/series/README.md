@@ -39,8 +39,8 @@ They also honor the resolved FP8 expert dtype when converted checkpoints omit
 the HF metadata field. The final five patches adapt the v0.28 Model Runner V2 rejection kernels to MUSA Triton scalar-predicate and
 Gumbel-helper contracts without changing the upstream acceptance or resampling
 algorithm. DeepSeek-V4 score FP32 projections keep the MUSA DeepGEMM path
-through the DSpark-4 decode graph's M=80 ladder shape; larger shapes up to
-the multi-stream token threshold remain on the existing fallback. On contract-matched DeepSeek-V4 DSpark
+up to the multi-stream token threshold, which covers every DSpark-4 decode
+batch. On contract-matched DeepSeek-V4 DSpark
 deployments, Model Runner V2 replays the uniform decode graph for a remote-
 prefilled request's final prompt token padded to the verify shape. The functional
 fused_experts entry point forwards a model's SwiGLU clamp limit to the routed

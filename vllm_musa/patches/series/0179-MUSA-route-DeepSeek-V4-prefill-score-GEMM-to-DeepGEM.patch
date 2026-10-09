@@ -8,7 +8,7 @@ Subject: [PATCH] MUSA: route DeepSeek-V4 prefill score GEMM to DeepGEMM
  1 file changed, 10 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 897fcdc7b2..7655e9b208 100644
+index f8c383d587..623e8f2b72 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
 @@ -66,6 +66,7 @@ from vllm.v1.kv_cache_interface import (
