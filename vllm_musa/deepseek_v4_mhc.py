@@ -957,7 +957,8 @@ def _mhc_pre_deepgemm_big_fuse_provider(
     )
 
 
-_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 64
+# The fused kernel runs one block per token; 128 covers the DSpark-4 decode graphs.
+_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 128
 
 
 def _mhc_pre_decode_norm_fuse_supported(

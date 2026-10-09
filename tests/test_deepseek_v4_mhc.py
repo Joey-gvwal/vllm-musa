@@ -164,7 +164,7 @@ def test_mhc_pre_decode_norm_fuse_is_shape_bounded_and_wired():
     factory = _function_node(kernels_tree, "mhc_pre_decode_norm_fuse_kernel")
     supported_source = ast.unparse(supported)
 
-    assert "_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 64" in source
+    assert "_MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS = 128" in source
     assert "num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS" in supported_source
     assert "hidden_size == 4096" in supported_source
     assert "norm_weight.dtype == torch.bfloat16" in supported_source
