@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Fri, 9 Oct 2026 12:37:51 +0800
+Subject: [PATCH] MUSA: split multi-request indexer prefill chunks per request
+
+The MUSA prefill top-k paths past 4096 compressed keys take one request per
+chunk. A chunk that holds several such requests, as when prefix-cache hits
+that finish loading together share a step, otherwise falls through to the
+per-row PyTorch loop. Split it into single-request chunks first; the row loop
+remains the fallback when a single request is still refused.
+---
+ .../layers/sparse_attn_indexer.py             | 60 ++++++++++++++++++-
+ 1 file changed, 59 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index a02193cd96..345def4d4f 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """Custom Sparse Attention Indexer layers."""
+ 
++import dataclasses
+ import os
+ 
+ import torch
+@@ -1278,6 +1279,57 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+     return topk_indices_buffer
+ 
+ 
++def _musa_split_prefill_chunk_per_request(chunk) -> list | None:
++    """Split a multi-request prefill chunk into one chunk per request.
++
++    The MUSA prefill top-k paths past 4096 compressed keys take a single
++    request. Returns None for a single-request chunk, DCP-local bounds, or a
++    request without compressed keys.
++    """
++    num_reqs = int(chunk.num_reqs)
++    rows = int(chunk.token_end) - int(chunk.token_start)
++    if num_reqs <= 1 or rows <= 0 or chunk.skip_kv_gather:
++        return None
++    if chunk.local_cu_seq_lens is not None and (
++        chunk.local_cu_seq_lens is not chunk.cu_seq_lens
++    ):
++        return None
++
++    cu_seq_lens = chunk.cu_seq_lens[: num_reqs + 1].to(torch.long)
++    row_starts = chunk.cu_seqlen_ks[:rows].to(torch.long)
++    # Rows are grouped by request; each row starts at its request's key offset.
++    first_rows = (row_starts.unsqueeze(0) < cu_seq_lens[:-1].unsqueeze(1)).sum(dim=1)
++    bounds = torch.cat([first_rows, cu_seq_lens]).tolist()
++    row_bounds = bounds[:num_reqs] + [rows]
++    seq_bounds = bounds[num_reqs:]
++
++    sub_chunks = []
++    for req in range(num_reqs):
++        row_start, row_end = row_bounds[req], row_bounds[req + 1]
++        seq_start, seq_end = seq_bounds[req], seq_bounds[req + 1]
++        if row_end <= row_start or seq_end <= seq_start:
++            return None
++        cu_seq_lens_req = chunk.cu_seq_lens[req : req + 2] - seq_start
++        sub_chunks.append(
++            dataclasses.replace(
++                chunk,
++                block_table=chunk.block_table[req : req + 1],
++                cu_seqlen_ks=chunk.cu_seqlen_ks[row_start:row_end] - seq_start,
++                cu_seqlen_ke=chunk.cu_seqlen_ke[row_start:row_end] - seq_start,
++                cu_seq_lens=cu_seq_lens_req,
++                token_to_seq=chunk.token_to_seq[seq_start:seq_end] - req,
++                total_seq_lens=seq_end - seq_start,
++                token_start=int(chunk.token_start) + row_start,
++                token_end=int(chunk.token_start) + row_end,
++                num_reqs=1,
++                local_cu_seq_lens=cu_seq_lens_req,
++                local_total_seq_lens=seq_end - seq_start,
++                max_local_total_seq_lens=seq_end - seq_start,
++            )
++        )
++    return sub_chunks
++
++
+ def _musa_fill_exact_sparse_indexer_indices(
+     hidden_states: torch.Tensor,
+     k_cache_prefix: LayerNameType,
+@@ -1332,7 +1384,9 @@ def _musa_fill_exact_sparse_indexer_indices(
+     weights_fp32 = None
+ 
+     if metadata.num_prefills > 0 and metadata.prefill is not None:
+-        for chunk in metadata.prefill.chunks:
++        chunks = list(metadata.prefill.chunks)
++        while chunks:
++            chunk = chunks.pop(0)
+             token_start = int(chunk.token_start)
+             token_end = int(chunk.token_end)
+             if _musa_try_fill_prefill_topk_from_indexer_cache_native(
+@@ -1346,6 +1400,10 @@ def _musa_fill_exact_sparse_indexer_indices(
+                 use_musa_materialized_prefill,
+             ):
+                 continue
++            sub_chunks = _musa_split_prefill_chunk_per_request(chunk)
++            if sub_chunks is not None:
++                chunks[:0] = sub_chunks
++                continue
+             if q_deq is None:
+                 q_deq = q_quant.to(torch.float32)
+             if weights_fp32 is None:
