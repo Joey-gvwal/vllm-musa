@@ -34,8 +34,10 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0024-MUSA-load-the-DeepSeek-V4.1-ratio-2-compressor-rows-.patch` | The ratio-2 compressor loads its two pooled rows as separate tiles on MUSA instead of joining their pointers. |
 | `0025-MUSA-load-DeepSeek-V4-FP8-experts-with-their-own-blo.patch` | FP8 routed experts use the block size of the checkpoint (or `expert_weight_block_size`), so 128x128 experts load beside 32x32 linears; DeepSeek-V4.1 resolves the expert dtype through the quant config. |
 | `0026-MUSA-bound-the-exact-indexer-cache-rows-to-each-bloc.patch` | The MUSA exact indexer views its fp8 cache one row per block over that block's own bytes; a shared-page block stride (DeepSeek-V4.1) no longer runs the last row past the cache. |
+| `0027-MUSA-claim-DeepSeek-V4.1-checkpoints-for-the-DeepSee.patch` | The DeepSeek-V4 FP8 config also claims DeepSeek-V4.1 model types, so their FP8 checkpoints get the DeepSeek expert dispatch instead of the generic FP8 config. |
+| `0028-MUSA-load-the-MoE-top-k-gating-rows-element-by-eleme.patch` | The softmax and softplus-sqrt top-k gating kernels load each row element by element on MUSA; the vectorized loads ignore the scores for 320, 384 and 448 experts (DeepSeek-V4.1). |
 
-Currently **26 patches**.
+Currently **28 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 21:51:50 +0800
+Subject: [PATCH] MUSA: load the MoE top-k gating rows element by element
+
+mcc miscompiles the vectorized row loads of the softmax and softplus-sqrt
+top-k gating kernels for 320, 384 and 448 experts: the selection ignores
+the scores. Load the rows element by element on MUSA.
+---
+ csrc/libtorch_stable/moe/topk_softmax_kernels.cu  | 13 +++++++++++++
+ .../moe/topk_softplus_sqrt_kernels.cu             | 15 +++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
+index 7bae15b..5a59dca 100644
+--- a/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
++++ b/csrc/libtorch_stable/moe/topk_softmax_kernels.cu
+@@ -347,6 +347,18 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
+     // Finally, we pull in the data from global mem
+     float row_chunk[VPT];
+ 
++#ifdef USE_MUSA
++    // MUSA: mcc miscompiles the vectorized row loads below for 320/384/448
++    // experts, so load the row element by element.
++#pragma unroll
++    for (int ii = 0; ii < LDG_PER_THREAD; ++ii) {
++#pragma unroll
++        for (int jj = 0; jj < ELTS_PER_LDG; ++jj) {
++            row_chunk[ii * ELTS_PER_LDG + jj] =
++                toFloat(thread_read_ptr[ii * THREADS_PER_ROW * ELTS_PER_LDG + jj]);
++        }
++    }
++#else
+     // NOTE(zhuhaoran): dispatch different input types loading, BF16/FP16 convert to float
+     if constexpr (std::is_same_v<InputType, float>) {
+         using VecType = AlignedArray<float, ELTS_PER_LDG>;
+@@ -403,6 +415,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
+             }
+         }
+     }
++#endif
+ 
+     if constexpr (SF == SCORING_SOFTMAX) {
+       // First, we perform a max reduce within the thread.
+diff --git a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
+index bf78b9c..18654af 100644
+--- a/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
++++ b/csrc/libtorch_stable/moe/topk_softplus_sqrt_kernels.cu
+@@ -351,6 +351,20 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
+     for (int ii = 0; ii < VPT; ++ii) {
+       row_chunk[ii] = 0.f;
+     }
++#ifdef USE_MUSA
++  } else {
++    // MUSA: mcc miscompiles the vectorized row loads below for 320/384/448
++    // experts, so load the row element by element.
++  #pragma unroll
++    for (int ii = 0; ii < LDG_PER_THREAD; ++ii) {
++  #pragma unroll
++      for (int jj = 0; jj < ELTS_PER_LDG; ++jj) {
++        row_chunk[ii * ELTS_PER_LDG + jj] = toFloat(
++            thread_read_ptr[ii * THREADS_PER_ROW * ELTS_PER_LDG + jj]);
++      }
++    }
++  }
++#else
+   } else if constexpr (std::is_same_v<InputType, float>) {
+     using VecType = AlignedArray<float, ELTS_PER_LDG>;
+     VecType* row_chunk_vec_ptr = reinterpret_cast<VecType*>(&row_chunk);
+@@ -408,6 +422,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
+       }
+     }
+   }
++#endif
+   constexpr float threshold = 20.0f;
+   constexpr float beta = 1.0f;
+ 
