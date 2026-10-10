@@ -1,0 +1,194 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 23:40:25 +0800
+Subject: [PATCH] MUSA: score decode indexer keys of any cache block size in
+ graphs
+
+The materialized decode indexer scorer only takes 64-entry cache blocks,
+and the remaining MUSA decode paths are eager-only, so a captured graph
+for DeepSeek-V4.1's 128-entry ratio-1 index cache selected no keys. Score
+such rows with a Triton paged-logits kernel that reads each row length on
+device, select with the radix top-k, and fail a capture that has no
+graph-safe path.
+---
+ .../layers/sparse_attn_indexer.py             | 153 +++++++++++++++++-
+ 1 file changed, 149 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index c83936f..088bdef 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -171,6 +171,142 @@ def _musa_decode_block_table_for_token_rows(
+     return block_table.repeat_interleave(rows // block_rows, dim=0)
+ 
+ 
++@triton.jit
++def _musa_paged_mqa_logits_kernel(
++    q_ptr,
++    q_stride0,
++    q_stride1,
++    kv_ptr,
++    kv_block_stride,
++    num_blocks,
++    weights_ptr,
++    weights_stride0,
++    weights_stride1,
++    seq_lens_ptr,
++    seq_lens_stride,
++    block_table_ptr,
++    block_table_stride0,
++    logits_ptr,
++    logits_stride0,
++    width,
++    BLOCK_SIZE: tl.constexpr,
++    NUM_HEADS: tl.constexpr,
++    HEAD_DIM: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++):
++    # One program scores BLOCK_N cached keys of one decode row. Each cache
++    # block holds BLOCK_SIZE x HEAD_DIM fp8 keys followed by BLOCK_SIZE fp32
++    # scales. Rows read their length on device, so captured graphs replay it.
++    row = tl.program_id(0)
++    start = tl.program_id(1) * BLOCK_N
++    seq_len = tl.minimum(tl.load(seq_lens_ptr + row * seq_lens_stride), width)
++    if start >= seq_len:
++        return
++    offs_n = start + tl.arange(0, BLOCK_N)
++    in_row = offs_n < seq_len
++    pos = offs_n % BLOCK_SIZE
++    block = tl.load(
++        block_table_ptr + row * block_table_stride0 + offs_n // BLOCK_SIZE,
++        mask=in_row,
++        other=-1,
++    )
++    valid = in_row & (block >= 0) & (block < num_blocks)
++    block_base = kv_ptr + tl.where(valid, block, 0).to(tl.int64) * kv_block_stride
++    offs_d = tl.arange(0, HEAD_DIM)
++    k = tl.load(
++        block_base[:, None] + pos[:, None] * HEAD_DIM + offs_d[None, :],
++        mask=valid[:, None],
++        other=0,
++    )
++    k = k.to(tl.float8e4nv, bitcast=True).to(tl.float32)
++    k_scale = tl.load(
++        (block_base + BLOCK_SIZE * HEAD_DIM + pos * 4).to(tl.pointer_type(tl.float32)),
++        mask=valid,
++        other=0.0,
++    )
++    # MUSA: tl.dot returns wrong scores for these tiles; reduce per head.
++    logits = tl.zeros((BLOCK_N,), dtype=tl.float32)
++    q_row = q_ptr + row * q_stride0
++    for h in tl.static_range(NUM_HEADS):
++        q_h = tl.load(q_row + h * q_stride1 + offs_d).to(tl.float32)
++        w_h = tl.load(weights_ptr + row * weights_stride0 + h * weights_stride1)
++        logits += tl.maximum(tl.sum(k * q_h[None, :], axis=1), 0.0) * w_h
++    logits = tl.where(valid, logits * k_scale, float("-inf"))
++    tl.store(logits_ptr + row * logits_stride0 + offs_n, logits, mask=in_row)
++
++
++def _musa_try_fill_decode_topk_from_paged_logits(
++    q_quant: torch.Tensor,
++    kv_cache: torch.Tensor,
++    weights: torch.Tensor,
++    decode_metadata,
++    topk_indices_buffer: torch.Tensor,
++    topk_tokens: int,
++    head_dim: int,
++) -> bool:
++    """Graph-safe FP8 decode top-k for any indexer cache block size."""
++    if (
++        q_quant.ndim != 3
++        or q_quant.dtype != torch.float8_e4m3fn
++        or q_quant.shape[2] != head_dim
++        or q_quant.stride(2) != 1
++        or head_dim & (head_dim - 1)
++        or kv_cache.dtype != torch.uint8
++        or kv_cache.ndim != 3
++        or kv_cache.shape[2] != head_dim + 4
++        or weights.dtype != torch.float32
++        or weights.ndim != 2
++        or topk_tokens > 2048
++    ):
++        return False
++
++    seq_lens = decode_metadata.seq_lens.reshape(-1)
++    rows = min(q_quant.shape[0], seq_lens.numel(), topk_indices_buffer.shape[0])
++    topk = min(int(topk_tokens), topk_indices_buffer.shape[1])
++    if rows <= 0 or topk <= 0:
++        return True
++    block_table = _musa_decode_block_table_for_token_rows(
++        decode_metadata.block_table,
++        rows,
++    )
++    if block_table is None:
++        return False
++
++    block_size = kv_cache.shape[1]
++    width = block_table.shape[1] * block_size
++    logits = torch.empty((rows, width), dtype=torch.float32, device=q_quant.device)
++    block_n = 64
++    _musa_paged_mqa_logits_kernel[(rows, triton.cdiv(width, block_n))](
++        q_quant,
++        q_quant.stride(0),
++        q_quant.stride(1),
++        kv_cache,
++        kv_cache.stride(0),
++        kv_cache.shape[0],
++        weights,
++        weights.stride(0),
++        weights.stride(1),
++        seq_lens,
++        seq_lens.stride(0),
++        block_table,
++        block_table.stride(0),
++        logits,
++        logits.stride(0),
++        width,
++        BLOCK_SIZE=block_size,
++        NUM_HEADS=q_quant.shape[1],
++        HEAD_DIM=head_dim,
++        BLOCK_N=block_n,
++    )
++    _musa_custom_ops.sparse_indexer_topk_decode(
++        logits,
++        seq_lens[:rows],
++        topk_indices_buffer[:rows, :topk],
++        topk,
++    )
++    return True
++
++
+ def _musa_try_fill_all_sparse_indexer_indices(
+     hidden_states: torch.Tensor,
+     k_cache_prefix: LayerNameType,
+@@ -431,7 +567,15 @@ def _musa_try_fill_decode_topk_from_indexer_cache_native(
+             decode_metadata, kv_cache, 4096
+         )
+     ):
+-        return False
++        return _musa_try_fill_decode_topk_from_paged_logits(
++            q_quant,
++            kv_cache,
++            weights,
++            decode_metadata,
++            topk_indices_buffer,
++            topk_tokens,
++            head_dim,
++        )
+ 
+     seq_lens = decode_metadata.seq_lens.reshape(-1)
+     rows = min(q_quant.shape[0], seq_lens.numel(), topk_indices_buffer.shape[0])
+@@ -1280,9 +1424,10 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+             head_dim,
+             max_model_len,
+         ):
+-            # Capture cannot host-cast FP8 queries. Native learned decode is
+-            # the only graph-safe path; leave padded -1 rows on miss.
+-            pass
++            raise RuntimeError(
++                "No graph-safe MUSA decode indexer top-k path for this indexer "
++                "cache; use cudagraph_mode=PIECEWISE."
++            )
+ 
+     if metadata.num_prefills > 0:
+         # Prefill is handled by the eager materialized/native path. Graph

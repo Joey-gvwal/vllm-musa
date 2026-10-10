@@ -36,8 +36,9 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0026-MUSA-bound-the-exact-indexer-cache-rows-to-each-bloc.patch` | The MUSA exact indexer views its fp8 cache one row per block over that block's own bytes; a shared-page block stride (DeepSeek-V4.1) no longer runs the last row past the cache. |
 | `0027-MUSA-claim-DeepSeek-V4.1-checkpoints-for-the-DeepSee.patch` | The DeepSeek-V4 FP8 config also claims DeepSeek-V4.1 model types, so their FP8 checkpoints get the DeepSeek expert dispatch instead of the generic FP8 config. |
 | `0028-MUSA-load-the-MoE-top-k-gating-rows-element-by-eleme.patch` | The softmax and softplus-sqrt top-k gating kernels load each row element by element on MUSA; the vectorized loads ignore the scores for 320, 384 and 448 experts (DeepSeek-V4.1). |
+| `0029-MUSA-score-decode-indexer-keys-of-any-cache-block-si.patch` | Decode indexer top-k scores cache blocks the materialized scorer does not take (DeepSeek-V4.1's 128-entry ratio-1 blocks) with a graph-safe Triton paged-logits kernel plus the radix top-k; a capture with no graph-safe path fails instead of selecting no keys. |
 
-Currently **28 patches**.
+Currently **29 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM
