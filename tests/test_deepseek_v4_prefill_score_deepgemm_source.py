@@ -19,10 +19,10 @@ def _added_lines() -> list[str]:
     ]
 
 
-def test_small_m_gate_is_kept_and_prefill_rows_use_deepgemm():
+def test_decode_gate_is_kept_and_prefill_rows_use_deepgemm():
     added = _added_lines()
 
-    assert "a.shape[0] <= _MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS" in added
+    assert "a.shape[0] <= envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD" in added
     assert "and a.shape[0] > envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD" in added
     assert "vllm/models/deepseek_v4/attention.py" in PATCH.read_text()
 
