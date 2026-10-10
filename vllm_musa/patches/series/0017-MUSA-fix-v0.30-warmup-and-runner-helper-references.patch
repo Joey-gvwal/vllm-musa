@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 19:01:00 +0800
+Subject: [PATCH] MUSA: fix v0.30 warmup and runner helper references
+
+- kernel warmup: Model Runner V1 warms only the KV-block zeroer, as in
+  v0.30; define the Kimi-K3 KDA autotune helper the FlashInfer autotune
+  path calls.
+- V1 runner: pass the KV-cache allocation context to the tensor
+  allocation.
+- V2 runner: prepare DCP local sequence lengths with the v0.30 helper.
+- sparse indexer: size the MUSA paged MQA schedule metadata with the
+  v0.30 num_states KV spec field.
+---
+ vllm/model_executor/warmup/kernel_warmup.py | 13 ++++++-------
+ vllm/v1/attention/backends/mla/indexer.py   |  2 +-
+ vllm/v1/worker/gpu/model_runner.py          |  2 +-
+ vllm/v1/worker/gpu_model_runner.py          |  1 +
+ 4 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
+index 04e1a88..fbb241b 100644
+--- a/vllm/model_executor/warmup/kernel_warmup.py
++++ b/vllm/model_executor/warmup/kernel_warmup.py
+@@ -100,6 +100,12 @@ def _warmup_ll_bf16_router_gemm(model: torch.nn.Module) -> None:
+     )
+ 
+ 
++def _autotune_kimi_k3_kda_qkvg(model: torch.nn.Module) -> None:
++    module = sys.modules.get("vllm.models.kimi_k3.nvidia.low_latency_gemm")
++    if module is not None:
++        module.autotune_kda_qkvg(model)
++
++
+ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
+     if os.environ.get("VLLM_SKIP_KERNEL_WARMUP") == "1":
+         logger.info_once("Skipping kernel warmup by VLLM_SKIP_KERNEL_WARMUP=1")
+@@ -109,9 +115,6 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
+     )
+ 
+     if not worker.use_v2_model_runner:
+-        # Pooling models do not use the generation slot-mapping path.
+-        if not worker.model_runner.is_pooling_model:
+-            warm_v1_block_table_kernels(worker.model_runner)
+         # The KV-block zeroing kernel is driven by the scheduler's
+         # `new_block_ids_to_zero`, so no dummy run ever reaches it.
+         zeroer = getattr(worker.model_runner, "_kv_block_zeroer", None)
+@@ -137,10 +140,6 @@ def kernel_warmup(worker: "Worker", *, process_local_only: bool = False):
+     # Run next so input-prep kernels JIT against pristine runner state.
+     if worker.vllm_config.kernel_config.enable_jit_warmup:
+         kimi_k3_triton_warmup(worker)
+-        if not current_platform.is_musa():
+-            fa4_cutedsl_warmup(worker)
+-        else:
+-            logger.info_once("Skipping CUDA-only FA4 CuTeDSL warmup on MUSA.")
+         sparse_mla_warmup = globals().get("sparse_mla_triton_warmup")
+         if sparse_mla_warmup is not None:
+             sparse_mla_warmup(worker)
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 2bcf413..ece1b8d 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -1509,7 +1509,7 @@ class DeepseekV32IndexerMetadataBuilder(AttentionMetadataBuilder):
+                         meta_lens = seq_lens.squeeze(-1)
+                     metadata = musa_deep_gemm.get_paged_mqa_logits_metadata(
+                         meta_lens,
+-                        self.kv_cache_spec.storage_block_size,
++                        self.kv_cache_spec.num_states,
+                         self.num_sms,
+                     )
+                     schedule_metadata = self.scheduler_metadata_buffer[
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 9f8a7c1..49607ba 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1400,7 +1400,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         dcp_local_seq_lens = None
+         if self.use_dcp:
+             # Prepare dcp local seq_lens.
+-            prepare_dcp_local_seq_lens(
++            maybe_prepare_dcp_local_seq_lens(
+                 self.input_buffers.dcp_local_seq_lens,
+                 self.input_buffers.seq_lens,
+                 num_reqs,
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 06b55ed..983d7e0 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -7675,6 +7675,7 @@ class GPUModelRunner(
+             kv_caches = self.initialize_kv_cache_tensors(
+                 kv_cache_config,
+                 kernel_block_sizes,
++                kv_cache_allocation_context=kv_cache_allocation_context,
+             )
+ 
+         if (

@@ -23,8 +23,10 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0013-MUSA-free-deferred-KV-blocks-through-the-v0.30-block.patch` | Route the scheduler's deferred and copy-on-write block frees through `BlockPool.free_blocks`, which returns each block to its owning pool; `KVCacheManager` has no `free_blocks` on v0.30. |
 | `0014-MUSA-split-chained-boolean-operators-in-v0.30-Triton.patch` | Nest the three-operand conditions in `compute_tile_loop_bounds` and the DeepSeek-V3.2 fused norm-RoPE kernel, which MUSA Triton 3.2 rejects as chained boolean operators. |
 | `0015-MUSA-zero-padded-heads-in-the-v0.30-BF16-sparse-MLA-.patch` | Zero the padded query heads of the BF16 sparse MLA prefill so stale values cannot reach the MUSA kernel. |
+| `0016-MUSA-carry-the-DeepSeek-V4-MUSA-paths-onto-v0.30-att.patch` | Apply the MUSA DeepSeek-V4 attention and sparse-indexer paths on the v0.30 structure: v0.30's q-lora split, wq_b projection, `compress_ratio` and `skip_compressor` are kept; graph decode selects the learned indexer top-k with the native kernel; C4 indexer compression strips `launch_pdl`. |
+| `0017-MUSA-fix-v0.30-warmup-and-runner-helper-references.patch` | Model Runner V1 kernel warmup, the Kimi-K3 KDA autotune helper, the V1 KV-cache allocation context, the V2 DCP sequence-length helper and the MUSA sparse-indexer schedule metadata (`num_states`) follow the v0.30 definitions. |
 
-Currently **15 patches**.
+Currently **17 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM
