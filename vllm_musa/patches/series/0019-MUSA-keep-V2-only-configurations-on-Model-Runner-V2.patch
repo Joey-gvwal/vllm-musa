@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 17:30:43 +0800
+Subject: [PATCH] MUSA: keep V2-only configurations on Model Runner V2
+
+MUSA defaults DeepSeek-V4 and the other ROCm MRV1-default architectures to
+Model Runner V1. A configuration that needs a V2-only feature, such as
+DSpark speculative decoding or prefill context parallel, keeps the V2
+default instead of failing V1 validation.
+---
+ vllm/config/vllm.py | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
+index a4cfdf6..3b8521b 100644
+--- a/vllm/config/vllm.py
++++ b/vllm/config/vllm.py
+@@ -697,7 +697,15 @@ class VllmConfig:
+ 
+         model_config = self.model_config
+         is_musa = getattr(current_platform, "is_musa", None)
+-        if model_config is not None and (current_platform.is_rocm() or (callable(is_musa) and is_musa())):
++        on_musa = callable(is_musa) and is_musa()
++        # MUSA: a config that needs a V2-only feature (DSpark, PCP, ...) keeps
++        # the V2 default instead of failing V1 validation.
++        needs_v2 = on_musa and bool(self._get_v1_model_runner_unsupported_features())
++        if (
++            model_config is not None
++            and not needs_v2
++            and (current_platform.is_rocm() or on_musa)
++        ):
+             architectures = getattr(model_config, "architectures", ())
+             if any(arch in ROCM_DEFAULT_MRV1_ARCHITECTURES for arch in architectures):
+                 logger.warning_once(

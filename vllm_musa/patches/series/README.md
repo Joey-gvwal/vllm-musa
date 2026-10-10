@@ -25,8 +25,11 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0015-MUSA-zero-padded-heads-in-the-v0.30-BF16-sparse-MLA-.patch` | Zero the padded query heads of the BF16 sparse MLA prefill so stale values cannot reach the MUSA kernel. |
 | `0016-MUSA-carry-the-DeepSeek-V4-MUSA-paths-onto-v0.30-att.patch` | Apply the MUSA DeepSeek-V4 attention and sparse-indexer paths on the v0.30 structure: v0.30's q-lora split, wq_b projection, `compress_ratio` and `skip_compressor` are kept; graph decode selects the learned indexer top-k with the native kernel; C4 indexer compression strips `launch_pdl`. |
 | `0017-MUSA-fix-v0.30-warmup-and-runner-helper-references.patch` | Model Runner V1 kernel warmup, the Kimi-K3 KDA autotune helper, the V1 KV-cache allocation context, the V2 DCP sequence-length helper and the MUSA sparse-indexer schedule metadata (`num_states`) follow the v0.30 definitions. |
+| `0018-MUSA-keep-MoE-shared-experts-on-the-compute-stream.patch` | Keep MoE shared experts on the compute stream on MUSA: graph capture runs on a torch_musa-owned stream that the cached `current_stream()` does not track, so the aux-stream fork would escape the capture. |
+| `0019-MUSA-keep-V2-only-configurations-on-Model-Runner-V2.patch` | DeepSeek-V4 and the other MRV1-default architectures stay on Model Runner V1 on MUSA unless the configuration needs a V2-only feature (DSpark, prefill context parallel, ...), which keeps the V2 default. |
+| `0020-MUSA-compile-the-watermark-Philox-helper-on-Triton-3.patch` | The V2 rejection sampler's resample kernel references the watermark Philox helper; MUSA Triton 3.2 has no `tl.mul`, so the helper uses the wrapping `uint32` product. |
 
-Currently **17 patches**.
+Currently **20 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

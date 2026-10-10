@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 17:08:23 +0800
+Subject: [PATCH] MUSA: keep MoE shared experts on the compute stream
+
+MUSA graph capture runs on a stream chosen by torch_musa, which the cached
+current_stream() does not track. The shared-experts event fork/join then
+records on the pre-capture stream and the capture fails. Keep the shared
+experts on the compute stream on MUSA.
+---
+ vllm/model_executor/layers/fused_moe/runner/shared_experts.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/vllm/model_executor/layers/fused_moe/runner/shared_experts.py b/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
+index 4687cc5..e7c28f6 100644
+--- a/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
++++ b/vllm/model_executor/layers/fused_moe/runner/shared_experts.py
+@@ -109,6 +109,9 @@ class SharedExperts(torch.nn.Module):
+ 
+         should_run_shared_in_aux_stream = (
+             current_platform.is_cuda_alike()
++            # MUSA: graph capture runs on a torch_musa-owned stream that the
++            # cached current_stream() does not track, so the fork escapes it.
++            and not current_platform.is_musa()
+             and self._stream is not None
+             and hidden_states.shape[0]
+             <= envs.VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD
