@@ -8,10 +8,10 @@ editable or wheel install. They are source patches; runtime registrations in
 
 | Patch | Purpose |
 | --- | --- |
-| `0001-MUSA-v0300-faithful-port.patch` | Base v0.30 MUSA adaptation, including the native build, attention, model runner, and KV cache paths. |
-| `0002-MUSA-v0300-qwen35-cudagraph-warmup.patch` | Skip the v0.30 V2 dummy-decode warmup on MUSA Qwen3.5-family models; preserve CUDAGraph capture and semantic output. |
-| `0003-MUSA-v0300-preserve-Mamba-dedicated-prefix-cache.patch` | Port the applicable v0.28 `0138` dedicated Mamba pool prefix-cache changes. v0.30 already routes block frees by `block.pool`; this patch preserves the remaining cache-order, hashed-state, and null-state behavior. |
-| `0004-MUSA-v0300-rotate-V2-runner-output-copy-streams.patch` | Port the v0.28 `0172` per-step V2 output-copy streams to v0.30. |
+| `0001-MUSA-v0.30.0-faithful-port.patch` | Base v0.30 MUSA adaptation, including the native build, attention, model runner, and KV cache paths. |
+| `0002-MUSA-skip-unsafe-v2-warmup-for-Qwen3.5-family.patch` | Skip the v0.30 V2 dummy-decode warmup on MUSA Qwen3.5-family models; preserve CUDAGraph capture and semantic output. |
+| `0003-MUSA-preserve-dedicated-Mamba-prefix-cache-on-v0.30.patch` | Port the applicable v0.28 `0138` dedicated Mamba pool prefix-cache changes. v0.30 already routes block frees by `block.pool`; this patch preserves the remaining cache-order, hashed-state, and null-state behavior. |
+| `0004-MUSA-rotate-V2-output-copy-streams-on-v0.30.patch` | Port the v0.28 `0172` per-step V2 output-copy streams to v0.30. |
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM
