@@ -10,9 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 ATTENTION = ROOT / "csrc/musa/attention"
 DSV4_TOPK = "csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu"
 BINDINGS = ROOT / "csrc/musa/torch_bindings.cpp"
-SERIES_PATCH = (
-    ROOT / "vllm_musa/patches/series/"
-    "0177-MUSA-route-DSV4-decode-indexer-top-k-to-its-own-op.patch"
+SERIES_PATCH = next(
+    (ROOT / "vllm_musa/patches/series").glob(
+        "*-MUSA-route-DSV4-decode-indexer-top-k-to-its-own-op.patch"
+    )
 )
 TOPK = 512
 

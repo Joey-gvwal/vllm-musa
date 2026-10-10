@@ -4,12 +4,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH = (
-    ROOT
-    / "vllm_musa"
-    / "patches"
-    / "series"
-    / "0173-MUSA-skip-Prometheus-observe-for-connectors-without-.patch"
+PATCH = next(
+    (ROOT / "vllm_musa" / "patches" / "series").glob(
+        "*-MUSA-skip-Prometheus-observe-for-connectors-without-.patch"
+    )
 )
 
 
@@ -47,4 +45,4 @@ def test_observe_skips_connectors_without_prom_metrics() -> None:
     assert "assert connector_id in self._prom_metrics" in removed
     assert "prom_metrics = self._prom_metrics.get(connector_id)" in added
     assert "if prom_metrics is not None:" in added
-    assert 'prom_metrics.observe(stats_data["data"], engine_idx)' in added
+    assert "prom_metrics.observe(stats_data, engine_idx)" in added

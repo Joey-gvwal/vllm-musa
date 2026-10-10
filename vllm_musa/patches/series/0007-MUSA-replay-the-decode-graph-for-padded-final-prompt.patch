@@ -13,10 +13,10 @@ the captured decode graph.
  1 file changed, 32 insertions(+), 2 deletions(-)
 
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index aa11c25d50..d6698aafc7 100644
+index e12a8da..9f8a7c1 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -401,6 +401,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -449,6 +449,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              self.num_speculative_steps
              + self.model_state.num_new_sampled_tokens_per_step
          )
@@ -32,7 +32,7 @@ index aa11c25d50..d6698aafc7 100644
  
          # Initialize samplers. Model states may override via custom_sampler().
          if self.is_last_pp_rank and not self.is_pooling_model:
-@@ -1097,6 +1106,27 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1230,6 +1239,27 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              idx_mapping_np
          ]
          is_prefilling_np = num_computed_prefill_tokens_np < prefill_len_np
@@ -60,7 +60,7 @@ index aa11c25d50..d6698aafc7 100644
  
          if self.adaptive_verification is not None and draft_tokens:
              num_toks = self.adaptive_verification.get_num_tokens(
-@@ -1111,10 +1141,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -1244,10 +1274,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              prefill_len_np=prefill_len_np,
              num_computed_prefill_tokens_np=num_computed_prefill_tokens_np,
              is_prefilling_np=is_prefilling_np,

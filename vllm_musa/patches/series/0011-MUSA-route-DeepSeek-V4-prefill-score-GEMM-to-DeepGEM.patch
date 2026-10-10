@@ -8,10 +8,10 @@ Subject: [PATCH] MUSA: route DeepSeek-V4 prefill score GEMM to DeepGEMM
  1 file changed, 10 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 47aaae7300..0106c74c74 100644
+index 71b687c..0388d19 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -66,6 +66,7 @@ from vllm.v1.kv_cache_interface import (
+@@ -68,6 +68,7 @@ from vllm.v1.kv_cache_interface import (
      MLAAttentionSpec,
      get_kv_quant_mode,
  )
@@ -19,7 +19,7 @@ index 47aaae7300..0106c74c74 100644
  
  logger = init_logger(__name__)
  
-@@ -114,7 +115,15 @@ def _musa_deepseek_v4_use_score_fp32_deepgemm(
+@@ -116,7 +117,15 @@ def _musa_deepseek_v4_use_score_fp32_deepgemm(
          and a.dtype == torch.bfloat16
          and weight.dtype == torch.bfloat16
          and out_dtype == torch.float32

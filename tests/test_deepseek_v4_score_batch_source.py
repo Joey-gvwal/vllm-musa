@@ -2,9 +2,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH = (
-    ROOT
-    / "vllm_musa/patches/series/0174-perf-musa-extend-DSV4-score-DeepGEMM-to-decode-batch.patch"
+PATCH = next(
+    (ROOT / "vllm_musa/patches/series").glob(
+        "*-perf-musa-extend-DSV4-score-DeepGEMM-to-decode-batch.patch"
+    )
 )
 
 

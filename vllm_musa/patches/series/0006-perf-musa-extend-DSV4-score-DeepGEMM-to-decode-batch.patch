@@ -14,10 +14,10 @@ prefill route.
  1 file changed, 1 insertion(+), 2 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index f87dc0b5b9..47aaae7300 100644
+index f58154d..71b687c 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -90,7 +90,6 @@ def _fill_short_context_topk_indices(
+@@ -92,7 +92,6 @@ def _fill_short_context_topk_indices(
  
  
  # MUSA: the DeepSeek-V4 attention helpers below branch on the active platform.
@@ -25,7 +25,7 @@ index f87dc0b5b9..47aaae7300 100644
  
  
  def _musa_deepseek_v4_serialize_long_prefill(num_tokens: int) -> bool:
-@@ -115,7 +114,7 @@ def _musa_deepseek_v4_use_score_fp32_deepgemm(
+@@ -117,7 +116,7 @@ def _musa_deepseek_v4_use_score_fp32_deepgemm(
          and a.dtype == torch.bfloat16
          and weight.dtype == torch.bfloat16
          and out_dtype == torch.float32

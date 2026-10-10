@@ -9,9 +9,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FUSED_MOE = ROOT / "vllm_musa/model_executor/layers/fused_moe/fused_moe.py"
-SERIES_PATCH = (
-    ROOT / "vllm_musa/patches/series/"
-    "0176-MUSA-pass-the-SwiGLU-clamp-through-functional-fused_.patch"
+SERIES_PATCH = next(
+    (ROOT / "vllm_musa/patches/series").glob(
+        "*-MUSA-pass-the-SwiGLU-clamp-through-functional-fused_.patch"
+    )
 )
 
 

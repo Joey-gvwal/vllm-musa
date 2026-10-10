@@ -12,6 +12,16 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0002-MUSA-skip-unsafe-v2-warmup-for-Qwen3.5-family.patch` | Skip the v0.30 V2 dummy-decode warmup on MUSA Qwen3.5-family models; preserve CUDAGraph capture and semantic output. |
 | `0003-MUSA-preserve-dedicated-Mamba-prefix-cache-on-v0.30.patch` | Port the applicable v0.28 `0138` dedicated Mamba pool prefix-cache changes. v0.30 already routes block frees by `block.pool`; this patch preserves the remaining cache-order, hashed-state, and null-state behavior. |
 | `0004-MUSA-rotate-V2-output-copy-streams-on-v0.30.patch` | Port the v0.28 `0172` per-step V2 output-copy streams to v0.30. |
+| `0005-MUSA-skip-Prometheus-observe-for-connectors-without-.patch` | Port the v0.28 `0173` `MultiConnector` metrics fix: skip the Prometheus observe for a connector that reports transfer stats without registering metrics (e.g. `MooncakeConnector`). |
+| `0006-perf-musa-extend-DSV4-score-DeepGEMM-to-decode-batch.patch` | Port the v0.28 `0174` DeepSeek-V4 FP32-output score projections to DeepGEMM up to the multi-stream token threshold. |
+| `0007-MUSA-replay-the-decode-graph-for-padded-final-prompt.patch` | Port the v0.28 `0175` contract-gated V2 decode-graph replay for a remote-prefilled final prompt token padded to the verify shape. |
+| `0008-MUSA-pass-the-SwiGLU-clamp-through-functional-fused_.patch` | Port the v0.28 `0176` `gemm1_clamp_limit` forwarding from the functional `fused_experts` entry point to the SiLU-and-mul activation. |
+| `0009-MUSA-route-DSV4-decode-indexer-top-k-to-its-own-op.patch` | Port the v0.28 `0177` DeepSeek-V4 decode indexer top-k op; GLM-5.2 rows keep the shared op. |
+| `0010-MUSA-shorten-the-DFlash-input-prep-padding-tail.patch` | Port the v0.28 `0178` fixed 1024-wide DFlash input-prep padding blocks. |
+| `0011-MUSA-route-DeepSeek-V4-prefill-score-GEMM-to-DeepGEM.patch` | Port the v0.28 `0179` contract-gated DeepGEMM route for DeepSeek-V4 score GEMMs above the multi-stream token threshold. |
+| `0012-MUSA-split-multi-request-indexer-prefill-chunks-per-.patch` | Port the v0.28 `0180` split of multi-request sparse-indexer prefill chunks into single-request chunks before the per-row fallback. |
+
+Currently **12 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

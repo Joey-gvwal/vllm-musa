@@ -11,10 +11,10 @@ sparse_indexer_topk_decode.
  1 file changed, 7 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index 482d7186e2..a02193cd96 100644
+index 10abf3d..48431b4 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
-@@ -287,10 +287,16 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
+@@ -424,10 +424,16 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
      )
      kv_paged = kv_cache.unsqueeze(-2)
  

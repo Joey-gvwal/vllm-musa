@@ -13,7 +13,7 @@ remains the fallback when a single request is still refused.
  1 file changed, 59 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
-index a02193cd96..345def4d4f 100644
+index 48431b4..b10820c 100644
 --- a/vllm/model_executor/layers/sparse_attn_indexer.py
 +++ b/vllm/model_executor/layers/sparse_attn_indexer.py
 @@ -2,6 +2,7 @@
@@ -24,7 +24,7 @@ index a02193cd96..345def4d4f 100644
  import os
  
  import torch
-@@ -1278,6 +1279,57 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
+@@ -1425,6 +1426,57 @@ def _musa_fill_exact_sparse_indexer_indices_capture(
      return topk_indices_buffer
  
  
@@ -82,7 +82,7 @@ index a02193cd96..345def4d4f 100644
  def _musa_fill_exact_sparse_indexer_indices(
      hidden_states: torch.Tensor,
      k_cache_prefix: LayerNameType,
-@@ -1332,7 +1384,9 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1492,7 +1544,9 @@ def _musa_fill_exact_sparse_indexer_indices(
      weights_fp32 = None
  
      if metadata.num_prefills > 0 and metadata.prefill is not None:
@@ -93,7 +93,7 @@ index a02193cd96..345def4d4f 100644
              token_start = int(chunk.token_start)
              token_end = int(chunk.token_end)
              if _musa_try_fill_prefill_topk_from_indexer_cache_native(
-@@ -1346,6 +1400,10 @@ def _musa_fill_exact_sparse_indexer_indices(
+@@ -1506,6 +1560,10 @@ def _musa_fill_exact_sparse_indexer_indices(
                  use_musa_materialized_prefill,
              ):
                  continue
