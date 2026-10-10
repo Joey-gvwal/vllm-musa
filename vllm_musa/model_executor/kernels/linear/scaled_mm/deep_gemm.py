@@ -15,6 +15,7 @@ from vllm.model_executor.kernels.linear.scaled_mm.deep_gemm import (
 )
 from vllm.model_executor.layers.quantization.input_quant_fp8 import QuantFP8
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
+    GroupShape,
     get_fp8_min_max,
 )
 from vllm.model_executor.utils import replace_parameter
@@ -160,6 +161,12 @@ class MUSADeepGemmFp8BlockScaledMMKernel(Fp8BlockScaledMMLinearKernel):
             return can_implement_base, reason
         if config.out_dtype != torch.bfloat16:
             return (False, "Supports only output dtype of bfloat16")
+        # MUSA DeepGEMM implements K-granularity 128 only; other block shapes
+        # use the Triton block-scaled kernel.
+        if config.activation_quant_key.scale.group_shape != GroupShape(1, 128):
+            return False, "Supports only (1, 128) activation groups."
+        if config.weight_quant_key.scale.group_shape != GroupShape(128, 128):
+            return False, "Supports only (128, 128) weight blocks."
 
         if not should_use_deepgemm_for_fp8_linear(
             config.out_dtype, config.weight_shape

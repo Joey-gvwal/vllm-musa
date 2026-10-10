@@ -48,7 +48,11 @@ def maybe_roundup_sizes(
     ):
         return hidden_size, intermediate_size_per_partition
 
-    weight_block_size = getattr(self, "weight_block_size", None)
+    # Pad to the block grid the kernel uses: the refined grid when the
+    # checkpoint blocks were refined to fit the TP shard.
+    weight_block_size = getattr(self, "moe_block_shape", None) or getattr(
+        self, "weight_block_size", None
+    )
     if weight_block_size is None:
         return hidden_size, intermediate_size_per_partition
 

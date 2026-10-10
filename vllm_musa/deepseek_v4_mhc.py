@@ -280,6 +280,90 @@ def mhc_fused_post_pre_musa(
     return residual_cur, post_mix_cur, comb_mix_cur, layer_input_cur
 
 
+def mhc_pre_delayed_musa(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+    pre_mix: torch.Tensor | None = None,
+    x: torch.Tensor | None = None,
+    norm_weight: torch.Tensor | None = None,
+    norm_eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """mHC pre with a carried pre-mix; returns the next pre-mix as well."""
+    from vllm.model_executor.kernels.mhc.torch import mhc_pre_delayed_torch
+
+    post, comb, layer_input, next_pre_mix = mhc_pre_delayed_torch(
+        residual,
+        fn,
+        hc_scale,
+        hc_base,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+        pre_mix=pre_mix,
+        x=x,
+    )
+    layer_input = _apply_optional_rms_norm(layer_input, norm_weight, norm_eps)
+    return (
+        post.contiguous(),
+        comb.contiguous(),
+        layer_input.contiguous(),
+        next_pre_mix.contiguous(),
+    )
+
+
+def mhc_fused_post_pre_delayed_musa(
+    x: torch.Tensor,
+    residual: torch.Tensor,
+    post_layer_mix: torch.Tensor,
+    comb_res_mix: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+    pre_mix: torch.Tensor | None = None,
+    norm_weight: torch.Tensor | None = None,
+    norm_eps: float = 1e-6,
+    capture_aux: bool = False,
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
+    """mHC post followed by the next delayed mHC pre; the last output is the
+    BF16 mean over the post-mapped streams when ``capture_aux`` is set."""
+    residual_cur = mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
+    post, comb, layer_input, next_pre_mix = mhc_pre_delayed_musa(
+        residual_cur,
+        fn,
+        hc_scale,
+        hc_base,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+        pre_mix=pre_mix,
+        norm_weight=norm_weight,
+        norm_eps=norm_eps,
+    )
+    if capture_aux:
+        aux = residual_cur.to(torch.float32).mean(dim=1).to(residual_cur.dtype)
+    else:
+        aux = residual_cur.new_empty((0, residual_cur.shape[-1]))
+    return residual_cur, post, comb, layer_input, next_pre_mix, aux
+
+
 def _try_mhc_fused_post_prenorm_musa(
     x: torch.Tensor,
     residual: torch.Tensor,

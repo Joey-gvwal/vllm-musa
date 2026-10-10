@@ -28,8 +28,14 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0018-MUSA-keep-MoE-shared-experts-on-the-compute-stream.patch` | Keep MoE shared experts on the compute stream on MUSA: graph capture runs on a torch_musa-owned stream that the cached `current_stream()` does not track, so the aux-stream fork would escape the capture. |
 | `0019-MUSA-keep-V2-only-configurations-on-Model-Runner-V2.patch` | DeepSeek-V4 and the other MRV1-default architectures stay on Model Runner V1 on MUSA unless the configuration needs a V2-only feature (DSpark, prefill context parallel, ...), which keeps the V2 default. |
 | `0020-MUSA-compile-the-watermark-Philox-helper-on-Triton-3.patch` | The V2 rejection sampler's resample kernel references the watermark Philox helper; MUSA Triton 3.2 has no `tl.mul`, so the helper uses the wrapping `uint32` product. |
+| `0021-MUSA-enable-DeepSeek-V4.1-Engram-on-MUSA.patch` | Create and accept the Engram configuration on MUSA, and load power-of-two float32 Engram scales as their ue8m0 exponent bytes. |
+| `0022-MUSA-route-DeepSeek-V4.1-attention-through-the-MUSA-.patch` | DeepSeek-V4.1 attention takes the MUSA FlashMLA ops, stream-wait overlaps, serialized long prefill, the fp32-output score helper, and the MUSA fused RoPE/KV insert without the per-head q norm. |
+| `0023-MUSA-route-the-delayed-mHC-pre-blocks-to-the-MUSA-pr.patch` | The delayed mHC pre block and the fused post + delayed pre pair go through the MUSA MHC provider. |
+| `0024-MUSA-load-the-DeepSeek-V4.1-ratio-2-compressor-rows-.patch` | The ratio-2 compressor loads its two pooled rows as separate tiles on MUSA instead of joining their pointers. |
+| `0025-MUSA-load-DeepSeek-V4-FP8-experts-with-their-own-blo.patch` | FP8 routed experts use the block size of the checkpoint (or `expert_weight_block_size`), so 128x128 experts load beside 32x32 linears; DeepSeek-V4.1 resolves the expert dtype through the quant config. |
+| `0026-MUSA-bound-the-exact-indexer-cache-rows-to-each-bloc.patch` | The MUSA exact indexer views its fp8 cache one row per block over that block's own bytes; a shared-page block stride (DeepSeek-V4.1) no longer runs the last row past the cache. |
 
-Currently **20 patches**.
+Currently **26 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

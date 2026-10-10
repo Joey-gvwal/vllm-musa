@@ -263,9 +263,9 @@ __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
     const __mt_bfloat16* __restrict__ kv, uint8_t* __restrict__ cache,
     const void* __restrict__ slots, int slot_kind,
     const void* __restrict__ positions, int position_kind,
-    const float* __restrict__ cos_sin_cache, float eps, int64_t num_tokens,
-    int64_t in_heads, int64_t out_heads, int64_t num_slots, int64_t num_blocks,
-    int64_t block_size, int64_t block_stride) {
+    const float* __restrict__ cos_sin_cache, float eps, bool apply_q_norm,
+    int64_t num_tokens, int64_t in_heads, int64_t out_heads, int64_t num_slots,
+    int64_t num_blocks, int64_t block_size, int64_t block_stride) {
   const int64_t token = static_cast<int64_t>(blockIdx.x);
   const int64_t head = static_cast<int64_t>(blockIdx.y);
   if (token >= num_tokens || head >= out_heads) {
@@ -286,22 +286,24 @@ __global__ void deepseek_v4_qnorm_rope_kv_pack_fused_kernel(
   __shared__ float reduce[kQNormThreads];
   const __mt_bfloat16* in_row = q_in + (token * in_heads + head) * kHeadDim;
 
-  float partial = 0.0f;
-  for (int64_t dim = tid; dim < kHeadDim; dim += blockDim.x) {
-    const float value = __bfloat162float(in_row[dim]);
-    partial += value * value;
-  }
-  reduce[tid] = partial;
-  __syncthreads();
-
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      reduce[tid] += reduce[tid + stride];
+  float norm = 1.0f;
+  if (apply_q_norm) {
+    float partial = 0.0f;
+    for (int64_t dim = tid; dim < kHeadDim; dim += blockDim.x) {
+      const float value = __bfloat162float(in_row[dim]);
+      partial += value * value;
     }
+    reduce[tid] = partial;
     __syncthreads();
-  }
 
-  const float norm = rsqrtf(reduce[0] / static_cast<float>(kHeadDim) + eps);
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+      if (tid < stride) {
+        reduce[tid] += reduce[tid + stride];
+      }
+      __syncthreads();
+    }
+    norm = rsqrtf(reduce[0] / static_cast<float>(kHeadDim) + eps);
+  }
   for (int64_t dim = tid; dim < kNopeDim; dim += blockDim.x) {
     out_row[dim] =
         __float2bfloat16(__bfloat162float(in_row[dim]) * norm);
@@ -394,7 +396,8 @@ torch::Tensor deepseek_v4_qnorm_rope_kv_insert(
     const torch::Tensor& cos_sin_cache,
     double eps,
     int64_t cache_block_size,
-    int64_t q_head_padded) {
+    int64_t q_head_padded,
+    bool apply_q_norm) {
   TORCH_CHECK(q.scalar_type() == torch::kBFloat16, "q must be bfloat16");
   TORCH_CHECK(kv.scalar_type() == torch::kBFloat16, "kv must be bfloat16");
   TORCH_CHECK(kv_cache.scalar_type() == torch::kUInt8,
@@ -459,7 +462,7 @@ torch::Tensor deepseek_v4_qnorm_rope_kv_insert(
       static_cast<uint8_t*>(kv_cache.data_ptr()), slot_mapping.data_ptr(),
       index_kind(slot_mapping), positions.data_ptr(), index_kind(positions),
       static_cast<const float*>(cos_sin_cache.data_ptr()),
-      static_cast<float>(eps), q.size(0), in_heads, out_heads,
+      static_cast<float>(eps), apply_q_norm, q.size(0), in_heads, out_heads,
       slot_mapping.numel(), kv_cache.size(0), cache_block_size,
       kv_cache.stride(0));
   auto err = musaGetLastError();

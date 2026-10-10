@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 19:23:17 +0800
+Subject: [PATCH] MUSA: route the delayed mHC pre blocks to the MUSA provider
+
+DeepSeek-V4.1 carries the pre-mix between sublayers. The delayed pre block
+and the fused post + delayed pre pair go through the MUSA MHC provider,
+which has no tf32_hc_prenorm_gemm dependency.
+---
+ vllm/model_executor/kernels/mhc/tilelang.py | 45 +++++++++++++++++++++
+ 1 file changed, 45 insertions(+)
+
+diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
+index 27336e5..42449dc 100644
+--- a/vllm/model_executor/kernels/mhc/tilelang.py
++++ b/vllm/model_executor/kernels/mhc/tilelang.py
+@@ -110,6 +110,27 @@ def mhc_pre_delayed_tilelang(
+         and the next FP32 pre-mix, with shapes (tokens, hc_mult, 1),
+         (tokens, hc_mult, hc_mult), (tokens, hidden_size), and (tokens, hc_mult).
+     """
++    # MUSA: the delayed pre block has no MUSA kernel and its prenorm GEMM needs
++    # deep_gemm's tf32_hc_prenorm_gemm; use the MUSA MHC provider.
++    if residual.device.type == "musa":
++        from vllm_musa.deepseek_v4_mhc import mhc_pre_delayed_musa
++
++        return mhc_pre_delayed_musa(
++            residual,
++            fn,
++            hc_scale,
++            hc_base,
++            rms_eps,
++            hc_pre_eps,
++            hc_sinkhorn_eps,
++            hc_post_mult_value,
++            sinkhorn_repeat,
++            pre_mix=pre_mix,
++            x=x,
++            norm_weight=norm_weight,
++            norm_eps=norm_eps,
++        )
++
+     from vllm.model_executor.kernels.mhc.tilelang_kernels import (
+         _HC_PRENORM_GEMM_TILELANG_KERNEL,
+         mhc_pre_big_fuse_tilelang,
+@@ -321,6 +342,30 @@ def mhc_fused_post_pre_delayed_tilelang(
+         (tokens, hc_mult, hc_mult), (tokens, hidden_size), (tokens, hc_mult),
+         and (tokens, hidden_size).
+     """
++    # MUSA: same gap as mhc_pre_delayed_tilelang; run the post + delayed pre
++    # pair through the MUSA MHC provider.
++    if residual.device.type == "musa":
++        from vllm_musa.deepseek_v4_mhc import mhc_fused_post_pre_delayed_musa
++
++        return mhc_fused_post_pre_delayed_musa(
++            x,
++            residual,
++            post_layer_mix,
++            comb_res_mix,
++            fn,
++            hc_scale,
++            hc_base,
++            rms_eps,
++            hc_pre_eps,
++            hc_sinkhorn_eps,
++            hc_post_mult_value,
++            sinkhorn_repeat,
++            pre_mix=pre_mix,
++            norm_weight=norm_weight,
++            norm_eps=norm_eps,
++            capture_aux=capture_aux,
++        )
++
+     from vllm.model_executor.kernels.mhc.tilelang_kernels import (
+         _HC_PRENORM_GEMM_TILELANG_KERNEL,
+         _MHC_FUSED_TILELANG_KERNEL,

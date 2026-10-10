@@ -125,7 +125,8 @@ torch::Tensor deepseek_v4_qnorm_rope_kv_insert(
     const torch::Tensor& cos_sin_cache,
     double eps,
     int64_t cache_block_size,
-    int64_t q_head_padded);
+    int64_t q_head_padded,
+    bool apply_q_norm);
 void deepseek_v4_c4_indexer_compress_cache(
     const torch::Tensor& state_cache,
     const torch::Tensor& token_to_req_indices,

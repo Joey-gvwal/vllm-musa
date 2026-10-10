@@ -214,25 +214,66 @@ def _dequant_weight(
     weight_scale: torch.Tensor,
     groups: int,
 ) -> torch.Tensor:
-    weight, scales, out_dim, in_dim = _normalize_weight(
-        weight,
-        weight_scale,
-        groups,
-    )
-    _validate_group_size_divisible("weight output", out_dim)
-    _validate_group_size_divisible("weight input", in_dim)
-    out_blocks = out_dim // _GROUP_SIZE
-    in_blocks = in_dim // _GROUP_SIZE
+    try:
+        weight, scales, out_dim, in_dim = _normalize_weight(
+            weight,
+            weight_scale,
+            groups,
+        )
+    except ValueError:
+        # Not a 128x128-block weight: take the block shape from the scales.
+        weight, scales, out_dim, in_dim = _normalize_blocked_weight(
+            weight,
+            weight_scale,
+            groups,
+        )
+    out_blocks, in_blocks = scales.shape[1], scales.shape[2]
     weight_blocks = weight.to(torch.float32).reshape(
         groups,
         out_blocks,
-        _GROUP_SIZE,
+        out_dim // out_blocks,
         in_blocks,
-        _GROUP_SIZE,
+        in_dim // in_blocks,
     )
     return (weight_blocks * scales[:, :, None, :, None]).reshape(
         groups, out_dim, in_dim
     )
+
+
+def _normalize_blocked_weight(
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    groups: int,
+) -> tuple[torch.Tensor, torch.Tensor, int, int]:
+    if weight.dim() == 2:
+        if weight.shape[0] % groups != 0:
+            raise ValueError(
+                f"weight rows {weight.shape[0]} not divisible by groups={groups}"
+            )
+        weight = weight.reshape(groups, weight.shape[0] // groups, weight.shape[1])
+    _, out_dim, in_dim = weight.shape
+
+    e8m0_dtype = getattr(torch, "float8_e8m0fnu", None)
+    if e8m0_dtype is not None and weight_scale.dtype == e8m0_dtype:
+        exp_bits = weight_scale.view(torch.uint8).to(torch.int32)
+        scales = (exp_bits << 23).view(torch.float32)
+    else:
+        scales = weight_scale.to(torch.float32)
+    if scales.dim() == 2:
+        if scales.shape[0] % groups != 0:
+            raise ValueError(
+                f"scale rows {scales.shape[0]} not divisible by groups={groups}"
+            )
+        scales = scales.reshape(groups, scales.shape[0] // groups, scales.shape[1])
+    if scales.dim() != 3 or scales.shape[0] != groups:
+        raise ValueError(f"unsupported weight scale shape {tuple(weight_scale.shape)}")
+    out_blocks, in_blocks = scales.shape[1], scales.shape[2]
+    if out_dim % out_blocks or in_dim % in_blocks:
+        raise ValueError(
+            f"weight {tuple(weight.shape)} is not tiled by scales "
+            f"{tuple(weight_scale.shape)}"
+        )
+    return weight, scales, out_dim, in_dim
 
 
 def try_musa_deepseek_v4_fp8_einsum(

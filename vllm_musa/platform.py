@@ -723,6 +723,7 @@ class MUSAPlatformBase(Platform):
         if (
             resolve_optimization_contract(vllm_config).model.family
             is ModelFamily.DEEPSEEK_V4
+            or "DeepseekV41ForCausalLM" in (model_config.architectures or ())
         ):
             return
         backend_cls = cls._find_non_ssm_backend(vllm_config)
