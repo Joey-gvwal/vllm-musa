@@ -227,6 +227,9 @@ def _dequant_weight(
             weight_scale,
             groups,
         )
+    else:
+        _validate_group_size_divisible("weight output", out_dim)
+        _validate_group_size_divisible("weight input", in_dim)
     out_blocks, in_blocks = scales.shape[1], scales.shape[2]
     weight_blocks = weight.to(torch.float32).reshape(
         groups,
