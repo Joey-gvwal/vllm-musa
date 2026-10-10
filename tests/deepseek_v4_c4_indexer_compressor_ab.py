@@ -12,6 +12,7 @@ from vllm.models.deepseek_v4.common.ops.fused_compress_quant_cache import (
     _fused_kv_compress_norm_rope_insert_indexer_attn,
 )
 from vllm_musa import _custom_ops as musa_ops
+from vllm_musa.kernels.deepseek_v4_c4_indexer_compressor import _MAX_DECODE_ROWS
 
 HEAD_DIM = 128
 ROPE_DIM = 64
@@ -27,8 +28,10 @@ def make_inputs(
     kv_block_size: int,
     weight_dtype: torch.dtype,
 ) -> tuple[torch.Tensor, ...]:
-    if not 0 < active_rows <= capture_rows <= 128:
-        raise ValueError("expected 0 < active_rows <= capture_rows <= 128")
+    if not 0 < active_rows <= capture_rows <= _MAX_DECODE_ROWS:
+        raise ValueError(
+            f"expected 0 < active_rows <= capture_rows <= {_MAX_DECODE_ROWS}"
+        )
     torch.manual_seed(20260727)
     device = torch.device("musa")
     max_position = 4 * (active_rows + 16) - 1

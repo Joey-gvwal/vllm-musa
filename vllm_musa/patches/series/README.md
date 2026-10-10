@@ -49,7 +49,7 @@ indexer top-k with a dedicated MUSA op; GLM-5.2 keeps the shared one. The DFlash
 CUDA-graph buffers in fixed 1024-wide blocks. DeepSeek-V4 remains on Model Runner V1 by default on MUSA for its
 faster FULL_DECODE_ONLY serving path; users and V2-only speculative paths can
 still opt into Model Runner V2 explicitly. DeepSeek-V4 512-d sparse C4/C128 compression on decode rows
-1..128 is dispatched to a native MUSA kernel, with Triton kept as the
+1..320 is dispatched to a native MUSA kernel, with Triton kept as the
 shape fallback. On that same native path the compressor also writes
 packed kv/score+ape into the state cache so Triton `save_partial_states`
 is skipped. Interleaved MRoPE rebuilds the T/H/W frequency layout with a
