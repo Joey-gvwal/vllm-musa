@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 15:40:00 +0800
+Subject: [PATCH] MUSA: free deferred KV blocks through the v0.30 block pool
+
+The scheduler's deferred and copy-on-write block frees called
+KVCacheManager.free_blocks, which the v0.30 manager does not define.
+v0.30 BlockPool.free_blocks already returns each block to its owning
+pool, so call it directly as upstream does.
+---
+ vllm/v1/core/sched/scheduler.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index 9a7d8ba..daf2b31 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -2625,7 +2625,7 @@ class Scheduler(SchedulerInterface):
+         pool while the step that runs the copy may still be in flight.
+         """
+         if not self.defer_block_free or fence_seq <= self.processed_step_seq:
+-            self.kv_cache_manager.free_blocks(blocks)
++            self.kv_cache_manager.block_pool.free_blocks(blocks)
+             return
+         self.deferred_frees.append((fence_seq, blocks[::-1]))
+ 
+@@ -2642,7 +2642,7 @@ class Scheduler(SchedulerInterface):
+                 break
+             _, blocks = self.deferred_frees.popleft()
+             # Free in reverse order so that the tail blocks are evicted first.
+-            self.kv_cache_manager.free_blocks(reversed(blocks))
++            self.kv_cache_manager.block_pool.free_blocks(reversed(blocks))
+ 
+     def get_num_unfinished_requests(self) -> int:
+         if self._pause_state == PauseState.PAUSED_ALL:

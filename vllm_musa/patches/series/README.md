@@ -20,8 +20,11 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0010-MUSA-shorten-the-DFlash-input-prep-padding-tail.patch` | Port the v0.28 `0178` fixed 1024-wide DFlash input-prep padding blocks. |
 | `0011-MUSA-route-DeepSeek-V4-prefill-score-GEMM-to-DeepGEM.patch` | Port the v0.28 `0179` contract-gated DeepGEMM route for DeepSeek-V4 score GEMMs above the multi-stream token threshold. |
 | `0012-MUSA-split-multi-request-indexer-prefill-chunks-per-.patch` | Port the v0.28 `0180` split of multi-request sparse-indexer prefill chunks into single-request chunks before the per-row fallback. |
+| `0013-MUSA-free-deferred-KV-blocks-through-the-v0.30-block.patch` | Route the scheduler's deferred and copy-on-write block frees through `BlockPool.free_blocks`, which returns each block to its owning pool; `KVCacheManager` has no `free_blocks` on v0.30. |
+| `0014-MUSA-split-chained-boolean-operators-in-v0.30-Triton.patch` | Nest the three-operand conditions in `compute_tile_loop_bounds` and the DeepSeek-V3.2 fused norm-RoPE kernel, which MUSA Triton 3.2 rejects as chained boolean operators. |
+| `0015-MUSA-zero-padded-heads-in-the-v0.30-BF16-sparse-MLA-.patch` | Zero the padded query heads of the BF16 sparse MLA prefill so stale values cannot reach the MUSA kernel. |
 
-Currently **12 patches**.
+Currently **15 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

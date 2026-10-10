@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Sat, 10 Oct 2026 15:42:00 +0800
+Subject: [PATCH] MUSA: zero padded heads in the v0.30 BF16 sparse MLA prefill
+
+Padded query heads were allocated with new_empty, so stale values,
+including NaN, reached the MUSA sparse MLA prefill kernel. Allocate
+them with new_zeros as the decode path does.
+---
+ vllm/v1/attention/backends/mla/flashmla_sparse.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index e1ecb9f..080dff5 100644
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -1275,7 +1275,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+                 f"Padding num_heads from {actual_num_heads} to "
+                 f"{padded_num_heads} for BF16 sparse prefill kernel"
+             )
+-            q_padded = q.new_empty((q.shape[0], padded_num_heads, q.shape[2]))
++            q_padded = q.new_zeros((q.shape[0], padded_num_heads, q.shape[2]))
+             q_padded[:, :actual_num_heads, :] = q
+             q = q_padded
+ 
