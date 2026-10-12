@@ -98,8 +98,8 @@ Subcommands::
         Neither is the default: both clone a repository and spawn git per entry.
         No in-repo CI or hook invokes this gate today.
 
-Every **gate** subcommand (``check-series``, ``verify``, ``regen``, ``rebase``)
-that has something to report ends with one explicit
+Every **gate** subcommand (``check-series``, ``verify``, ``regen``, ``rebase``,
+``upgrade-plan``, ``backport``) that has something to report ends with one explicit
 ``=== musa_sync <cmd>: PASS|FAIL ===`` verdict line whose counters agree with the
 exit code: 0 = PASS, 1 = FAIL, 2 = usage/config error (e.g. ``verify`` with no
 resolvable target). Three exit paths print only an ``ERROR:`` line, and a caller
@@ -2165,7 +2165,9 @@ def cmd_rebase(args) -> int:
             print(f"CONFLICT: {build_apply.entry_name(patch)}\n{r.stdout}\n{r.stderr}")
             print(
                 "Resolve in third_party/vllm, then "
-                "`git -C third_party/vllm am --continue`, then re-run; or "
+                "`git -C third_party/vllm am --continue`, then `git am -3 "
+                "--keep-non-patch` the entries after it (running rebase again "
+                "starts over; see docs/mdm-developer-guide.md §5); or "
                 "`git -C third_party/vllm am --abort` to back out."
             )
             print("=== musa_sync rebase: FAIL (conflict) ===")
@@ -2383,7 +2385,7 @@ def _format_series(
     them, the commits above the first cherry-pick that change a file those
     commits change. Any other commit above the first cherry-pick is a MUSA
     entry: it shares no file with ``upstream/``, so its patch is the same
-    below them. Each directory is numbered from 0001, with the canonical
+    when it applies before them. Each directory is numbered from 0001, with the canonical
     author and a fixed ``core.abbrev``, so the ``index`` lines do not depend
     on how many objects the repository holds.
     Returns ``(entries in apply order, error)``.

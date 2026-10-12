@@ -102,6 +102,9 @@ against that exact pinned commit.
 
 ## Upstream commits and pin bumps
 
+Step-by-step commands, conflict handling and the checks to run are in
+`docs/mdm-developer-guide.md`: §4a backports an upstream commit, §5 bumps the pin.
+
 `upstream/` holds upstream vLLM commits that the pin predates. The build and
 `rebase` apply them after the MUSA entries (`0001…`, then `upstream/0001…`),
 in the order they were generated, so adding or dropping one changes no MUSA
@@ -120,7 +123,9 @@ cherry-picks the commit on top of the series and regenerates it. After
 resolving a cherry-pick conflict, or amending the commit after `--no-regen`,
 run `musa_sync regen`. A MUSA commit made on top of the clone stays a MUSA
 entry unless it changes a file that an upstream entry changes; such a commit
-stays in `upstream/` after them, as a fix.
+stays in `upstream/` after them, as a fix. Backport a commit's upstream
+prerequisites first, oldest first. When entries are added or removed, update the
+counts at the top of this file; the tests check them.
 
 A pin bump:
 
@@ -144,7 +149,8 @@ A pin bump:
 2. While `third_party/PINS` still names the old pin, run `musa_sync rebase
    <new ref> --drop-upstreamed --history <clone>`. It skips the `drop`
    entries and replays the rest with `git am -3`. To drop a `review` entry
-   too, delete its file first.
+   too, delete its file first. A conflict stops at that entry; the guide's §5
+   shows how to resolve it and apply the rest.
 3. Set `VLLM_COMMIT` and `VLLM_TAG` in `third_party/PINS` to the new ref, then
    run `musa_sync regen`. `regen` exports the commits after the `PINS` commit,
    so it must name the ref the series now sits on.

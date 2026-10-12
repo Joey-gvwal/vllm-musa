@@ -14,6 +14,7 @@ vLLM is already patched.
 
 ```
 series/0001-MUSA-….patch …  the source-of-truth diff series (git format-patch)
+series/upstream/0001-….patch upstream vLLM commits the pin predates, applied after series/
 build_apply.py               stdlib-only build-time applier (idempotent git apply)
 Makefile.sync                cross-version regeneration (git am -3 + format-patch)
 setup.py::_apply_musa_patch_series   wires build_apply into the build
@@ -38,15 +39,22 @@ make -f Makefile.sync format-patches     # regenerate series/ from the commits
 git add vllm_musa/patches/series
 ```
 
+To add an upstream vLLM commit the pin lacks, use
+`python3 tools/musa_sync.py backport <sha>` instead: it lands in `series/upstream/`,
+so a later pin bump drops it. See `docs/mdm-developer-guide.md` §4a.
+
 ### Bumping the pinned vLLM version
 
-Edit `FETCH_HEAD`/the tag in `Makefile.sync`, then:
+Plan first, so the upstream entries the new version already contains are left
+out, then replay and regenerate. `docs/mdm-developer-guide.md` §5 has the full
+procedure, including conflicts:
 
 ```bash
-make -f Makefile.sync clean apply-patches   # git am -3 auto-3-way onto the new base
-#   … resolve any conflicts, then: git am --continue …
-make -f Makefile.sync format-patches         # rebase the series onto the new base
-git add setup.py Makefile.sync vllm_musa/patches/series   # commit pin + series
+python3 tools/musa_sync.py upgrade-plan <new ref> --history <full vLLM clone>
+python3 tools/musa_sync.py rebase <new ref> --drop-upstreamed --history <full vLLM clone>
+#   … set VLLM_TAG and VLLM_COMMIT in third_party/PINS to <new ref> …
+make -f Makefile.sync format-patches         # regenerate the series on the new base
+git add third_party/PINS vllm_musa/patches/series   # commit pin + series
 ```
 
 ## 2. Object patches — import-time `apply()` (live objects, not source)

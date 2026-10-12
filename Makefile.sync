@@ -16,8 +16,12 @@
 #   make -f Makefile.sync apply-patches       # git am -3 the series onto it
 #   make -f Makefile.sync format-patches      # regenerate the series from commits
 #   make -f Makefile.sync clean apply-patches # fresh re-apply
-#   # version bump: edit VLLM_TAG + VLLM_COMMIT in third_party/PINS, then:
-#   make -f Makefile.sync clean apply-patches # resolve conflicts via `git am --continue`
+#   # upstream vLLM commit the pin lacks (docs/mdm-developer-guide.md §4a):
+#   python3 tools/musa_sync.py backport <sha>
+#   # version bump (docs/mdm-developer-guide.md §5), PINS still on the old pin:
+#   python3 tools/musa_sync.py upgrade-plan <ref> --history <full vLLM clone>
+#   python3 tools/musa_sync.py rebase <ref> --drop-upstreamed --history <full vLLM clone>
+#   # then set VLLM_TAG + VLLM_COMMIT in third_party/PINS to <ref> and:
 #   make -f Makefile.sync format-patches      # rewrite series onto the new base
 
 UPSTREAM := https://github.com/vllm-project/vllm.git
