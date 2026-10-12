@@ -81,6 +81,8 @@ _PREFILL_BLOCK_M = 16
 _PREFILL_BLOCK_N = 64
 _PREFILL_DUP = 2
 _PREFILL_THREADS = _PREFILL_BLOCK_N * _PREFILL_DUP
+# bf16 elements per prefill gather load (16 B).
+_GATHER_VEC = 8
 
 
 @functools.lru_cache(maxsize=16)
@@ -197,9 +199,15 @@ def _qsa_prefill_kernel(
                         s_valid[i] = T.if_then_else(ok, 1.0, 0.0)
 
                     T.sync_threads()
-                    for i, d in T.Parallel(block_n, head_dim):
-                        s_k[i, d] = k_cache[s_phys[i], s_off[i], d]
-                        s_v[i, d] = v_cache[s_phys[i], s_off[i], d]
+                    # An explicit vector axis gives one warp per KV row and 16 B
+                    # loads; the flat (row, dim) loop lowers to scalar loads with
+                    # a barrier on every iteration.
+                    for i, c in T.Parallel(block_n, head_dim // _GATHER_VEC):
+                        for e in T.vectorized(_GATHER_VEC):
+                            s_k[i, c * _GATHER_VEC + e] = k_cache[
+                                s_phys[i], s_off[i], c * _GATHER_VEC + e]
+                            s_v[i, c * _GATHER_VEC + e] = v_cache[
+                                s_phys[i], s_off[i], c * _GATHER_VEC + e]
                     T.sync_threads()
 
                     for m, n in T.Parallel(block_m, block_n):
