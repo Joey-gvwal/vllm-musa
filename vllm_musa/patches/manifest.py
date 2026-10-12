@@ -68,6 +68,7 @@ class DivSpec:
     removal_condition: Optional[str] = None
     intent: str = ""
     after: tuple = ()  # ordering deps by id (e.g. eagle after parallel_state)
+    upstream_commits: tuple = ()  # series/upstream/ entries: the cherry-picked shas
 
     def __post_init__(self):
         assert (
@@ -76,6 +77,85 @@ class DivSpec:
         assert (
             self.apply_phase in VALID_PHASES
         ), f"{self.id}: bad apply_phase {self.apply_phase!r}"
+
+
+# series/upstream/ holds the upstream vLLM commits the pin predates, applied
+# after the MUSA entries; each directory is numbered on its own. An upstream
+# commit is a `git cherry-pick -x` commit, so its message names the upstream
+# commit, and a squash-merged upstream subject ends in its "(#N)". An entry
+# there without that line is a MUSA fix for the upstream commit before it.
+UPSTREAM_SUBDIR = "upstream"
+_CHERRY_LINE = re.compile(r"^\(cherry picked from commit ([0-9a-f]{40})\)$")
+_PR_SUFFIX = re.compile(r"\(#([0-9]+)\)\s*$")
+
+
+@dataclass(frozen=True)
+class UpstreamPick:
+    """What a series entry's commit message says about upstream vLLM."""
+
+    commits: tuple = ()  # shas of its "(cherry picked from commit ...)" lines
+    pr: Optional[str] = None  # the "(#N)" its subject ends in
+
+
+def _mailbox_message(text: str) -> tuple:
+    """``(subject, body lines)`` of a ``git format-patch`` mailbox: the
+    unfolded subject without ``[PATCH] ``, and the message lines before ``---``."""
+    from email.header import decode_header, make_header
+
+    lines = text.split("\n")
+    end = 1
+    while end < len(lines) and lines[end].strip("\r"):
+        end += 1
+    header = [line.rstrip("\r") for line in lines[1:end]]
+    subject = ""
+    for i, line in enumerate(header):
+        if line.startswith("Subject: "):
+            subject = line[len("Subject: ") :]
+            for cont in header[i + 1 :]:
+                if not cont.startswith((" ", "\t")):
+                    break
+                subject += cont
+            break
+    if "=?" in subject:
+        try:
+            subject = str(make_header(decode_header(subject)))
+        except (ValueError, LookupError, UnicodeError):
+            pass
+    if subject.startswith("[PATCH] "):
+        subject = subject[len("[PATCH] ") :]
+    body = []
+    for line in lines[end + 1 :]:
+        line = line.rstrip("\r")
+        if line == "---" or line.startswith("diff --git "):
+            break
+        body.append(line)
+    return subject, body
+
+
+def picked_commits(lines) -> tuple:
+    """The shas that ``(cherry picked from commit <sha>)`` lines name, in order."""
+    out: list = []
+    for line in lines:
+        m = _CHERRY_LINE.match(line.strip())
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+    return tuple(out)
+
+
+def parse_upstream_pick(text) -> UpstreamPick:
+    """The ``UpstreamPick`` of a ``git format-patch`` mailbox.
+
+    Never raises: the manifest is loaded during the build, so an unreadable
+    entry becomes a ``check-series`` row instead.
+    """
+    try:
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", "replace")
+        subject, body = _mailbox_message(text)
+        pr = _PR_SUFFIX.search(subject)
+        return UpstreamPick(picked_commits(body), pr.group(1) if pr else None)
+    except Exception:  # the build must survive any entry
+        return UpstreamPick()
 
 
 def _patch_target(patch_path: Path) -> str:
@@ -105,7 +185,8 @@ def _patch_target(patch_path: Path) -> str:
 
 
 def _series_entries() -> list:
-    """One DivSpec per ``series/*.patch``, classified by its target file:
+    """One DivSpec per series entry, ``upstream/`` last, classified by its
+    target file:
 
     - ``csrc/`` whole-file rewrite (in ``_CAT3_FILES``) → category 3, pre-compile
     - other ``csrc/`` edit → category 2, pre-compile
@@ -118,7 +199,10 @@ def _series_entries() -> list:
     out: list = []
     if not _SERIES_DIR.is_dir():
         return out
-    for p in sorted(_SERIES_DIR.glob("*.patch")):
+    entries = [("", p) for p in sorted(_SERIES_DIR.glob("*.patch"))]
+    upstream = sorted((_SERIES_DIR / UPSTREAM_SUBDIR).glob("*.patch"))
+    entries += [(UPSTREAM_SUBDIR + "/", p) for p in upstream]
+    for sub, p in entries:
         target = _patch_target(p)
         if target.startswith("csrc/"):
             cat = "3" if target in _CAT3_FILES else "2"
@@ -136,18 +220,40 @@ def _series_entries() -> list:
                 if target.endswith(".py")
                 else f"build-applied edit to upstream {target}"
             )
+        commits = upstream_pick(p).commits if sub else ()
+        if commits:
+            intent = "upstream vLLM commit the pin predates"
+        elif sub:
+            intent = "MUSA fix for the upstream commit before it"
         out.append(
             DivSpec(
-                id=p.stem,
+                id=sub + p.stem,
                 category=cat,
-                path=f"vllm_musa/patches/series/{p.name}",
+                path=f"vllm_musa/patches/series/{sub}{p.name}",
                 upstream_path=(target or None),
                 apply_phase=phase,
                 required=True,
+                removal_condition=(
+                    "pin contains " + ", ".join(c[:12] for c in commits)
+                    if commits
+                    else None
+                ),
                 intent=intent,
+                upstream_commits=commits,
             )
         )
     return out
+
+
+def upstream_pick(patch_path: Path) -> UpstreamPick:
+    """``parse_upstream_pick`` of a series entry; an unreadable entry is empty
+    here and a row in ``check-series``."""
+    try:
+        if not stat.S_ISREG(patch_path.lstat().st_mode):
+            return UpstreamPick()
+        return parse_upstream_pick(patch_path.read_bytes())
+    except OSError:
+        return UpstreamPick()
 
 
 # Category 6 — live-object monkey patches; applied by apply_object_patches(), not

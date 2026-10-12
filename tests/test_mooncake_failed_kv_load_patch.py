@@ -9,15 +9,16 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0182-Bugfix-Mooncake-Report-failed-remote-KV-loads-to-the.patch"
+    / "upstream"
+    / "0002-Bugfix-Mooncake-Report-failed-remote-KV-loads-to-the.patch"
 )
 UPSTREAM_COMMIT = "2c7ee87223f0c94f614a0b8600f6f193e6e4388f"
 SCHEDULER_PATCH = PATCH.with_name(
-    "0181-Core-Fix-ValueError-on-KV-load-failure-with-a-hybrid.patch"
+    "0001-Core-Fix-ValueError-on-KV-load-failure-with-a-hybrid.patch"
 )
 SCHEDULER_UPSTREAM_COMMIT = "c351fd3c649569d8a585eb22cfaf2ee728e5fc22"
 TEST_SPEC_PATCH = PATCH.with_name(
-    "0183-MUSA-run-the-DeepSeek-V4-KV-load-failure-test-on-the.patch"
+    "0003-MUSA-run-the-DeepSeek-V4-KV-load-failure-test-on-the.patch"
 )
 
 

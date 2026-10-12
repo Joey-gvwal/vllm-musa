@@ -28,6 +28,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The upstream vLLM commits the pin predates; they apply after the MUSA entries.
+UPSTREAM_SUBDIR = "upstream"
+
 
 def _git(repo: Path, args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -61,9 +64,17 @@ def apply_patch(
     return "applied" if r.returncode == 0 else "conflict"
 
 
+def entry_name(patch: Path) -> str:
+    """``patch`` as reports name it: ``upstream/<file>`` for an upstream commit."""
+    if patch.parent.name == UPSTREAM_SUBDIR:
+        return f"{UPSTREAM_SUBDIR}/{patch.name}"
+    return patch.name
+
+
 def series_files(series_dir: Path) -> list[Path]:
     """Ordered series. A quilt-style ``series`` manifest wins (one patch name per
-    line, ``#`` comments ignored); otherwise sorted ``*.patch`` glob."""
+    line, ``#`` comments ignored); otherwise the MUSA entries, then the
+    upstream commits in ``upstream/``, each in filename order."""
     manifest = series_dir / "series"
     if manifest.is_file():
         out = []
@@ -72,7 +83,8 @@ def series_files(series_dir: Path) -> list[Path]:
             if line and not line.startswith("#"):
                 out.append(series_dir / line)
         return out
-    return sorted(series_dir.glob("*.patch"))
+    upstream = sorted((series_dir / UPSTREAM_SUBDIR).glob("*.patch"))
+    return sorted(series_dir.glob("*.patch")) + upstream
 
 
 def apply_patch_series(
@@ -92,7 +104,7 @@ def apply_patch_series(
     MDM manifest filtered to one ``apply_phase``, in apply order) is given it is
     used verbatim; this is how ``apply_phase`` ordering is honored.
     Otherwise the series is discovered from ``series_dir`` (quilt ``series``
-    manifest or sorted glob). A missing ``series_dir`` with no ``order`` is a
+    manifest, or ``series_files``). A missing ``series_dir`` with no ``order`` is a
     no-op (returns ``[]``), so the build is safe before any patch is migrated.
     """
     results: list[tuple[str, str]] = []
@@ -104,10 +116,11 @@ def apply_patch_series(
         return results
     for patch in patches:
         status = apply_patch(repo, patch, check_only=check_only)
-        results.append((patch.name, status))
+        name = entry_name(patch)
+        results.append((name, status))
         if status == "conflict" and strict:
             raise RuntimeError(
-                f"MUSA build patch {patch.name!r} does not apply to {repo} — the "
+                f"MUSA build patch {name!r} does not apply to {repo} — the "
                 f"pinned vLLM version likely moved. Regenerate the series against "
                 f"the new tag."
             )

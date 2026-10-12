@@ -61,9 +61,15 @@ def test_categories_and_phases_valid(m):
 
 def test_series_bijection_with_manifest(m):
     """Every series/*.patch ⇔ exactly one cat-1/2/3/4b manifest entry."""
-    on_disk = {p.name for p in (PATCHES / "series").glob("*.patch")}
+    series = PATCHES / "series"
+    on_disk = {
+        p.relative_to(series).as_posix()
+        for p in [*series.glob("*.patch"), *(series / "upstream").glob("*.patch")]
+    }
     in_manifest = {
-        Path(e.path).name for e in m.ENTRIES if e.category in m.BUILD_APPLIED_CATEGORIES
+        e.path.split("/series/", 1)[1]
+        for e in m.ENTRIES
+        if e.category in m.BUILD_APPLIED_CATEGORIES
     }
     assert on_disk == in_manifest, (
         f"series⇔manifest mismatch: only on disk={on_disk - in_manifest}; "
@@ -77,6 +83,11 @@ def test_series_readme_count_matches_disk() -> None:
     assert match is not None, "series README must state the current patch count"
     on_disk = sum(1 for _ in (PATCHES / "series").glob("*.patch"))
     assert int(match.group(1)) == on_disk
+    upstream = re.search(r"\*\*(\d+) upstream entries\*\*", readme)
+    assert upstream is not None, "series README must state the upstream entry count"
+    assert int(upstream.group(1)) == sum(
+        1 for _ in (PATCHES / "series" / "upstream").glob("*.patch")
+    )
 
 
 def test_object_patches_have_cat6_entries(m):

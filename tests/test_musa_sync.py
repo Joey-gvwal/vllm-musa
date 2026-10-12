@@ -104,8 +104,10 @@ def test_default_target_prefers_exact_commit(ms, monkeypatch):
 def test_series_readme_count_matches_directory():
     series_dir = ROOT / "vllm_musa" / "patches" / "series"
     patch_count = len(list(series_dir.glob("*.patch")))
+    upstream_count = len(list((series_dir / "upstream").glob("*.patch")))
     readme = (series_dir / "README.md").read_text()
     assert f"Currently **{patch_count} patches**" in readme
+    assert f"**{upstream_count} upstream entries**" in readme
 
 
 def test_series_uses_documented_prefixes_and_canonical_metadata():
@@ -1054,7 +1056,10 @@ def test_shipped_series_passes_the_format_gate(ms, capsys):
     # The gate's contract is "every shipped entry is clean and the numbering is contiguous",
     # not a fixed size: derive the count from the directory so that adding a patch to the
     # series (which regeneration does) does not redden this test.
-    expected = len(list((ROOT / "vllm_musa" / "patches" / "series").glob("*.patch")))
+    series_dir = ROOT / "vllm_musa" / "patches" / "series"
+    expected = len(list(series_dir.glob("*.patch"))) + len(
+        list((series_dir / "upstream").glob("*.patch"))
+    )
     assert f"--- {expected} clean / {expected} total / 0 need attention ---" in out
     assert out.splitlines()[-1] == "=== musa_sync check-series: PASS ==="
 
@@ -1436,7 +1441,7 @@ def _maintenance_repo(tmp_path: Path, messages: tuple[str, ...] = ("a",)):
     staged = tmp_path / "generated"
     subprocess.run(
         [
-            "git", "-C", str(repo), "format-patch", "--no-signature",
+            "git", "-C", str(repo), "-c", "core.abbrev=10", "format-patch", "--no-signature",
             "--no-numbered", "--zero-commit", "-o", str(staged), base,
         ],
         check=True,

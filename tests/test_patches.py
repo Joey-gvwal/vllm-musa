@@ -1739,11 +1739,12 @@ class TestBuildTimeSeries:
 
     def test_series_files_is_deterministic_and_covers_dir(self):
         ba = self._load_build_apply()
-        got = [p.name for p in ba.series_files(self._SERIES_DIR)]
+        got = ba.series_files(self._SERIES_DIR)
         assert got, "series_files returned nothing"
-        assert got == sorted(got), "series_files order is not deterministic"
-        # With no quilt manifest, it must equal the sorted glob exactly.
-        assert got == sorted(p.name for p in self._SERIES_DIR.glob("*.patch"))
+        # With no quilt manifest: the MUSA entries, then upstream/, each sorted.
+        assert got == sorted(self._SERIES_DIR.glob("*.patch")) + sorted(
+            (self._SERIES_DIR / "upstream").glob("*.patch")
+        )
 
     def test_gemma_norm_series_patch_uses_generic_inplace_ir_contract(self):
         series = (

@@ -82,11 +82,14 @@ def test_entries_nonempty_and_valid(manifest):
 
 
 def test_series_classified_by_target(manifest):
-    series = sorted((PATCHES / "series").glob("*.patch"))
+    root = PATCHES / "series"
+    series = sorted(root.glob("*.patch")) + sorted((root / "upstream").glob("*.patch"))
     build_applied = [e for e in manifest.ENTRIES if e.category in ("1", "2", "3", "4b")]
     # every series patch maps to exactly one build-applied entry
     assert len(build_applied) == len(series), (len(build_applied), len(series))
-    assert {e.path.split("/")[-1] for e in build_applied} == {p.name for p in series}
+    assert {e.path.split("/series/", 1)[1] for e in build_applied} == {
+        p.relative_to(root).as_posix() for p in series
+    }
     # csrc patches → cat-2/3 (pre-compile); python patches → cat-1 (pre-install)
     for e in build_applied:
         if e.upstream_path and e.upstream_path.startswith("csrc/"):

@@ -21,13 +21,37 @@ Subcommands::
         target. Exits non-zero on any conflict / missing / orphaned divergence —
         the bounded review surface a version bump needs.
 
-    rebase <ref>
-        Checkout the clone at <ref> and ``git am -3`` the series in order (true
-        3-way; trivial upstream drift auto-merges, real conflicts halt).
+    rebase <ref> [--drop-upstreamed --history PATH]
+        Checkout the clone at <ref> and ``git am -3`` the series in order,
+        ``upstream/`` last (true 3-way; trivial upstream drift auto-merges,
+        real conflicts halt). With ``--drop-upstreamed``, the entries
+        ``upgrade-plan`` drops are skipped.
+
+    upgrade-plan [<ref>] [--history PATH] [--fetch] [--no-content] [--all]
+        Per series entry, ``keep``, ``drop`` or ``review`` on a pin bump to <ref>
+        (default: the current pin), from the upstream history in PATH. An
+        ``upstream/`` entry names its commit in its ``(cherry picked from
+        commit …)`` line and its PR in the ``(#N)`` its subject ends in; it is
+        in <ref> when the commit is an ancestor, a commit subject ends in its
+        ``(#N)``, a commit says it was cherry-picked from it, or a commit has
+        its patch-id. Such an entry is dropped when it changes what its
+        upstream commit changes, and reviewed when it differs; a MUSA fix in
+        ``upstream/`` is reviewed unless every upstream entry before it is
+        kept. The series is also applied in order
+        to the pristine <ref>, which flags a MUSA entry whose change is already
+        there. Fails while an entry needs review.
+
+    backport <sha> [--from PATH] [--no-regen]
+        Cherry-pick an upstream vLLM commit (``-x``) on top of the series held
+        in the clone and regenerate the series, which makes it the last
+        ``upstream/`` entry. After resolving a cherry-pick conflict, finish
+        with ``regen``.
 
     regen
-        Regenerate the series from the clone's commits
-        (``git format-patch --no-signature --no-numbered --zero-commit``,
+        Regenerate the series from the clone's commits: the MUSA commits into
+        ``series/``; the cherry-picks, with the MUSA fixes made on top of them,
+        into ``series/upstream/``; each numbered from 0001 (``git format-patch
+        --no-signature --no-numbered --zero-commit`` with ``core.abbrev=10``,
         keeping the ``index`` blob lines for the next bump's 3-way).
 
     report [--doc]
@@ -44,7 +68,9 @@ Subcommands::
         entry has a hunk, LF-terminated *structural* lines with a final newline
         (a CR that is content — an added line of a CRLF file — is legitimate),
         a diff ``git apply --stat`` can parse — the numbering must be unique and contiguous from
-        ``0001``, and no two entries may share a diff body. ``--repo``
+        ``0001`` in each directory, no two entries may share a diff body,
+        ``upstream/`` must start with a ``git cherry-pick -x`` commit, and a
+        MUSA entry must not be one. ``--repo``
         additionally resolves the blobs those ``index`` lines declare to
         BLOBS (a preimage may be absent only when an EARLIER entry declares it
         as its postimage; an id that resolves to a commit or tree is reported).
@@ -102,6 +128,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent  # tools/ -> repo root
 PATCHES = ROOT / "vllm_musa" / "patches"
@@ -119,7 +146,16 @@ _CANONICAL_PATCH_AUTHOR = b"From: musa <musa@local>"
 # Subcommand names in parser order. patch_validate.py uses this to tell an
 # explicit subcommand from a bare flag; test_subcommands_are_wired keeps it
 # honest against the real parser.
-SUBCOMMANDS = ("apply", "verify", "check-series", "rebase", "regen", "report")
+SUBCOMMANDS = (
+    "apply",
+    "verify",
+    "check-series",
+    "rebase",
+    "upgrade-plan",
+    "backport",
+    "regen",
+    "report",
+)
 # Series generation form (see _series_format_rows).
 _MBOX_SEPARATOR = re.compile(rb"^From \S+ Mon Sep 17 00:00:00 2001$")
 _INDEX_LINE = re.compile(rb"^index ([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})", re.M)
@@ -451,9 +487,14 @@ def _verify_rows(clone: Path) -> list[tuple]:
     return rows
 
 
+def _upstream_dir() -> Path:
+    """``series/upstream/``: the upstream vLLM commits, applied last."""
+    return SERIES_DIR / manifest.UPSTREAM_SUBDIR
+
+
 def _series_dir_paths() -> tuple[list[Path], tuple[str, str] | None]:
-    """The series entries, or a ``(status, detail)`` refusal when there is
-    nothing to gate.
+    """The series entries in apply order (``upstream/`` last), or a
+    ``(status, detail)`` refusal when there is nothing to gate.
 
     A missing or empty ``series/`` is a *failure*, never a vacuous pass: a gate
     that globs zero entries reports "0 clean / 0 total / 0 need attention" and
@@ -461,7 +502,7 @@ def _series_dir_paths() -> tuple[list[Path], tuple[str, str] | None]:
     """
     if not SERIES_DIR.is_dir():
         return [], ("missing-series-dir", f"no series directory at {SERIES_DIR}")
-    paths = sorted(SERIES_DIR.glob("*.patch"))
+    paths = sorted(SERIES_DIR.glob("*.patch")) + sorted(_upstream_dir().glob("*.patch"))
     if not paths:
         return [], ("empty-series", f"{SERIES_DIR} holds no *.patch entries")
     return paths, None
@@ -529,7 +570,7 @@ def _read_entry(patch: Path, texts: dict[str, bytes]) -> tuple[str, str] | None:
             "files, and a symlink would make `regen` write outside series/",
         )
     try:
-        texts[patch.name] = patch.read_bytes()
+        texts[build_apply.entry_name(patch)] = patch.read_bytes()
     except OSError as exc:
         return ("unreadable", str(exc))
     return None
@@ -1237,31 +1278,33 @@ def _series_format_rows(
         return [(str(SERIES_DIR), refusal[0], refusal[1])]
     status: dict[str, tuple[str, str]] = {}
     texts: dict[str, bytes] = {}
+    names = {patch: build_apply.entry_name(patch) for patch in paths}
+    first_upstream = next((patch for patch in paths if _is_upstream_entry(patch)), None)
     for patch in paths:
         problem = _entry_name_problem(patch.name) or _read_entry(patch, texts)
         if problem is not None:
-            status[patch.name] = problem
-    order = [patch.name for patch in paths]
+            status[names[patch]] = problem
+    order = [names[patch] for patch in paths]
     try:
         unresolved = _missing_index_blobs(Path(repo), texts, order) if repo else {}
         duplicates = _duplicate_bodies(texts)
         for patch in paths:
-            if patch.name in status:
+            name = names[patch]
+            if name in status:
                 continue
-            text = texts[patch.name]
+            text = texts[name]
             problem = (
                 _mailbox_form_problem(text)
-                or _series_entry_problem(text, unresolved.get(patch.name, []))
-                or _canonical_form_problem(text, patch.name, duplicates)
+                or _series_entry_problem(text, unresolved.get(name, []))
+                or _canonical_form_problem(text, name, duplicates)
+                or _group_problem(patch, text, patch == first_upstream)
             )
             if problem is None:
                 parsed = _run_git(ROOT, "apply", "--stat", str(patch))
                 if parsed.returncode:
                     problem = ("corrupt", (parsed.stderr or parsed.stdout).strip()[:100])
-            status[patch.name] = problem or ("clean", "")
-        rows = [
-            (_safe_name(patch.name), *status[patch.name]) for patch in paths
-        ]
+            status[name] = problem or ("clean", "")
+        rows = [(_safe_name(names[patch]), *status[names[patch]]) for patch in paths]
         if repo and replay:
             rows = _merge_replay_rows(
                 rows, _replay_rows(Path(repo), paths, texts)
@@ -1356,8 +1399,9 @@ def _round_trip_rows(
 ) -> list[tuple[str, str, str]]:
     """Entries ``regen`` would rewrite, diffed against the *caller's* repo.
 
-    Exactly what ``cmd_regen`` runs (``git format-patch --no-signature
-    --no-numbered --zero-commit`` plus the canonical author rewrite), so the
+    Exactly what ``cmd_regen`` runs (``_format_series``: ``git format-patch
+    --no-signature --no-numbered --zero-commit`` per directory plus the
+    canonical author rewrite), so the
     comparison catches everything the cheap checks must not guess at: an extra
     ``Signed-off-by``, a deleted ``---`` diffstat, an edited-but-valid ``Date:``,
     a renamed slug, a renumbered subject. Entries pair up by position, which is
@@ -1403,25 +1447,9 @@ def _round_trip_rows_in(
         ]
     staged = tmp / "staged"
     staged.mkdir()
-    r = _git(
-        repo,
-        "format-patch",
-        "--no-signature",
-        "--no-numbered",
-        "--zero-commit",
-        "-o",
-        str(staged),
-        base,
-    )
-    if r.returncode:
-        return [
-            (
-                "series replay",
-                "round-trip-dirty",
-                f"`regen` (git format-patch) failed: {_git_first_error(r)}",
-            )
-        ]
-    generated = sorted(staged.glob("*.patch"))
+    generated, error = _format_series(repo, base, staged)
+    if error:
+        return [("series replay", "round-trip-dirty", error)]
     if not generated:
         # `regen` produces nothing when the checkout has no commits above the
         # base — i.e. `--repo` is at the pin, a state this mode cannot check.
@@ -1437,8 +1465,6 @@ def _round_trip_rows_in(
                 "(run `rebase` first, or `--replay` against a checkout at the pin)",
             )
         ]
-    for patch in generated:
-        _normalize_patch_author(patch)  # what cmd_regen does before comparing
     if len(generated) != len(paths):
         # A checkout that does not hold *this* series — the pin plus a commit of
         # its own, another branch, the upstream/vllm-musa repo itself — makes
@@ -1482,22 +1508,23 @@ def _round_trip_rows_in(
         ]
     rows: list[tuple[str, str, str]] = []
     for entry, regen in zip(paths, generated):
+        name, regen_name = build_apply.entry_name(entry), build_apply.entry_name(regen)
         want, got = entry.read_bytes(), regen.read_bytes()
-        if entry.name == regen.name and want == got:
+        if name == regen_name and want == got:
             continue
-        if entry.name != regen.name:
+        if name != regen_name:
             rows.append(
                 (
-                    _safe_name(entry.name),
+                    _safe_name(name),
                     "round-trip-dirty",
-                    f"`regen` names this entry {regen.name}: the filename is "
+                    f"`regen` names this entry {regen_name}: the filename is "
                     "not a fixed point",
                 )
             )
         else:
             rows.append(
                 (
-                    _safe_name(entry.name),
+                    _safe_name(name),
                     "round-trip-dirty",
                     "`regen` rewrites this entry: "
                     f"{_first_diff_line(want, got)}",
@@ -1506,7 +1533,7 @@ def _round_trip_rows_in(
     for regen in generated[len(paths) :]:
         rows.append(
             (
-                _safe_name(regen.name),
+                _safe_name(build_apply.entry_name(regen)),
                 "round-trip-dirty",
                 "`regen` produces this entry; series/ has no file with that name",
             )
@@ -1514,7 +1541,7 @@ def _round_trip_rows_in(
     for entry in paths[len(generated) :]:
         rows.append(
             (
-                _safe_name(entry.name),
+                _safe_name(build_apply.entry_name(entry)),
                 "round-trip-dirty",
                 "`regen` produces no entry with this name",
             )
@@ -1559,8 +1586,9 @@ def _replay_rows(
         applied = 0
         made: dict[str, str | None] = {}
         for patch in paths:
+            name = build_apply.entry_name(patch)
             head_before = _git(clone, "rev-parse", "HEAD").stdout.strip()
-            r = _git(clone, "am", "-3", str(patch))
+            r = _git(clone, "am", "-3", "--keep-non-patch", str(patch))
             head_after = _git(clone, "rev-parse", "HEAD").stdout.strip()
             if r.returncode == 0 and head_after == head_before:
                 # `git am` exits 0 and creates NO commit when the entry is
@@ -1571,7 +1599,7 @@ def _replay_rows(
                 # pin. One row, on the entry that applied nothing.
                 return [
                     (
-                        _safe_name(patch.name),
+                        _safe_name(name),
                         "replay-noop",
                         "`git am` applied nothing (the change is already present "
                         "in this checkout): if it already holds the series, "
@@ -1582,16 +1610,16 @@ def _replay_rows(
             if r.returncode != 0:
                 detail = _git_first_error(r)
                 _git(clone, "am", "--abort")
-                if applied == 0 and texts.get(patch.name, b"").strip():
+                if applied == 0 and texts.get(name, b"").strip():
                     detail += (
                         f" (the first entry that applies fails here, after "
                         f"{applied} applied: if this checkout already holds the "
                         "series, replay needs one at the pin, and `--round-trip` "
                         "is the mode for the maintenance state)"
                     )
-                return [(_safe_name(patch.name), "replay-failed", detail)]
+                return [(_safe_name(name), "replay-failed", detail)]
             applied += 1
-            made[patch.name] = head_after
+            made[name] = head_after
         return _unearned_exemption_rows(clone, paths, texts, made) + (
             _build_path_rows(tmp, repo, paths)
         )
@@ -1627,12 +1655,13 @@ def _unearned_exemption_rows(
     """
     declared: dict[tuple[str, str], str] = {}
     for patch in paths:
-        text = texts.get(patch.name)
+        name = build_apply.entry_name(patch)
+        text = texts.get(name)
         if text is None:
             continue
         for path, post in _declared_postimages(text):
             if not _ZERO_BLOB.match(post.encode()):
-                declared.setdefault((patch.name, post), path)
+                declared.setdefault((name, post), path)
     if not declared:
         return []
     ids = sorted({blob for _name, blob in declared})
@@ -1705,7 +1734,7 @@ def _build_path_rows(
         if r.returncode:
             return [
                 (
-                    _safe_name(patch.name),
+                    _safe_name(build_apply.entry_name(patch)),
                     "build-path-conflict",
                     "`git apply --recount -p1` (what build_apply.py runs) fails "
                     f"here: {(r.stderr or r.stdout).strip().splitlines()[-1][:120]}",
@@ -1819,6 +1848,23 @@ def _series_numbering_rows(rows) -> list[tuple[str, str, str]]:
     return out
 
 
+def _numbering_rows(rows) -> list[tuple[str, str, str]]:
+    """``_series_numbering_rows`` per directory: ``upstream/`` and the MUSA
+    entries are numbered apart."""
+    prefix = manifest.UPSTREAM_SUBDIR + "/"
+    out = _series_numbering_rows([r for r in rows if not r[0].startswith(prefix)])
+    upstream = [(r[0][len(prefix) :], *r[1:]) for r in rows if r[0].startswith(prefix)]
+    for name, status, detail in _series_numbering_rows(upstream):
+        if name == "series numbering":
+            name = f"series/{manifest.UPSTREAM_SUBDIR} numbering"
+        elif name.startswith("series/"):
+            name = f"series/{prefix}{name[len('series/') :]}"
+        else:
+            name = prefix + name
+        out.append((name, status, detail))
+    return out
+
+
 def _numbering_line(rows, number_rows) -> str | None:
     """The series-level numbering verdict, or None when there is nothing to
     report (a missing or empty series has no numbering).
@@ -1831,15 +1877,25 @@ def _numbering_line(rows, number_rows) -> str | None:
         return f"--- numbering: {len(number_rows)} problem(s) ---"
     if not rows or any(status in _SERIES_FATAL for _, status, _ in rows):
         return None
-    present = sorted(
-        n for n in (_number_prefix(name) for name, _, _ in rows) if n is not None
+    prefix = manifest.UPSTREAM_SUBDIR + "/"
+    groups = (
+        ("", [name for name, _, _ in rows if not name.startswith(prefix)]),
+        (
+            prefix + " ",
+            [name[len(prefix) :] for name, _, _ in rows if name.startswith(prefix)],
+        ),
     )
-    if not present:  # unnumbered entries: already rowed, so unreachable
+    parts = []
+    for label, names in groups:
+        present = sorted(n for n in map(_number_prefix, names) if n is not None)
+        if present:
+            parts.append(
+                f"{label}{len(names)} entries are unique and contiguous "
+                f"{present[0]}..{present[-1]}"
+            )
+    if not parts:  # unnumbered entries: already rowed, so unreachable
         return None
-    return (
-        f"--- numbering: {len(rows)} entries are unique and contiguous "
-        f"{present[0]}..{present[-1]} ---"
-    )
+    return f"--- numbering: {'; '.join(parts)} ---"
 
 
 def _series_file_names() -> set[str]:
@@ -1851,6 +1907,12 @@ def _series_file_names() -> set[str]:
     """
     try:
         names = {p.name for p in SERIES_DIR.iterdir() if p.is_file()}
+        if _upstream_dir().is_dir():
+            names |= {
+                build_apply.entry_name(p)
+                for p in _upstream_dir().iterdir()
+                if p.is_file()
+            }
     except OSError:
         return set()
     return names | {_safe_name(name) for name in names}
@@ -1953,7 +2015,7 @@ def cmd_check_series(args) -> int:
     # skip the series-level rows the deep modes can add (see _entry_file_rows);
     # the verdict below still fails on every row.
     entries = _entry_file_rows(rows)
-    number_rows = _series_numbering_rows(entries)
+    number_rows = _numbering_rows(entries)
     bad = [r for r in rows if r[1] != "clean"]
     if any(status in _SERIES_FATAL for _, status, _ in rows):
         print(f"=== musa_sync check-series: {SERIES_DIR} cannot be gated ===")
@@ -2003,7 +2065,7 @@ def cmd_verify(args) -> int:
     finally:
         if temp:
             shutil.rmtree(clone.parent, ignore_errors=True)
-    number_rows = _series_numbering_rows(fmt_rows)
+    number_rows = _numbering_rows(fmt_rows)
     fmt_bad = [r for r in fmt_rows if r[1] != "clean"]
     bad = [r for r in rows if r[2] in _BAD]
     n_clean = sum(1 for r in rows if r[2] == "clean")
@@ -2060,6 +2122,7 @@ def _checkout(target: str) -> int:
     if r.returncode:
         print(r.stderr)
         return 1
+    _git(WORKDIR, "update-ref", _BASE_REF, "HEAD")
     return 0
 
 
@@ -2072,14 +2135,34 @@ def cmd_rebase(args) -> int:
         )
         print("=== musa_sync rebase: FAIL (usage) ===")
         return 2
+    drop: set[str] = set()
+    if args.drop_upstreamed:
+        history = Path(args.history).resolve() if args.history else WORKDIR
+        try:
+            rows, planned = _upgrade_plan_rows(
+                history, target, _default_target(), fetch=args.fetch
+            )
+            target = planned.target  # rebase onto the commit the plan judged
+        except RepoUnusable as exc:
+            print(f"ERROR: {exc}")
+            print("=== musa_sync rebase: FAIL (history) ===")
+            return 2
+        for name, group, verdict, reason in rows:
+            if verdict == _PLAN_DROP:
+                drop.add(name)
+                print(f"  drop    {group:<9} {name}\n                    {reason}")
+            elif verdict == _PLAN_REVIEW:
+                print(f"  review  {group:<9} {name}\n                    {reason}")
     if _checkout(target):
         print("=== musa_sync rebase: FAIL (checkout) ===")
         return 1
     order = manifest.series_apply_order()
+    order = [p for p in order if build_apply.entry_name(p) not in drop]
     for patch in order:
-        r = _git(WORKDIR, "am", "-3", str(patch))
+        # --keep-non-patch keeps an upstream subject's "[Core]"-style tags.
+        r = _git(WORKDIR, "am", "-3", "--keep-non-patch", str(patch))
         if r.returncode != 0:
-            print(f"CONFLICT: {patch.name}\n{r.stdout}\n{r.stderr}")
+            print(f"CONFLICT: {build_apply.entry_name(patch)}\n{r.stdout}\n{r.stderr}")
             print(
                 "Resolve in third_party/vllm, then "
                 "`git -C third_party/vllm am --continue`, then re-run; or "
@@ -2087,7 +2170,15 @@ def cmd_rebase(args) -> int:
             )
             print("=== musa_sync rebase: FAIL (conflict) ===")
             return 1
-    print(f"rebased {len(order)} patches onto vllm@{target} (git am -3)")
+    dropped = f", dropped {len(drop)} already upstream" if drop else ""
+    print(f"rebased {len(order)} patches onto vllm@{target} (git am -3){dropped}")
+    if _base_problem(_default_target() or ""):
+        print(
+            f"Set VLLM_COMMIT and VLLM_TAG in third_party/PINS to {target}, then "
+            "run `musa_sync regen`."
+        )
+    elif drop:
+        print("Run `musa_sync regen` to renumber the series without them.")
     print("=== musa_sync rebase: PASS ===")
     return 0
 
@@ -2134,40 +2225,36 @@ def cmd_regen(args) -> int:
         )
         print("=== musa_sync regen: FAIL (usage) ===")
         return 2
+    problem = _base_problem(target)
+    if problem:
+        print(f"ERROR: {problem}")
+        print("=== musa_sync regen: FAIL (base) ===")
+        return 1
     with tempfile.TemporaryDirectory(prefix="musa-regen-series-") as tmp:
         staged = Path(tmp)
-        r = _git(
-            WORKDIR,
-            "format-patch",
-            "--no-signature",
-            "--no-numbered",
-            "--zero-commit",
-            "-o",
-            str(staged),
-            target,
-        )
-        if r.returncode:
-            print(r.stderr)
+        generated, error = _format_series(WORKDIR, target, staged)
+        if error:
+            print(f"ERROR: {error}")
             print("=== musa_sync regen: FAIL (format-patch) ===")
             return 1
-
-        generated = sorted(staged.glob("*.patch"))
         if not generated:
             print(f"ERROR: no patches generated from vllm@{target}..HEAD")
             print("=== musa_sync regen: FAIL (no-patches) ===")
             return 1
 
-        for patch in generated:
-            _normalize_patch_author(patch)
-
-        numbers = [p.name.split("-", 1)[0] for p in generated]
-        expected = [f"{i:04d}" for i in range(1, len(generated) + 1)]
-        if numbers != expected:
-            print(
-                "ERROR: git format-patch produced a non-contiguous series: "
-                f"expected {expected}, got {numbers}"
-            )
-            return 1
+        groups = (
+            (staged / manifest.UPSTREAM_SUBDIR, _upstream_dir()),
+            (staged, SERIES_DIR),
+        )
+        for src, _ in groups:
+            numbers = [p.name.split("-", 1)[0] for p in sorted(src.glob("*.patch"))]
+            expected = [f"{i:04d}" for i in range(1, len(numbers) + 1)]
+            if numbers != expected:
+                print(
+                    "ERROR: git format-patch produced a non-contiguous series: "
+                    f"expected {expected}, got {numbers}"
+                )
+                return 1
 
         headers = {p: p.read_bytes().splitlines()[:2] for p in generated}
         noncanonical_commits = [
@@ -2193,21 +2280,765 @@ def cmd_regen(args) -> int:
             )
             return 1
 
+        known = {p.name for p in _upstream_dir().glob("*.patch")}
+        fixes = [
+            p.name
+            for p in sorted((staged / manifest.UPSTREAM_SUBDIR).glob("*.patch"))
+            if p.name not in known
+            and not manifest.parse_upstream_pick(p.read_bytes()).commits
+        ]
         SERIES_DIR.mkdir(parents=True, exist_ok=True)
-        existing = list(SERIES_DIR.glob("*.patch"))
-        generated_names = {p.name for p in generated}
-        for patch in generated:
-            shutil.copyfile(patch, SERIES_DIR / patch.name)
-        stale = [p for p in existing if p.name not in generated_names]
+        stale: list[Path] = []
+        upstream_count = 0
+        for src, dest in groups:
+            fresh = sorted(src.glob("*.patch"))
+            if dest != SERIES_DIR:
+                upstream_count = len(fresh)
+            if fresh:
+                dest.mkdir(parents=True, exist_ok=True)
+            existing = sorted(dest.glob("*.patch")) if dest.is_dir() else []
+            for patch in fresh:
+                shutil.copyfile(patch, dest / patch.name)
+            names = {patch.name for patch in fresh}
+            stale += [patch for patch in existing if patch.name not in names]
         for patch in stale:
             patch.unlink()
+        if _upstream_dir().is_dir() and not any(_upstream_dir().iterdir()):
+            _upstream_dir().rmdir()
 
+    upstream_note = f" ({upstream_count} in upstream/)" if upstream_count else ""
     print(
-        f"regenerated {len(generated)} contiguous patches in {SERIES_DIR} "
-        f"from vllm@{target}..HEAD; pruned {len(stale)} stale files"
+        f"regenerated {len(generated)} contiguous patches{upstream_note} in "
+        f"{SERIES_DIR} from vllm@{target}..HEAD; pruned {len(stale)} stale files"
     )
+    for name in fixes:
+        print(
+            f"note: {manifest.UPSTREAM_SUBDIR}/{name} changes a file that an "
+            "upstream commit changes, so it stays after them in upstream/; "
+            "upgrade-plan reviews it unless every upstream entry before it is kept"
+        )
     print("=== musa_sync regen: PASS ===")
     return 0
+
+
+# ------------------------------------------------------------- upstream commits
+# series/upstream/ holds the upstream vLLM commits the pin predates; they apply
+# after the MUSA entries. ``backport`` adds one, ``upgrade-plan`` decides what a
+# pin bump keeps, drops and reviews, and ``rebase --drop-upstreamed`` acts on it.
+
+_PLAN_KEEP, _PLAN_DROP, _PLAN_REVIEW = "keep", "drop", "review"
+_PR_SUFFIX = re.compile(r"\(#([0-9]+)\)\s*$")
+_REVERT_SUBJECT = re.compile(r'^Revert "(.*)"(?:\s*\(#[0-9]+\))?\s*$')
+# Records the commit `_checkout` put the clone on, which the series sits on.
+_BASE_REF = "refs/musa-sync/base"
+# Protocol v2 serves any reachable commit; v0, the default before git 2.29,
+# only branch and tag tips.
+_FETCH_ANY_COMMIT = ("-c", "protocol.version=2", "fetch", "--quiet", "--no-tags")
+
+
+class _Ref(NamedTuple):
+    """An upstream vLLM change: a commit sha or a pull-request number."""
+
+    kind: str  # "commit" or "pr"
+    value: str
+
+    def __str__(self) -> str:
+        return self.value[:12] if self.kind == "commit" else f"#{self.value}"
+
+
+def _is_upstream_entry(patch: Path) -> bool:
+    return patch.parent.name == manifest.UPSTREAM_SUBDIR
+
+
+def _group_problem(patch: Path, text: bytes, first: bool) -> tuple[str, str] | None:
+    """A MUSA entry is no cherry-pick, and ``upstream/`` starts with one; a later
+    entry there without one is a MUSA fix for the upstream commit before it."""
+    picked = manifest.parse_upstream_pick(text).commits
+    if _is_upstream_entry(patch):
+        if first and not picked:
+            return (
+                "not-a-cherry-pick",
+                f"{manifest.UPSTREAM_SUBDIR}/ starts with a `git cherry-pick -x` of an "
+                "upstream vLLM commit, but this message has no `(cherry picked from "
+                "commit …)` line: add upstream commits with `musa_sync backport <sha>`",
+            )
+        return None
+    if picked:
+        return (
+            "misplaced-cherry-pick",
+            f"cherry-picked from {picked[0][:12]}: an upstream vLLM commit belongs "
+            f"in {manifest.UPSTREAM_SUBDIR}/ (`musa_sync backport <sha>`); drop the "
+            "line if this is a MUSA change",
+        )
+    return None
+
+
+def _format_series(
+    repo: Path, base: str, staged: Path
+) -> tuple[list[Path], str | None]:
+    """Write what ``regen`` writes for ``base..HEAD`` of ``repo`` into ``staged``.
+
+    The MUSA entries go to ``staged/``. After them, ``upstream/`` takes the
+    upstream commits (``git cherry-pick -x``) and the MUSA fixes made on top of
+    them, the commits above the first cherry-pick that change a file those
+    commits change. Any other commit above the first cherry-pick is a MUSA
+    entry: it shares no file with ``upstream/``, so its patch is the same
+    below them. Each directory is numbered from 0001, with the canonical
+    author and a fixed ``core.abbrev``, so the ``index`` lines do not depend
+    on how many objects the repository holds.
+    Returns ``(entries in apply order, error)``.
+    """
+    split = _split_stack(repo, base)
+    if isinstance(split, str):
+        return [], split
+    commits, first, upstream = split
+    groups = (
+        (staged, first, [sha for sha in commits[first:] if sha not in upstream]),
+        (
+            staged / manifest.UPSTREAM_SUBDIR,
+            0,
+            [sha for sha in commits if sha in upstream],
+        ),
+    )
+    out: list[Path] = []
+    for dest, lead, rest in groups:
+        if not lead and not rest:
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        jobs = [(1, f"{base}..{commits[lead - 1]}")] if lead else []
+        jobs += [(lead + n + 1, "-1", sha) for n, sha in enumerate(rest)]
+        for start, *revs in jobs:
+            r = _git(
+                repo,
+                "-c",
+                "core.abbrev=10",
+                "format-patch",
+                "--no-signature",
+                "--no-numbered",
+                "--zero-commit",
+                f"--start-number={start}",
+                "-o",
+                str(dest),
+                *revs,
+            )
+            if r.returncode:
+                return [], f"`regen` (git format-patch) failed: {_git_first_error(r)}"
+        group = sorted(dest.glob("*.patch"))
+        for patch in group:
+            _normalize_patch_author(patch)
+        out.extend(group)
+    return out, None
+
+
+def _split_stack(repo: Path, base: str) -> tuple[list[str], int, set[str]] | str:
+    """``(commits of base..HEAD, index of the first cherry-pick, the commits
+    that go to upstream/)``, or an error message."""
+    log = _git(repo, "log", "--reverse", "--format=%H%x1f%B%x1e", f"{base}..HEAD")
+    if log.returncode:
+        return f"`git log {base}..HEAD` failed: {_git_first_error(log)}"
+    commits, picks = [], []
+    for record in log.stdout.split("\x1e"):
+        sha, sep, body = record.strip("\n").partition("\x1f")
+        if sep:
+            commits.append(sha.strip())
+            picks.append(bool(manifest.picked_commits(body.splitlines())))
+    first = picks.index(True) if True in picks else len(commits)
+    files = {sha: _changed_paths(repo, sha) for sha in commits[first:]}
+    upstream = {sha for sha, picked in zip(commits, picks) if picked}
+    touched = set().union(*(files[sha] for sha in upstream))
+    grew = True
+    while grew:  # a MUSA fix on top of an upstream commit stays with it
+        grew = False
+        for sha in commits[first:]:
+            if sha not in upstream and files[sha] & touched:
+                upstream.add(sha)
+                touched |= files[sha]
+                grew = True
+    return commits, first, upstream
+
+
+def _changed_paths(repo: Path, sha: str) -> set[str]:
+    """The paths a commit changes."""
+    r = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", sha)
+    return (
+        {path for path in r.stdout.split("\0") if path} if r.returncode == 0 else set()
+    )
+
+
+def _change_lines(diff: str) -> tuple:
+    """The changed lines of a diff, per file, without context or line numbers:
+    two diffs with equal results make the same change, whatever their context."""
+    files: dict[str, list[str]] = {}
+    path, in_hunk = None, False
+    for line in diff.split("\n"):
+        if line.startswith("diff --git "):
+            path, in_hunk = line.split(" b/", 1)[-1], False
+            files.setdefault(path, [])
+        elif path is not None and line.startswith("@@"):
+            in_hunk = True
+        elif path is not None and in_hunk and line[:1] in ("+", "-"):
+            files[path].append(line.rstrip())
+    return tuple(sorted((p, tuple(lines)) for p, lines in files.items()))
+
+
+class _UpstreamHistory:
+    """Read-only questions about upstream vLLM history for a pin bump.
+
+    ``repo`` should hold the full history of ``target``. A shallow clone
+    cannot see most commits, so a "no" from it is reported as unknown.
+    """
+
+    def __init__(
+        self, repo: Path, target: str, pin: str | None, *, fetch: bool = False
+    ):
+        _require_usable_repo(repo)
+        self.repo = repo
+        self.fetch = fetch
+        self.target = self._resolve(target)
+        if self.target is None:
+            raise RepoUnusable(
+                f"{target!r} is not a commit in {repo} (fetch it, or pass --fetch)"
+            )
+        self.pin = self._resolve(pin) if pin else None
+        shallow = _run_git(repo, "rev-parse", "--is-shallow-repository")
+        self.shallow = shallow.returncode == 0 and shallow.stdout.strip() == "true"
+        self._range_ids: dict[str, str] | None = None
+
+    def _resolve(self, ref: str) -> str | None:
+        """The full sha of ``ref``; with ``fetch``, fetched from ``origin``
+        when missing (a full fetch: ancestry needs the history)."""
+        candidates = [ref]
+        if self.fetch:
+            candidates.append(None)
+        for candidate in candidates:
+            if candidate is None:
+                fetched = _run_git(self.repo, *_FETCH_ANY_COMMIT, "origin", ref)
+                if fetched.returncode:
+                    return None
+                candidate = "FETCH_HEAD"
+            r = _run_git(
+                self.repo, "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}"
+            )
+            if r.returncode == 0:
+                return r.stdout.strip()
+        return None
+
+    def _log(self, *args: str) -> list[str]:
+        r = _run_git(self.repo, "log", *args)
+        return r.stdout.splitlines() if r.returncode == 0 else []
+
+    def commit(self, sha: str) -> str | None:
+        """``sha`` if this repository has it (fetching it if it can)."""
+        return self._resolve(sha)
+
+    def is_ancestor(self, sha: str) -> bool | None:
+        r = _run_git(self.repo, "merge-base", "--is-ancestor", sha, self.target)
+        if r.returncode == 0:
+            return True
+        return False if r.returncode == 1 and not self.shallow else None
+
+    def merged_pr(self, number: str) -> str | None:
+        """The target-history commit that merged ``#number``, or None.
+
+        vLLM squash-merges a pull request into one commit whose subject ends
+        in ``(#N)``; release-branch cherry-picks keep that subject.
+        """
+        for line in self._log(
+            self.target, "-F", f"--grep=(#{number})", "--format=%H%x1f%s"
+        ):
+            sha, _, subject = line.partition("\x1f")
+            m = _PR_SUFFIX.search(subject)
+            if m and m.group(1) == number:
+                return sha
+        return None
+
+    def cherry_pick_of(self, sha: str) -> str | None:
+        hits = self._log(
+            self.target, "-F", f"--grep=cherry picked from commit {sha}", "--format=%H"
+        )
+        return hits[0] if hits else None
+
+    def revert_of(self, sha: str) -> str | None:
+        """The latest commit after ``sha`` in the target that reverts it, unless
+        a later commit lands the change again.
+
+        git writes "This reverts commit <sha>." into a revert; vLLM squash-merges
+        a revert PR as ``Revert "<title>" (#N)`` without that line.
+        """
+        subject = (self._log("-1", "--format=%s", sha) or [""])[0]
+        title = _PR_SUFFIX.sub("", subject).rstrip()
+        span = f"{sha}..{self.target}"
+        hits = self._log(span, "-F", f"--grep=This reverts commit {sha}", "--format=%H")
+        if title:
+            for line in self._log(
+                span, "-F", f'--grep=Revert "{title}', "--format=%H%x1f%s"
+            ):
+                commit, _, later = line.partition("\x1f")
+                m = _REVERT_SUBJECT.match(later)
+                if m and m.group(1).strip() in (subject.strip(), title):
+                    hits.append(commit)
+        if not hits:
+            return None
+        revert = self._log("--no-walk", "--format=%H", *hits)[0]
+        for line in self._log(
+            f"{revert}..{self.target}", "-F", f"--grep={title}", "--format=%s"
+        ):
+            later = _PR_SUFFIX.sub("", line).strip()
+            if later == title or later.startswith(
+                (f'Reapply "{title}', f'Revert "Revert "{title}')
+            ):
+                return None
+        return revert
+
+    def pr_of(self, sha: str) -> str | None:
+        subject = self._log("-1", "--format=%s", sha)
+        m = _PR_SUFFIX.search(subject[0]) if subject else None
+        return m.group(1) if m else None
+
+    def _patch_id(self, text: str) -> str | None:
+        r = _run_git(self.repo, "patch-id", "--stable", stdin_text=text)
+        words = r.stdout.split()
+        return words[0] if r.returncode == 0 and words else None
+
+    def same_change_as(self, sha: str) -> str | None:
+        """A commit in pin..target whose ``git patch-id --stable`` equals
+        ``sha``'s: the same change committed again (a cherry-pick without
+        ``-x`` or with another subject)."""
+        if self.pin is None:
+            return None
+        if self._range_ids is None:
+            log = _run_git(
+                self.repo, "log", "--no-merges", "-p", f"{self.pin}..{self.target}"
+            )
+            ids = _run_git(self.repo, "patch-id", "--stable", stdin_text=log.stdout)
+            self._range_ids = {}
+            for line in ids.stdout.splitlines():
+                words = line.split()
+                if len(words) == 2:
+                    self._range_ids.setdefault(words[0], words[1])
+        shown = _run_git(self.repo, "show", "--format=", sha)
+        pid = self._patch_id(shown.stdout) if shown.returncode == 0 else None
+        hit = self._range_ids.get(pid) if pid else None
+        return hit if hit != sha else None
+
+    def ref_state(self, ref) -> tuple[str, str]:
+        """``(state, evidence)`` of an upstream reference in the target:
+        ``in``, ``out``, ``reverted`` or ``unknown``."""
+        found, how = None, ""
+        if ref.kind == "commit":
+            sha = self.commit(ref.value)
+            if sha is None:
+                return "unknown", f"{ref.value[:12]} is not in {self.repo}"
+            if self.is_ancestor(sha):
+                found, how = sha, f"{sha[:12]} is in the target history"
+            else:
+                pick = self.cherry_pick_of(sha)
+                pr = None if pick else self.pr_of(sha)
+                merged = self.merged_pr(pr) if pr else None
+                same = None if (pick or merged) else self.same_change_as(sha)
+                if pick:
+                    found, how = pick, f"cherry-picked as {pick[:12]}"
+                elif merged:
+                    found, how = merged, f"#{pr} merged as {merged[:12]}"
+                elif same:
+                    found, how = same, f"same change as {same[:12]} (patch-id)"
+        else:
+            merged = self.merged_pr(ref.value)
+            if merged:
+                found, how = merged, f"#{ref.value} merged as {merged[:12]}"
+        if found:
+            revert = self.revert_of(found)
+            if revert:
+                return "reverted", f"{how}, reverted by {revert[:12]}"
+            return "in", how
+        if self.shallow:
+            return "unknown", f"{ref} not found in shallow history"
+        return "out", f"{ref} is not in the target"
+
+
+def _refs_state(history: _UpstreamHistory, refs) -> tuple[str, str]:
+    """``in`` when any ref is in the target; ``reverted``/``unknown`` win over
+    ``out``."""
+    states = [history.ref_state(ref) for ref in refs]
+    if not states:
+        return "out", ""
+    ins = list(dict.fromkeys(ev for st, ev in states if st == "in"))
+    if ins:
+        return "in", "; ".join(ins)
+    bad = [(st, ev) for st, ev in states if st in ("reverted", "unknown")]
+    if bad:
+        return bad[0]
+    return "out", next(ev for st, ev in states if st == "out")
+
+
+def _is_verbatim(history: _UpstreamHistory, patch: Path, commits) -> bool | None:
+    """Whether the entry changes what its upstream commit changes (context and
+    line numbers aside); None when no such commit is in the history."""
+    try:
+        ours = _change_lines(patch.read_text(errors="replace"))
+    except OSError:
+        return None
+    for sha in commits:
+        full = history.commit(sha)
+        if full is None:
+            continue
+        shown = _run_git(history.repo, "show", "--format=", full)
+        if shown.returncode == 0:
+            return ours == _change_lines(shown.stdout)
+    return None
+
+
+def _plan_verdict(
+    upstream: bool, state: tuple[str, str], content: str | None, verbatim: bool | None
+) -> tuple[str, str]:
+    """What a pin bump does with one entry: ``(keep|drop|review, reason)``.
+
+    ``content`` is the entry's ``build_apply.apply_patch`` status when the
+    series is applied in order to the pristine target (``already-applied``,
+    ``applied`` or ``conflict``), or None when not checked. It settles what the
+    history cannot: whether the change is in the target at all. An upstream
+    entry that differs from its upstream commit is reviewed, not dropped: its
+    local changes may still be needed.
+    """
+    if not upstream:
+        if content == "already-applied":
+            return _PLAN_REVIEW, "the change is already in the target: upstreamed?"
+        return _PLAN_KEEP, ""
+    st, evidence = state
+    if st == "in" and content == "applied":
+        return _PLAN_REVIEW, f"{evidence}, but the change still applies: reverted?"
+    if content == "already-applied":
+        # The target holds the whole entry, local changes included.
+        return _PLAN_DROP, (
+            evidence if st == "in" else "the change is already in the target"
+        )
+    if st == "in":
+        if verbatim:
+            return _PLAN_DROP, evidence
+        if verbatim is None:
+            return (
+                _PLAN_REVIEW,
+                f"{evidence}; its upstream commit is not in the history",
+            )
+        return _PLAN_REVIEW, (
+            f"{evidence}; the entry differs from its upstream commit: drop it unless "
+            "its local changes are still needed"
+        )
+    if st == "reverted":
+        return _PLAN_REVIEW, evidence
+    if st == "unknown" and content != "applied":
+        return _PLAN_REVIEW, evidence + " (pass --history <full vLLM clone>)"
+    return _PLAN_KEEP, ""
+
+
+@contextmanager
+def _exported_tree(repo: Path, sha: str):
+    """A pristine copy of ``sha``'s tree (``git archive``; ``repo`` is only read)."""
+    tmp = Path(tempfile.mkdtemp(prefix="musa-plan-"))
+    try:
+        tree = tmp / "vllm"
+        tree.mkdir()
+        archive = subprocess.run(
+            ["git", "-C", str(repo), "archive", "--format=tar", sha],
+            capture_output=True,
+        )
+        if archive.returncode:
+            raise RepoUnusable(f"git archive {sha[:12]} failed in {repo}")
+        subprocess.run(["tar", "-x", "-C", str(tree)], input=archive.stdout, check=True)
+        subprocess.run(
+            ["git", "init", "--quiet", str(tree)], check=True, capture_output=True
+        )
+        yield tree
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _upgrade_plan_rows(
+    history_repo: Path,
+    target: str,
+    pin: str | None,
+    *,
+    content: bool = True,
+    fetch: bool = False,
+) -> tuple[list[tuple[str, str, str, str]], _UpstreamHistory]:
+    """``(entry, group, verdict, reason)`` for every series entry."""
+    paths, refusal = _series_dir_paths()
+    if refusal:
+        raise RepoUnusable(f"{SERIES_DIR}: {refusal[1]}")
+    for p in paths:
+        try:
+            regular = stat.S_ISREG(p.lstat().st_mode)
+        except OSError:
+            regular = False
+        if not regular:
+            raise RepoUnusable(
+                f"{build_apply.entry_name(p)} is not a regular file "
+                "(run `musa_sync check-series`)"
+            )
+    history = _UpstreamHistory(history_repo, target, pin, fetch=fetch)
+    statuses: dict[Path, str] = {}
+    if content:
+        # In order and cumulatively, like the build: an entry's preimage can
+        # be an earlier entry's postimage.
+        with _exported_tree(history_repo, history.target) as tree:
+            for p in paths:
+                statuses[p] = build_apply.apply_patch(tree, p)
+    rows = []
+    moved: list[tuple[str, str]] = []  # upstream commits so far that are not kept
+    for p in paths:
+        name = build_apply.entry_name(p)
+        if not _is_upstream_entry(p):
+            verdict = _plan_verdict(False, ("out", ""), statuses.get(p), None)
+            rows.append((name, "musa", *verdict))
+            continue
+        pick = manifest.upstream_pick(p)
+        if not pick.commits:
+            # A MUSA fix serves the upstream commits before it.
+            if not moved:
+                rows.append((name, "fix", _PLAN_KEEP, ""))
+            else:
+                rows.append(
+                    (
+                        name,
+                        "fix",
+                        _PLAN_REVIEW,
+                        f"a MUSA change on top of {moved[0][0]}, which is "
+                        f"{moved[0][1]}: drop it with it, or keep it as a MUSA "
+                        "patch if still needed",
+                    )
+                )
+            continue
+        refs = [_Ref("commit", sha) for sha in pick.commits]
+        refs += [_Ref("pr", pick.pr)] if pick.pr else []
+        state = _refs_state(history, refs)
+        verbatim = _is_verbatim(history, p, pick.commits)
+        verdict = _plan_verdict(True, state, statuses.get(p), verbatim)
+        if verdict[0] != _PLAN_KEEP:
+            moved.append((name, verdict[0]))
+        rows.append((name, "upstream", *verdict))
+    return rows, history
+
+
+def cmd_upgrade_plan(args) -> int:
+    pin = _default_target()
+    target = args.target or pin
+    if not target:
+        print("ERROR: no target ref: pass one or set VLLM_COMMIT/VLLM_TAG in PINS")
+        print("=== musa_sync upgrade-plan: FAIL (usage) ===")
+        return 2
+    repo = Path(args.history).resolve() if args.history else WORKDIR
+    try:
+        rows, history = _upgrade_plan_rows(
+            repo, target, pin, content=not args.no_content, fetch=args.fetch
+        )
+    except RepoUnusable as exc:
+        print(f"ERROR: {exc}")
+        print("=== musa_sync upgrade-plan: FAIL (history) ===")
+        return 2
+    shallow = " (shallow: negatives are unknown)" if history.shallow else ""
+    print(
+        f"=== musa_sync upgrade-plan: {(history.pin or '?')[:12]} -> "
+        f"{history.target[:12]} (history: {repo}{shallow}) ==="
+    )
+    for name, group, verdict, reason in rows:
+        if verdict != _PLAN_KEEP or args.all:
+            print(f"  {verdict:<7} {group:<9} {name}")
+            if reason:
+                print(f"                    {reason}")
+    counts = {
+        v: sum(1 for r in rows if r[2] == v)
+        for v in (_PLAN_KEEP, _PLAN_DROP, _PLAN_REVIEW)
+    }
+    print(
+        f"--- {counts[_PLAN_KEEP]} keep / {counts[_PLAN_DROP]} drop / "
+        f"{counts[_PLAN_REVIEW]} review ---"
+    )
+    review = counts[_PLAN_REVIEW]
+    verdict = f"FAIL (review={review})" if review else "PASS"
+    print(f"=== musa_sync upgrade-plan: {verdict} ===")
+    return 1 if review else 0
+
+
+def _base_problem(pin: str) -> str | None:
+    """Why the clone's commits do not sit on ``pin``, the PINS commit."""
+    want = _run_git(WORKDIR, "rev-parse", "--verify", "--quiet", f"{pin}^{{commit}}")
+    if not pin or want.returncode:
+        return (
+            f"{WORKDIR} has no commit {pin[:12] or '(no pin)'}: run `musa_sync rebase`"
+        )
+    held = _run_git(
+        WORKDIR, "rev-parse", "--verify", "--quiet", f"{_BASE_REF}^{{commit}}"
+    )
+    if held.returncode == 0:
+        on_it = _run_git(WORKDIR, "merge-base", "--is-ancestor", _BASE_REF, "HEAD")
+        if on_it.returncode == 0 and held.stdout.strip() != want.stdout.strip():
+            return (
+                f"{WORKDIR} holds the series on {held.stdout.strip()[:12]}, but "
+                f"third_party/PINS names {pin[:12]}: set VLLM_COMMIT and VLLM_TAG "
+                "to the ref the series sits on"
+            )
+    if _run_git(WORKDIR, "merge-base", "--is-ancestor", pin, "HEAD").returncode:
+        return (
+            f"{WORKDIR} HEAD does not descend from {pin[:12]}: run `musa_sync rebase`"
+        )
+    return None
+
+
+def _git_in_progress() -> str | None:
+    """The git operation left unfinished in the clone, if any."""
+    for marker, what in (
+        ("rebase-apply", "git am"),
+        ("CHERRY_PICK_HEAD", "git cherry-pick"),
+        ("rebase-merge", "git rebase"),
+    ):
+        r = _run_git(WORKDIR, "rev-parse", "--git-path", marker)
+        path = Path(r.stdout.strip())
+        if (
+            r.returncode == 0
+            and (path if path.is_absolute() else WORKDIR / path).exists()
+        ):
+            return what
+    return None
+
+
+def _stack_problem(paths: list[Path], pin: str) -> str | None:
+    """Why the clone does not hold exactly the series on ``pin``."""
+    with tempfile.TemporaryDirectory(prefix="musa-stack-") as tmp:
+        generated, error = _format_series(WORKDIR, pin, Path(tmp))
+        if error:
+            return error
+        same = len(generated) == len(paths) and all(
+            build_apply.entry_name(g) == build_apply.entry_name(p)
+            and g.read_bytes() == p.read_bytes()
+            for g, p in zip(generated, paths)
+        )
+    if same:
+        return None
+    return (
+        f"{WORKDIR} does not hold the series on vllm@{pin[:12]}: run `musa_sync "
+        "rebase` first (or `musa_sync regen` to keep commits made there)"
+    )
+
+
+def _restack(paths: list[Path], pin: str) -> str | None:
+    """Rebuild the clone from the series on ``pin`` when it holds MUSA commits
+    above upstream ones, so that a new commit lands after every entry."""
+    split = _split_stack(WORKDIR, pin)
+    if isinstance(split, str):
+        return split
+    commits, first, upstream = split
+    if all(sha in upstream for sha in commits[first:]):
+        return None
+    head = _run_git(WORKDIR, "rev-parse", "HEAD").stdout.strip()
+    _run_git(WORKDIR, "checkout", "--quiet", "--detach", pin)
+    if not paths:
+        return None
+    r = _run_git(WORKDIR, "am", "-3", "--keep-non-patch", *[str(p) for p in paths])
+    if r.returncode == 0:
+        return None
+    _run_git(WORKDIR, "am", "--abort")
+    _run_git(WORKDIR, "checkout", "--quiet", "--detach", head)
+    return f"cannot rebuild the series in {WORKDIR}: {_git_first_error(r)}"
+
+
+def cmd_backport(args) -> int:
+    pin = _default_target()
+    if not pin:
+        print("ERROR: no pin: set VLLM_COMMIT or VLLM_TAG in third_party/PINS")
+        print("=== musa_sync backport: FAIL (usage) ===")
+        return 2
+    paths, refusal = _series_dir_paths()
+    if refusal and refusal[0] not in ("missing-series-dir", "empty-series"):
+        print(f"ERROR: {SERIES_DIR}: {refusal[1]}")
+        print("=== musa_sync backport: FAIL (series) ===")
+        return 2
+    upstream = [p for p in paths if _is_upstream_entry(p)]
+    busy = _git_in_progress()
+    dirty = _run_git(WORKDIR, "status", "--porcelain", "--untracked-files=no")
+    problem = (
+        f"{WORKDIR} has an unfinished {busy}"
+        if busy
+        else (
+            f"{WORKDIR} has uncommitted changes"
+            if dirty.stdout.strip()
+            else _base_problem(pin) or _stack_problem(paths, pin)
+        )
+    )
+    if problem:
+        print(f"ERROR: {problem}")
+        print("=== musa_sync backport: FAIL (state) ===")
+        return 2
+    sha = _resolve_upstream_commit(args.commit, args.source)
+    if sha is None:
+        print(
+            f"ERROR: cannot find upstream commit {args.commit} "
+            "(pass its full sha, or --from <vLLM clone>)"
+        )
+        print("=== musa_sync backport: FAIL (commit) ===")
+        return 1
+    carried = next(
+        (p for p in upstream if sha in manifest.upstream_pick(p).commits), None
+    )
+    if carried is not None:
+        print(f"ERROR: {sha[:12]} is already {build_apply.entry_name(carried)}")
+        print("=== musa_sync backport: FAIL (commit) ===")
+        return 1
+    problem = _restack(paths, pin)
+    if problem:
+        print(f"ERROR: {problem}")
+        print("=== musa_sync backport: FAIL (state) ===")
+        return 2
+    head = _run_git(WORKDIR, "rev-parse", "HEAD").stdout.strip()
+    picked = _run_git(WORKDIR, "cherry-pick", "-x", sha)
+    if picked.returncode:
+        unmerged = _run_git(WORKDIR, "diff", "--name-only", "--diff-filter=U")
+        if unmerged.stdout.strip():
+            print(f"CONFLICT: cherry-pick {sha[:12]}\n{picked.stdout}{picked.stderr}")
+            print(
+                "Resolve it in third_party/vllm, `git -C third_party/vllm cherry-pick "
+                "--continue`, then `musa_sync regen`; or `git -C third_party/vllm "
+                "cherry-pick --abort`."
+            )
+            print("=== musa_sync backport: FAIL (conflict) ===")
+            return 1
+        _run_git(WORKDIR, "cherry-pick", "--abort")
+        _run_git(WORKDIR, "checkout", "--quiet", "--detach", head)
+        print(f"ERROR: cherry-picking {sha[:12]} failed: {_git_first_error(picked)}")
+        print("=== musa_sync backport: FAIL (commit) ===")
+        return 1
+    ours = _run_git(WORKDIR, "show", "--format=", "HEAD").stdout
+    theirs = _run_git(WORKDIR, "show", "--format=", sha).stdout
+    note = (
+        ""
+        if _change_lines(ours) == _change_lines(theirs)
+        else " (its changed lines differ from upstream)"
+    )
+    print(
+        f"backported {sha[:12]} as {manifest.UPSTREAM_SUBDIR}/"
+        f"{len(upstream) + 1:04d}{note}"
+    )
+    if args.no_regen:
+        print("=== musa_sync backport: PASS ===")
+        return 0
+    return cmd_regen(argparse.Namespace(area=None))
+
+
+def _resolve_upstream_commit(commit: str, source: str | None) -> str | None:
+    """The full sha of ``commit`` in the clone, fetched from ``source`` (or
+    the clone's origin) when missing."""
+
+    def resolve() -> str | None:
+        r = _run_git(
+            WORKDIR, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    sha = resolve()
+    if sha is None:
+        remote = str(Path(source).resolve()) if source else "origin"
+        _run_git(WORKDIR, *_FETCH_ANY_COMMIT, remote, commit)
+        sha = resolve()
+    return sha
 
 
 # -------------------------------------------------------------------------- report
@@ -2227,6 +3058,12 @@ def cmd_report(args) -> int:
     print(
         f"MDM manifest: {len(manifest.ENTRIES)} divergences by category {dict(sorted(by_cat.items()))}"
     )
+    prefix = manifest.UPSTREAM_SUBDIR + "/"
+    upstream = [e for e in manifest.ENTRIES if e.id.startswith(prefix)]
+    if upstream:
+        print(f"upstream commits ({prefix}, applied last): {len(upstream)}")
+        for e in upstream:
+            print(f"  {e.id}  [{', '.join(c[:12] for c in e.upstream_commits)}]")
     for e in manifest.ENTRIES:
         print(f"  [{e.category:>2}] {e.apply_phase:<11} {e.id}")
     return 0
@@ -2290,7 +3127,65 @@ def _build_parser() -> argparse.ArgumentParser:
         "rebase", help="git am -3 the series onto vllm@<ref> in third_party/vllm"
     )
     p.add_argument("tag", metavar="ref", nargs="?", default=None)
+    p.add_argument(
+        "--drop-upstreamed",
+        action="store_true",
+        help="skip the entries `upgrade-plan` drops for <ref> (the upstream "
+        "commits <ref> already has)",
+    )
+    p.add_argument(
+        "--history",
+        default=None,
+        help="vLLM clone with full history for --drop-upstreamed "
+        "(default: third_party/vllm)",
+    )
+    p.add_argument(
+        "--fetch", action="store_true", help="fetch missing commits from origin"
+    )
     p.set_defaults(func=cmd_rebase)
+
+    p = sub.add_parser(
+        "upgrade-plan",
+        help="per entry: keep, drop or review on a pin bump to <ref>",
+    )
+    p.add_argument(
+        "target",
+        nargs="?",
+        default=None,
+        help="vLLM ref of the new pin (default: the current pin, which lists "
+        "entries the pin already contains)",
+    )
+    p.add_argument(
+        "--history",
+        default=None,
+        help="vLLM clone with the full history of <ref> (default: third_party/vllm)",
+    )
+    p.add_argument(
+        "--fetch", action="store_true", help="fetch missing commits from origin"
+    )
+    p.add_argument(
+        "--no-content",
+        action="store_true",
+        help="skip the per-entry apply check against the pristine target",
+    )
+    p.add_argument("--all", action="store_true", help="also list the kept entries")
+    p.set_defaults(func=cmd_upgrade_plan)
+
+    p = sub.add_parser(
+        "backport",
+        help="cherry-pick an upstream vLLM commit into series/upstream/",
+    )
+    p.add_argument("commit", help="upstream vLLM commit (full sha to fetch it)")
+    p.add_argument(
+        "--from",
+        dest="source",
+        default=None,
+        help="fetch the commit from this vLLM clone instead of origin",
+    )
+    p.add_argument(
+        "--no-regen", action="store_true", help="do not regenerate the series"
+    )
+    p.set_defaults(func=cmd_backport)
 
     p = sub.add_parser("regen", help="regenerate the series from the clone's commits")
     p.add_argument("--area", default=None, help="(reserved) py|csrc|module")
