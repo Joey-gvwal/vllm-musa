@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Mon, 12 Oct 2026 21:00:00 +0800
+Subject: [PATCH] MUSA: send the dense prefix of QSA prefill to FlashAttention
+
+A prefill row whose position is below the selection width selects every
+causal token, so its sparse attention is plain causal attention. The forward
+builds the row layout once per step (shared by every QSA layer) and passes it
+with the query offsets and step maxima to the TileLang prefill wrapper, which
+runs those rows through paged FlashAttention and leaves only the sparse rows to
+the TileLang kernel.
+
+---
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -202,10 +202,22 @@
+ 
+         if tilelang_ok and use_prefill_config:
+             from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                qsa_dense_layout,
+                 qsa_prefill_attention_v2 as qsa_prefill,
+             )
+ 
+             logger.info_once("QSA prefill routed to the TileLang kernel")
++            # Every QSA layer of the step shares one row layout.
++            dense_layout = getattr(attn_metadata, "qsa_dense_layout", None)
++            if dense_layout is None:
++                dense_layout = qsa_dense_layout(
++                    attn_metadata.query_start_loc,
++                    attn_metadata.seq_lens,
++                    token_to_req,
++                    num_tokens,
++                    logical_indices.shape[1] - 1,
++                )
++                attn_metadata.qsa_dense_layout = dense_layout
+             return qsa_prefill(
+                 query[:num_tokens],
+                 key_cache,
+@@ -214,6 +226,10 @@
+                 attn_metadata.block_table,
+                 token_to_req,
+                 output[:num_tokens],
++                query_start_loc=attn_metadata.query_start_loc,
++                dense_layout=dense_layout,
++                max_query_len=attn_metadata.max_query_len,
++                max_seq_len=attn_metadata.max_seq_len,
+             )
+ 
+         if (
+-- 
+2.43.0

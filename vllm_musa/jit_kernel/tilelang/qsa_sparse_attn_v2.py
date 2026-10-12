@@ -7,6 +7,11 @@ stride comes off the tensor, so a packed KV slab works) and compute
 QK^T / PV with T.gemm; the grouped-query tile is padded to 8 rows to satisfy the
 MUSA MMA M%8 requirement. The online softmax stays in fragments.
 
+A prefill row whose position is below the selection width selects every causal
+token, so it is plain causal attention: when the caller passes the batch layout,
+those rows go to the paged FlashAttention kernel and the sparse kernel skips
+them.
+
 Decode splits the tile loop over ``num_splits`` programs that each emit a
 normalized partial output plus its log2-domain LSE, merged by a second kernel:
 one program per row leaves the device idle at small batch sizes.
@@ -26,6 +31,11 @@ import os
 import tilelang
 import tilelang.language as T
 import torch
+
+try:
+    from flash_attn_interface import flash_attn_varlen_func
+except (ImportError, ModuleNotFoundError):
+    flash_attn_varlen_func = None
 
 from vllm_musa.jit_kernel.tilelang.utils import (
     MUSA_COMMON_PASS_CONFIGS,
@@ -57,6 +67,7 @@ for _key, _value in (
         _PASS_CONFIGS[getattr(tilelang.PassConfigKey, _key)] = _value
 
 __all__ = [
+    "qsa_dense_layout",
     "qsa_prefill_attention_v2",
     "qsa_decode_attention",
     "prewarm_qsa_kernels",
@@ -130,12 +141,16 @@ def _qsa_prefill_kernel(
         indices: T.Tensor((num_rows, topk + 1), "int32"),
         block_table: T.Tensor((num_requests, page_table_width), "int32"),
         token_to_req: T.Tensor((num_rows,), "int32"),
+        positions: T.Tensor((num_rows,), "int64"),
+        dense_below: T.int32,
         out: T.Tensor((num_rows, group_size, head_dim), dtype),
     ):
         with T.Kernel(num_rows, threads=threads) as row:
             req = token_to_req[row]
             req_safe = T.min(T.max(req, 0), num_requests - 1)
             valid_count = indices[row, topk]
+            # Rows below dense_below are written by the dense kernel.
+            live = positions[row] >= T.cast(dense_below, "int64")
 
             s_q = T.alloc_shared((block_m, head_dim), dtype)
             s_k = T.alloc_shared((block_n, head_dim), dtype)
@@ -155,7 +170,7 @@ def _qsa_prefill_kernel(
             lsum_i = T.alloc_fragment((block_m,), "float32")
 
             for m, d in T.Parallel(block_m, head_dim):
-                if m < group_size:
+                if live and m < group_size:
                     s_q[m, d] = q[row, m, d]
                 else:
                     s_q[m, d] = 0.0
@@ -166,7 +181,7 @@ def _qsa_prefill_kernel(
             for tile in T.serial(num_tiles):
                 # Tiles that start beyond the row's valid count are entirely
                 # masked: skip their gather and softmax work.
-                if tile * block_n < valid_count:
+                if live and tile * block_n < valid_count:
                     # Keep the index-load address affine on the fast path; only
                     # the last tile of a non-multiple width needs the clamp.
                     # Clamped lanes read the trailing count column and stay
@@ -235,7 +250,7 @@ def _qsa_prefill_kernel(
                     T.sync_threads()
 
             for m, d in T.Parallel(block_m, head_dim):
-                if m < group_size:
+                if live and m < group_size:
                     out[row, m, d] = T.cast(
                         T.if_then_else(
                             lrun[m] > 0.0,
@@ -489,6 +504,36 @@ def _compile_all(prefill_args, decode_args, num_splits=_DECODE_SPLITS):
     _qsa_merge_kernel(group_size, head_dim, num_splits, dtype, _THREADS)
 
 
+def qsa_dense_layout(
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    token_to_req: torch.Tensor,
+    num_rows: int,
+    width: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Row layout of the dense-prefix split for one forward step.
+
+    Returns per-request dense query and key counts for FlashAttention and each
+    row's token index within its request. Every QSA layer of a step shares it.
+    Each request's rows are consecutive positions ending at ``seq_len - 1``, so
+    its dense rows are a prefix of its query rows, and bottom-right causal
+    alignment of ``used_q`` rows against ``used_k`` keys gives each row exactly
+    the keys up to its own position.
+    """
+    num_reqs = min(query_start_loc.shape[0] - 1, seq_lens.shape[0])
+    query_start_loc = query_start_loc[: num_reqs + 1]
+    seq_lens = seq_lens[:num_reqs]
+    used_k = torch.clamp(seq_lens, max=width).to(torch.int32)
+    used_q = torch.clamp(
+        used_k - seq_lens + (query_start_loc[1:] - query_start_loc[:-1]), min=0
+    ).to(torch.int32)
+    # Token index within the request; rope positions may differ from it.
+    req = token_to_req[:num_rows].long().clamp(0, num_reqs - 1)
+    positions = (seq_lens.long()[req] - query_start_loc.long()[req + 1]
+                 + torch.arange(num_rows, device=seq_lens.device))
+    return used_q, used_k, positions
+
+
 def qsa_prefill_attention_v2(
     q: torch.Tensor,
     k_cache: torch.Tensor,
@@ -497,18 +542,57 @@ def qsa_prefill_attention_v2(
     block_table: torch.Tensor,
     token_to_req: torch.Tensor,
     out: torch.Tensor,
+    query_start_loc: torch.Tensor | None = None,
+    dense_layout: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+    max_query_len: int = 0,
+    max_seq_len: int = 0,
 ) -> torch.Tensor:
-    if q.shape[0] == 0:
+    """Sparse prefill attention.
+
+    With ``query_start_loc``, ``dense_layout`` (from ``qsa_dense_layout``) and
+    the step's ``max_query_len`` / ``max_seq_len``, the rows that select their
+    whole causal prefix run through FlashAttention and only the sparse rows run
+    through the TileLang kernel.
+    """
+    num_rows = q.shape[0]
+    if num_rows == 0:
         return out
     shape_args = _shape_args(q, k_cache, logical_indices, block_table,
                              prefill=True)
     _compile_all(shape_args,
                  _shape_args(q, k_cache, logical_indices, block_table))
+    width = logical_indices.shape[1] - 1
+    dense_below = 0
+    if (
+        dense_layout is not None
+        and query_start_loc is not None
+        and flash_attn_varlen_func is not None
+    ):
+        used_q, used_k, positions = dense_layout
+        flash_attn_varlen_func(
+            q,
+            k_cache,
+            v_cache,
+            cu_seqlens_q=query_start_loc[: used_q.shape[0] + 1],
+            max_seqlen_q=max_query_len,
+            max_seqlen_k=min(max_seq_len, width) if max_seq_len > 0 else width,
+            seqused_q=used_q,
+            seqused_k=used_k,
+            block_table=block_table,
+            softmax_scale=q.shape[-1] ** -0.5,
+            causal=True,
+            out=out,
+        )
+        if 0 < max_seq_len <= width:
+            return out
+        dense_below = width
+    else:
+        positions = torch.zeros(num_rows, dtype=torch.int64, device=q.device)
     kernel = _qsa_prefill_kernel(*shape_args)
     # The upstream forward canonicalizes the singleton KV-head stride to 0;
     # TileLang takes dense tensors, so drop the singleton dim (a view).
     kernel(q, k_cache.squeeze(2), v_cache.squeeze(2), logical_indices,
-           block_table, token_to_req, out)
+           block_table, token_to_req, positions[:num_rows], dense_below, out)
     return out
 
 
