@@ -72,6 +72,16 @@ _DUP = 2
 _THREADS = _BLOCK_N * _DUP
 _DECODE_SPLITS = 16
 
+# Prefill runs a taller, narrower tile. The grouped-query tile height drives the
+# gemm lowering: at 8 rows the vector-ALU path wastes lanes, and an 8x64 tile is
+# nondeterministic, while 16x64 is deterministic and about twice as fast.
+# Decode keeps the 8x128 tile because its split-k scratch is sized by the tile
+# height and is preallocated for every capture size.
+_PREFILL_BLOCK_M = 16
+_PREFILL_BLOCK_N = 64
+_PREFILL_DUP = 2
+_PREFILL_THREADS = _PREFILL_BLOCK_N * _PREFILL_DUP
+
 
 @functools.lru_cache(maxsize=16)
 @tilelang.jit(
@@ -91,7 +101,7 @@ def _qsa_prefill_kernel(
     dup: int,
 ):
     num_tiles = (topk + block_n - 1) // block_n
-    block_m = _BLOCK_M
+    block_m = _PREFILL_BLOCK_M
     # log2-scaled softmax so the loop uses exp2 and never requantizes Q.
     softmax_scale_log2 = (head_dim**-0.5) * 1.4426950408889634
     num_rows = T.dynamic("num_rows")
@@ -443,21 +453,21 @@ _qsa_merge_kernel.mode = "lazy"
 _SCRATCH: dict = {}
 
 
-def _shape_args(q, k_cache, logical_indices, block_table):
+def _shape_args(q, k_cache, logical_indices, block_table, prefill=False):
     return (
         q.shape[1] // k_cache.shape[2],
         q.shape[2],
         logical_indices.shape[1] - 1,
-        _BLOCK_N,
+        _PREFILL_BLOCK_N if prefill else _BLOCK_N,
         k_cache.shape[1],
         block_table.shape[1],
         tilelang_dtype(q.dtype),
-        _THREADS,
-        _DUP,
+        _PREFILL_THREADS if prefill else _THREADS,
+        _PREFILL_DUP if prefill else _DUP,
     )
 
 
-def _compile_all(shape_args, num_splits=_DECODE_SPLITS):
+def _compile_all(prefill_args, decode_args, num_splits=_DECODE_SPLITS):
     """Compile every kernel for this signature.
 
     TileLang compiles on the first call for a given signature and a first call
@@ -465,9 +475,9 @@ def _compile_all(shape_args, num_splits=_DECODE_SPLITS):
     (which always runs outside capture) also compiles the decode pair.
     The jit wrappers are memoized, so repeat calls are free.
     """
-    group_size, head_dim, dtype = shape_args[0], shape_args[1], shape_args[6]
-    _qsa_prefill_kernel(*shape_args)
-    _qsa_decode_kernel(*shape_args, num_splits)
+    group_size, head_dim, dtype = decode_args[0], decode_args[1], decode_args[6]
+    _qsa_prefill_kernel(*prefill_args)
+    _qsa_decode_kernel(*decode_args, num_splits)
     _qsa_merge_kernel(group_size, head_dim, num_splits, dtype, _THREADS)
 
 
@@ -482,8 +492,10 @@ def qsa_prefill_attention_v2(
 ) -> torch.Tensor:
     if q.shape[0] == 0:
         return out
-    shape_args = _shape_args(q, k_cache, logical_indices, block_table)
-    _compile_all(shape_args)
+    shape_args = _shape_args(q, k_cache, logical_indices, block_table,
+                             prefill=True)
+    _compile_all(shape_args,
+                 _shape_args(q, k_cache, logical_indices, block_table))
     kernel = _qsa_prefill_kernel(*shape_args)
     # The upstream forward canonicalizes the singleton KV-head stride to 0;
     # TileLang takes dense tensors, so drop the singleton dim (a view).
@@ -522,7 +534,8 @@ def qsa_decode_attention(
     group_size = q.shape[1] // k_cache.shape[2]
     head_dim = q.shape[2]
     shape_args = _shape_args(q, k_cache, logical_indices, block_table)
-    _compile_all(shape_args, num_splits)
+    _compile_all(_shape_args(q, k_cache, logical_indices, block_table,
+                             prefill=True), shape_args, num_splits)
     partial_o, partial_l = _split_scratch(num_rows, head_dim, q.device, num_splits)
     split = _qsa_decode_kernel(*shape_args, num_splits)
     split(q, k_cache.squeeze(2), v_cache.squeeze(2), logical_indices,
@@ -553,6 +566,11 @@ def prewarm_qsa_kernels(
     kernel reads non-finite partials.
     """
     _compile_all(
+        (
+            group_size, head_dim, topk, _PREFILL_BLOCK_N, page_size,
+            page_table_width, tilelang_dtype(dtype), _PREFILL_THREADS,
+            _PREFILL_DUP,
+        ),
         (
             group_size, head_dim, topk, _BLOCK_N, page_size, page_table_width,
             tilelang_dtype(dtype), _THREADS, _DUP,
