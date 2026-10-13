@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Tue, 13 Oct 2026 15:00:00 +0800
+Subject: [PATCH] MUSA: keep fused_moe even_Ks loads in bounds under pipelining
+
+With num_stages > 1 the MUSA Triton pipeliner issues the next K blocks'
+loads without a predicate, so the unmasked even_Ks A/B loads read up to
+(num_stages - 1) * BLOCK_SIZE_K elements past the end of the last expert's
+weights and fault when that lands on an unmapped page. For pipelined configs,
+mask those loads with the scalar K-iteration bound, which is true inside the
+loop and false for the prefetches past it. Single-stage configs keep the
+unmasked loads.
+
+---
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -366,6 +366,8 @@
+     even_Ks: tl.constexpr,
+     # Tensor-descriptor path for the A gather and B load in the K-loop.
+     USE_TD: tl.constexpr = False,
++    # Bound even_Ks loads by the K iteration (pipelined configs only).
++    MASK_K_ITER: tl.constexpr = False,
+ ):
+     """
+     Implements the fused computation for a Mixture of Experts (MOE) using
+@@ -541,7 +543,11 @@
+             a = a_desc.gather(gather_idx, k * BLOCK_SIZE_K)
+             b = b_desc.load([pid_n * BLOCK_SIZE_N, k * BLOCK_SIZE_K]).T
+         elif SWAP_AB:
+-            if even_Ks:
++            if even_Ks and MASK_K_ITER:
++                k_in = k * BLOCK_SIZE_K < K
++                a = tl.load(a_ptrs, mask=token_mask[None, :] & k_in, other=0.0)
++                b = tl.load(b_ptrs, mask=k_in, other=0.0)
++            elif even_Ks:
+                 a = tl.load(a_ptrs, mask=token_mask[None, :], other=0.0)
+                 b = tl.load(b_ptrs)
+             else:
+@@ -552,7 +558,11 @@
+                 a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+                 b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+         else:
+-            if even_Ks:
++            if even_Ks and MASK_K_ITER:
++                k_in = k * BLOCK_SIZE_K < K
++                a = tl.load(a_ptrs, mask=token_mask[:, None] & k_in, other=0.0)
++                b = tl.load(b_ptrs, mask=k_in, other=0.0)
++            elif even_Ks:
+                 a = tl.load(a_ptrs, mask=token_mask[:, None], other=0.0)
+                 b = tl.load(b_ptrs)
+             else:
+@@ -891,6 +901,9 @@
+     if block_shape is not None:
+         BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
+     even_Ks = B.size(2) % BLOCK_SIZE_K == 0
++    # MUSA: the software pipeliner prefetches past the last K block without a
++    # predicate, so unmasked even_Ks loads would read past the last expert.
++    mask_k_iter = even_Ks and config.get("num_stages", 2) > 1
+     if use_td and A.size(1) % BLOCK_SIZE_K != 0:
+         # TD gather/load feeding tl.dot with a non-block-aligned K
+         # miscompiles (~74% of output elements wrong) on real HW;
+@@ -948,6 +961,7 @@
+         BLOCK_SIZE_K=BLOCK_SIZE_K,
+         SWAP_AB=SWAP_AB,
+         USE_TD=use_td,
++        MASK_K_ITER=mask_k_iter,
+         **config,
+     )
+ 
+-- 
+2.43.0
