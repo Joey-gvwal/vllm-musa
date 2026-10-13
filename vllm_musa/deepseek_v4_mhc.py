@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import torch
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 
 
 def mhc_pre_musa(
@@ -296,9 +299,289 @@ def mhc_pre_delayed_musa(
     norm_eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """mHC pre with a carried pre-mix; returns the next pre-mix as well."""
-    from vllm.model_executor.kernels.mhc.torch import mhc_pre_delayed_torch
+    if x is not None and pre_mix is None and residual.dim() == 3:
+        broadcast = _mhc_pre_delayed_broadcast_inputs(residual, fn)
+        if broadcast is not None and _mhc_pre_delayed_decode_norm_fuse_supported(
+            residual, broadcast[1], norm_weight
+        ):
+            try:
+                return _mhc_pre_delayed_decode_norm_fuse(
+                    residual,
+                    broadcast[0],
+                    hc_scale,
+                    hc_base,
+                    rms_eps,
+                    hc_pre_eps,
+                    hc_sinkhorn_eps,
+                    hc_post_mult_value,
+                    sinkhorn_repeat,
+                    broadcast[1],
+                    norm_weight,
+                    norm_eps,
+                )
+            except (ImportError, OSError, NotImplementedError, RuntimeError) as exc:
+                logger.warning_once(
+                    "Fused broadcast mHC decode pre unavailable: %s", exc
+                )
+    if x is None and _mhc_pre_delayed_decode_norm_fuse_supported(
+        residual, pre_mix, norm_weight
+    ):
+        try:
+            return _mhc_pre_delayed_decode_norm_fuse(
+                residual,
+                fn,
+                hc_scale,
+                hc_base,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+                pre_mix,
+                norm_weight,
+                norm_eps,
+            )
+        except (ImportError, OSError, NotImplementedError, RuntimeError) as exc:
+            logger.warning_once("Fused delayed mHC decode pre unavailable: %s", exc)
+    fused = None
+    if (
+        x is None
+        and residual.shape[0] > 0
+        and _mhc_pre_delayed_big_fuse_supported(residual)
+    ):
+        try:
+            fused = _mhc_pre_delayed_big_fuse(
+                residual.contiguous(),
+                fn,
+                hc_scale,
+                hc_base,
+                rms_eps,
+                hc_pre_eps,
+                hc_sinkhorn_eps,
+                hc_post_mult_value,
+                sinkhorn_repeat,
+            )
+        except (ImportError, OSError, NotImplementedError, RuntimeError) as exc:
+            logger.warning_once(
+                "Fused delayed mHC pre unavailable, using the torch path: %s", exc
+            )
+            fused = None
+    if fused is not None:
+        post, comb, next_pre_mix = fused
+        layer_input = (
+            residual[:, 0]
+            if pre_mix is None
+            else (pre_mix.unsqueeze(-1) * residual.float())
+            .sum(dim=1)
+            .to(residual.dtype)
+        )
+    else:
+        from vllm.model_executor.kernels.mhc.torch import mhc_pre_delayed_torch
 
-    post, comb, layer_input, next_pre_mix = mhc_pre_delayed_torch(
+        post, comb, layer_input, next_pre_mix = mhc_pre_delayed_torch(
+            residual,
+            fn,
+            hc_scale,
+            hc_base,
+            rms_eps,
+            hc_pre_eps,
+            hc_sinkhorn_eps,
+            hc_post_mult_value,
+            sinkhorn_repeat,
+            pre_mix=pre_mix,
+            x=x,
+        )
+    layer_input = _apply_optional_rms_norm(layer_input, norm_weight, norm_eps)
+    return (
+        post.contiguous(),
+        comb.contiguous(),
+        layer_input.contiguous(),
+        next_pre_mix.contiguous(),
+    )
+
+
+_IDENTITY_PRE_MIX: dict[tuple[torch.device, int], torch.Tensor] = {}
+
+
+def _stream_is_capturing() -> bool:
+    is_capturing = getattr(torch.cuda, "is_current_stream_capturing", None)
+    try:
+        return True if is_capturing is None else bool(is_capturing())
+    except Exception:
+        return True
+
+
+def _mhc_pre_delayed_broadcast_inputs(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Full-width fn and identity pre-mix for a stream of identical copies.
+
+    With every copy equal, ``fn / hc`` repeated per copy mixes like the
+    broadcast ``fn`` on one copy, and the identity pre-mix selects copy 0.
+    Both are built outside graph capture and reused.
+    """
+    num_tokens, hc_mult, hidden_size = residual.shape
+    if fn.dim() != 2 or fn.shape[-1] != hidden_size or fn.dtype != torch.float32:
+        return None
+    # Keyed by the tensor's version counter, so an in-place weight update rebuilds it.
+    cached = getattr(fn, "_musa_hc_full_fn", None)
+    if (
+        cached is not None
+        and cached[0] == fn._version
+        and cached[1].shape[1] == hc_mult * hidden_size
+    ):
+        full_fn = cached[1]
+    elif _stream_is_capturing():
+        return None
+    else:
+        full_fn = (fn / hc_mult).repeat(1, hc_mult).contiguous()
+        fn._musa_hc_full_fn = (fn._version, full_fn)
+    key = (residual.device, hc_mult)
+    identity = _IDENTITY_PRE_MIX.get(key)
+    if identity is None or identity.shape[0] < num_tokens:
+        if _stream_is_capturing():
+            return None
+        identity = torch.zeros(
+            (max(num_tokens, _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS), hc_mult),
+            dtype=torch.float32,
+            device=residual.device,
+        )
+        identity[:, 0] = 1.0
+        _IDENTITY_PRE_MIX[key] = identity
+    return full_fn, identity[:num_tokens]
+
+
+def _mhc_pre_delayed_decode_norm_fuse_supported(
+    residual: torch.Tensor,
+    pre_mix: torch.Tensor | None,
+    norm_weight: torch.Tensor | None,
+) -> bool:
+    if pre_mix is None or norm_weight is None or residual.dim() != 3:
+        return False
+    num_tokens, hc_mult, hidden_size = residual.shape
+    return (
+        residual.device.type == "musa"
+        and residual.dtype == torch.bfloat16
+        and residual.is_contiguous()
+        and 0 < num_tokens <= _MHC_PRE_DECODE_NORM_FUSE_MAX_TOKENS
+        and hc_mult == 4
+        and hidden_size % 1024 == 0
+        and pre_mix.shape == (num_tokens, hc_mult)
+        and pre_mix.dtype == torch.float32
+        and norm_weight.shape == (hidden_size,)
+        and norm_weight.dtype == torch.bfloat16
+        and norm_weight.is_contiguous()
+        and norm_weight.device == residual.device
+    )
+
+
+def _mhc_pre_delayed_decode_norm_fuse(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+    pre_mix: torch.Tensor,
+    norm_weight: torch.Tensor,
+    norm_eps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split-K prenorm GEMM plus one kernel for the mixes, next pre-mix and normed input."""
+    num_tokens, hc_mult, hidden_size = residual.shape
+    hc_mult3 = hc_mult * (2 + hc_mult)
+    if (
+        fn.dtype != torch.float32
+        or not fn.is_contiguous()
+        or fn.shape != (hc_mult3, hc_mult * hidden_size)
+        or hc_scale.dtype != torch.float32
+        or hc_scale.shape != (3,)
+        or hc_base.dtype != torch.float32
+        or hc_base.shape != (hc_mult3,)
+    ):
+        raise NotImplementedError("unsupported delayed mHC pre parameters")
+    from vllm_musa.kernels.mhc_prenorm import mhc_prenorm_fma, mhc_prenorm_fma_config
+
+    fma_config = mhc_prenorm_fma_config(num_tokens, hc_mult * hidden_size, hc_mult3)
+    if fma_config is not None:
+        gemm_out_mul, gemm_out_sqrsum = mhc_prenorm_fma(
+            residual.view(num_tokens, hc_mult * hidden_size), fn, fma_config
+        )
+    else:
+        split_k = _mhc_pre_decode_norm_fuse_split_k(num_tokens, hc_mult * hidden_size)
+        gemm_out_mul, gemm_out_sqrsum = _mhc_prenorm_gemm_sqrsum_deepgemm(
+            residual,
+            fn,
+            split_k=split_k,
+        )
+    post_mix = torch.empty(
+        (num_tokens, hc_mult), dtype=torch.float32, device=residual.device
+    )
+    comb_mix = torch.empty(
+        (num_tokens, hc_mult * hc_mult), dtype=torch.float32, device=residual.device
+    )
+    layer_input = torch.empty(
+        (num_tokens, hidden_size), dtype=torch.bfloat16, device=residual.device
+    )
+    next_pre_mix = torch.empty_like(post_mix)
+
+    from vllm_musa.deepseek_v4_jit.tilelang_kernels import (
+        mhc_pre_delayed_decode_norm_fuse_kernel,
+    )
+
+    mhc_pre_delayed_decode_norm_fuse_kernel(
+        hidden_size,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+        n_splits=gemm_out_mul.shape[0],
+        hc_mult=hc_mult,
+    )(
+        gemm_out_mul,
+        gemm_out_sqrsum,
+        hc_scale.contiguous(),
+        hc_base.contiguous(),
+        residual,
+        norm_weight,
+        pre_mix.contiguous(),
+        post_mix,
+        comb_mix,
+        layer_input,
+        next_pre_mix,
+        float(norm_eps),
+    )
+    return (
+        post_mix.view(num_tokens, hc_mult, 1),
+        comb_mix.view(num_tokens, hc_mult, hc_mult),
+        layer_input,
+        next_pre_mix,
+    )
+
+
+def _mhc_pre_delayed_big_fuse_supported(residual: torch.Tensor) -> bool:
+    # The fused kernel and the split-K prenorm GEMM cover these DeepSeek-V4.x widths.
+    return residual.shape[-2] == 4 and residual.shape[-1] in {4096, 5120, 7168}
+
+
+def _mhc_pre_delayed_big_fuse(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Post and comb mixes from the fused kernel, and this sublayer's pre-mix."""
+    num_tokens, hc_mult, hidden_size = residual.shape
+    post_mix, comb_mix, _, mixes, sqrsum = _mhc_pre_deepgemm_big_fuse_run(
         residual,
         fn,
         hc_scale,
@@ -308,15 +591,14 @@ def mhc_pre_delayed_musa(
         hc_sinkhorn_eps,
         hc_post_mult_value,
         sinkhorn_repeat,
-        pre_mix=pre_mix,
-        x=x,
     )
-    layer_input = _apply_optional_rms_norm(layer_input, norm_weight, norm_eps)
+    rms = torch.rsqrt(sqrsum.sum(dim=0) / float(hc_mult * hidden_size) + rms_eps)
+    pre_logits = mixes[:, :, :hc_mult].sum(dim=0) * rms.unsqueeze(-1) * hc_scale[0]
+    next_pre_mix = torch.sigmoid(pre_logits + hc_base[:hc_mult]) + hc_pre_eps
     return (
-        post.contiguous(),
-        comb.contiguous(),
-        layer_input.contiguous(),
-        next_pre_mix.contiguous(),
+        post_mix.view(num_tokens, hc_mult, 1),
+        comb_mix.view(num_tokens, hc_mult, hc_mult),
+        next_pre_mix,
     )
 
 
@@ -725,6 +1007,12 @@ def select_mhc_prenorm_split_k(num_tokens: int, hc_hidden_size: int) -> int:
         if num_tokens <= 2048:
             return 16
         return 4
+    if hc_hidden_size == 20480:
+        if num_tokens <= 64:
+            return 40
+        if num_tokens <= 4096:
+            return 20
+        return 8
 
     return 16 if num_tokens <= 1024 else 8
 
@@ -912,6 +1200,38 @@ def _mhc_pre_deepgemm_big_fuse_provider(
     hc_post_mult_value: float,
     sinkhorn_repeat: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    post_mix, comb_mix, layer_input, _, _ = _mhc_pre_deepgemm_big_fuse_run(
+        residual,
+        fn,
+        hc_scale,
+        hc_base,
+        rms_eps,
+        hc_pre_eps,
+        hc_sinkhorn_eps,
+        hc_post_mult_value,
+        sinkhorn_repeat,
+    )
+    outer_shape = residual.shape[:-2]
+    hc_mult, hidden_size = residual.shape[-2:]
+    return (
+        post_mix.view(*outer_shape, hc_mult, 1),
+        comb_mix.view(*outer_shape, hc_mult, hc_mult),
+        layer_input.view(*outer_shape, hidden_size),
+    )
+
+
+def _mhc_pre_deepgemm_big_fuse_run(
+    residual: torch.Tensor,
+    fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_eps: float,
+    hc_pre_eps: float,
+    hc_sinkhorn_eps: float,
+    hc_post_mult_value: float,
+    sinkhorn_repeat: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Fused mHC pre on token-flat outputs, plus the split-K prenorm partials."""
     assert residual.dtype == torch.bfloat16
     assert fn.dtype == torch.float32
     assert hc_scale.dtype == torch.float32
@@ -949,7 +1269,6 @@ def _mhc_pre_deepgemm_big_fuse_provider(
             f"hc_scale={hc_scale.shape}, hc_base={hc_base.shape}"
         )
 
-    outer_shape = residual.shape[:-2]
     residual_flat = residual.view(-1, hc_mult, hidden_size)
     num_tokens = residual_flat.shape[0]
     split_k = _get_mhc_pre_deepgemm_split_k(num_tokens, hc_hidden_size)
@@ -1034,11 +1353,7 @@ def _mhc_pre_deepgemm_big_fuse_provider(
         layer_input,
     )
 
-    return (
-        post_mix.view(*outer_shape, hc_mult, 1),
-        comb_mix.view(*outer_shape, hc_mult, hc_mult),
-        layer_input.view(*outer_shape, hidden_size),
-    )
+    return post_mix, comb_mix, layer_input, gemm_out_mul, gemm_out_sqrsum
 
 
 # The fused kernel runs one block per token; 256 tokens covers 51 DSpark-4
