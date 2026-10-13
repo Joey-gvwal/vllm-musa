@@ -33,6 +33,7 @@ from vllm_musa.model_executor.layers.fused_moe.dispatch_policy import (
     MusaFusedMoeBackend,
     MusaFusedMoeShape,
     has_calibrated_dimensions,
+    has_triton_only_calibration,
     parse_dispatch_backend,
     select_fused_moe_backend,
     thresholds_for_shape,
@@ -1394,6 +1395,170 @@ def _can_use_musa_native_fp8_moe_gemv(
     ) and _musa_fp8_moe_scale_layout_is_supported(w2_scale, w2)
 
 
+# Past 5 tokens the expert-grouped Triton path with the calibrated configs wins.
+_FP8_BLOCK_MOE_GEMV_MAX_TOKENS = _env_int("VLLM_MUSA_FP8_BLOCK_MOE_GEMV_MAX_TOKENS", 5)
+
+
+def _can_use_musa_fp8_block_moe_gemv(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    w1_zp: torch.Tensor | None,
+    w2_zp: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    """Small-M FP8 MoE whose scale blocks are finer than the native GEMV's."""
+    if (
+        not use_fp8_w8a8
+        or use_int8_w8a8
+        or use_int8_w8a16
+        or use_int4_w4a16
+        or ocp_mx_scheme is not None
+        or per_channel_quant
+        or apply_router_weight_on_input
+        or activation != "silu"
+        or expert_map is not None
+        or w1_zp is not None
+        or w2_zp is not None
+        or a1_scale is not None
+        or a2_scale is not None
+        or w1_bias is not None
+        or w2_bias is not None
+        or block_shape is None
+        or len(block_shape) != 2
+        or block_shape[1] not in (16, 32, 64)
+    ):
+        return False
+    if (
+        hidden_states.dim() != 2
+        or not 0 < hidden_states.shape[0] <= _FP8_BLOCK_MOE_GEMV_MAX_TOKENS
+        or hidden_states.dtype != torch.bfloat16
+        or not hidden_states.is_contiguous()
+        or w1.dim() != 3
+        or w2.dim() != 3
+        or w1.dtype != torch.float8_e4m3fn
+        or w2.dtype != torch.float8_e4m3fn
+        or not w1.is_contiguous()
+        or not w2.is_contiguous()
+        or topk_ids.dim() != 2
+        or topk_ids.shape != topk_weights.shape
+        or topk_ids.shape[0] != hidden_states.shape[0]
+    ):
+        return False
+    num_experts, w1_output_size, hidden_size = w1.shape
+    if w1_output_size % 2 or w2.shape != (
+        num_experts,
+        hidden_size,
+        w1_output_size // 2,
+    ):
+        return False
+    block_n, block_k = block_shape
+    for scale, weight in ((w1_scale, w1), (w2_scale, w2)):
+        if (
+            scale is None
+            or scale.dtype != torch.float32
+            or not scale.is_contiguous()
+            or scale.shape
+            != (
+                num_experts,
+                -(-weight.shape[1] // block_n),
+                -(-weight.shape[2] // block_k),
+            )
+        ):
+            return False
+    return _tensors_share_device(
+        hidden_states, w1, w2, topk_weights, topk_ids, w1_scale, w2_scale
+    )
+
+
+def _musa_fp8_block_moe_gemv(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    w1_scale: torch.Tensor,
+    w2_scale: torch.Tensor,
+    block_shape: list[int],
+    gemm1_clamp_limit: float | None,
+) -> torch.Tensor:
+    """The upstream FP8 block MoE with routed-row GEMVs in place of the GEMMs.
+
+    The GEMVs quantize their activations per ``block_shape[1]`` group in-kernel,
+    and the down projection sums each token's routed rows before rounding. With
+    a clamp limit the down projection also applies the clamped SwiGLU.
+    """
+    from vllm.model_executor.layers.fused_moe.activation import (
+        MoEActivation,
+        apply_moe_activation,
+    )
+
+    from vllm_musa.kernels.fp8_block_gemv import fp8_block_moe_gemv
+
+    num_tokens, hidden_size = hidden_states.shape
+    top_k = topk_ids.shape[1]
+    w1_output_size = w1.shape[1]
+    rows = num_tokens * top_k
+    group_size = block_shape[1]
+    expert_ids = topk_ids.reshape(-1).contiguous()
+
+    cache1 = torch.empty(
+        (rows, w1_output_size), device=hidden_states.device, dtype=hidden_states.dtype
+    )
+    fp8_block_moe_gemv(
+        hidden_states,
+        None,
+        w1,
+        w1_scale,
+        cache1,
+        expert_ids,
+        top_k,
+        quant_group=group_size,
+    )
+    if gemm1_clamp_limit is None:
+        down_input = torch.empty(
+            (rows, w1_output_size // 2),
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+        apply_moe_activation(MoEActivation.SILU, down_input, cache1)
+    else:
+        down_input = cache1
+    out = torch.empty_like(hidden_states)
+    fp8_block_moe_gemv(
+        down_input,
+        None,
+        w2,
+        w2_scale,
+        out,
+        expert_ids,
+        1,
+        routed_weights=topk_weights.reshape(-1).contiguous(),
+        quant_group=group_size,
+        sum_topk=top_k,
+        swiglu_limit=gemm1_clamp_limit,
+    )
+    return out
+
+
 def _can_use_qwen35_bf16_moe_decode_gemv(
     *,
     hidden_states: torch.Tensor,
@@ -1950,6 +2115,48 @@ def _musa_fused_experts_impl_dispatch(
 ) -> torch.Tensor:
     if gemm1_clamp_limit is not None and gemm1_clamp_limit <= 0:
         raise ValueError(f"gemm1_clamp_limit must be positive, got {gemm1_clamp_limit}")
+    if _MUSA_FUSED_MOE_REQUESTED_BACKEND != MusaFusedMoeBackend.UPSTREAM and (
+        _can_use_musa_fp8_block_moe_gemv(
+            hidden_states=hidden_states,
+            w1=w1,
+            w2=w2,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            use_fp8_w8a8=use_fp8_w8a8,
+            use_int8_w8a8=use_int8_w8a8,
+            use_int8_w8a16=use_int8_w8a16,
+            use_int4_w4a16=use_int4_w4a16,
+            ocp_mx_scheme=ocp_mx_scheme,
+            per_channel_quant=per_channel_quant,
+            expert_map=expert_map,
+            w1_scale=w1_scale,
+            w2_scale=w2_scale,
+            w1_zp=w1_zp,
+            w2_zp=w2_zp,
+            a1_scale=a1_scale,
+            a2_scale=a2_scale,
+            block_shape=block_shape,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+        )
+    ):
+        logger.info_once(
+            "MUSA fused MoE uses the FP8 block GEMV for %s scale blocks at small M.",
+            tuple(block_shape),
+        )
+        return _musa_fp8_block_moe_gemv(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            w1_scale,
+            w2_scale,
+            block_shape,
+            gemm1_clamp_limit,
+        )
     backend = MusaFusedMoeBackend.UPSTREAM
     policy = None
     shape = None
@@ -2116,7 +2323,17 @@ def _musa_fused_experts_impl_dispatch(
                 w1_bias=w1_bias,
                 w2_bias=w2_bias,
             )
-            if can_use_gemv or can_use_grouped_gemm:
+            if (
+                can_use_gemv
+                or can_use_grouped_gemm
+                or has_triton_only_calibration(
+                    local_experts=w1.shape[0],
+                    w1_output_size=w1.shape[1],
+                    w2_input_size=w2.shape[2],
+                    hidden_size=w1.shape[2],
+                    top_k=topk_ids.shape[1],
+                )
+            ):
                 stream_is_capturing = _musa_stream_is_capturing()
                 shape = _musa_fused_moe_shape(
                     hidden_states=hidden_states,

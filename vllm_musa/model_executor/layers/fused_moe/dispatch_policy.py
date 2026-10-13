@@ -75,6 +75,7 @@ def _s5000_fp8_shape(
     w2_scale_shape: tuple[int, ...],
     gemv_block: str,
     graph_mode: str,
+    block_size: int = 128,
 ) -> MusaFusedMoeShape:
     return MusaFusedMoeShape(
         device_capability=(3, 1),
@@ -84,8 +85,8 @@ def _s5000_fp8_shape(
         w2_input_size=w2_input_size,
         hidden_size=hidden_size,
         top_k=top_k,
-        block_n=128,
-        block_k=128,
+        block_n=block_size,
+        block_k=block_size,
         activation="silu",
         expert_parallel=False,
         hidden_dtype="torch.bfloat16",
@@ -360,6 +361,37 @@ _CALIBRATED_THRESHOLDS.update(
 )
 
 
+# DeepSeek-V4.1 TP8 per-rank routed experts carry 32x32 scale blocks, which the
+# native GEMV and grouped GEMM do not take: the upstream Triton path serves this
+# shape with the per-M configs below. The MUSA block GEMV serves the smallest
+# batches before this policy is consulted.
+_DSV41_TP8_BLOCK32_SHAPES: Final = tuple(
+    _s5000_fp8_shape(
+        local_experts=384,
+        w1_output_size=576,
+        w2_input_size=288,
+        hidden_size=5120,
+        top_k=6,
+        w1_scale_shape=(384, 18, 160),
+        w2_scale_shape=(384, 160, 9),
+        gemv_block="auto",
+        graph_mode=graph_mode,
+        block_size=32,
+    )
+    for graph_mode in ("eager", "capture")
+)
+_CALIBRATED_THRESHOLDS.update(
+    {
+        shape: _thresholds(
+            gemv_max_tokens=None,
+            grouped_gemm_min_tokens=None,
+            source=f"s5000-mp60-20261012-e384-n576-k5120-{shape.graph_mode}-block32-triton",
+        )
+        for shape in _DSV41_TP8_BLOCK32_SHAPES
+    }
+)
+
+
 def _triton_config(block_n: int, num_warps: int, block_m: int = 16) -> dict[str, int]:
     return {
         "BLOCK_SIZE_M": block_m,
@@ -408,6 +440,41 @@ _DSV4_TP8_MP56_TRITON_CONFIGS: Final = {
     320: _triton_config(128, 8),
 }
 
+
+def _block32_triton_config(
+    block_m: int, block_n: int, group_m: int = 1
+) -> dict[str, int]:
+    # One 32-wide scale group per K step, as the upstream kernel requires.
+    return {
+        "BLOCK_SIZE_M": block_m,
+        "BLOCK_SIZE_N": block_n,
+        "BLOCK_SIZE_K": 32,
+        "GROUP_SIZE_M": group_m,
+        "num_warps": 4,
+        "num_stages": 2,
+    }
+
+
+# Per-M Triton configs for the DeepSeek-V4.1 TP8 routed experts on MP60, from
+# MTP/DSpark verify batches to prefill chunks (cold weights, unique-random routes).
+_DSV41_TP8_MP60_TRITON_CONFIGS: Final = {
+    6: _block32_triton_config(16, 64),
+    8: _block32_triton_config(16, 64),
+    10: _block32_triton_config(16, 64),
+    12: _block32_triton_config(16, 64),
+    16: _block32_triton_config(16, 64),
+    20: _block32_triton_config(32, 32),
+    24: _block32_triton_config(32, 32),
+    32: _block32_triton_config(16, 64),
+    64: _block32_triton_config(16, 64),
+    96: _block32_triton_config(32, 32),
+    128: _block32_triton_config(32, 32, 8),
+    256: _block32_triton_config(32, 32, 8),
+    512: _block32_triton_config(64, 32),
+    1024: _block32_triton_config(64, 32, 8),
+    2048: _block32_triton_config(64, 32, 8),
+}
+
 # Exact-shape upstream Triton launch configs, keyed by token count. They
 # replace the tuned-folder lookup only inside the recorded token range; other
 # shapes and token counts keep the established lookup.
@@ -428,6 +495,9 @@ _CALIBRATED_TRITON_CONFIGS: Final[
     ): _DSV4_TP8_MP56_TRITON_CONFIGS
     for graph_mode in ("eager", "capture")
 }
+_CALIBRATED_TRITON_CONFIGS.update(
+    {shape: _DSV41_TP8_MP60_TRITON_CONFIGS for shape in _DSV41_TP8_BLOCK32_SHAPES}
+)
 
 _CALIBRATED_DIMENSIONS: Final = frozenset(
     (
@@ -438,6 +508,23 @@ _CALIBRATED_DIMENSIONS: Final = frozenset(
         shape.top_k,
     )
     for shape in _CALIBRATED_THRESHOLDS
+)
+
+
+# Shapes calibrated only for upstream Triton launch configs (no GEMV or grouped
+# GEMM threshold); the dispatcher builds their policy key without those kernels.
+_TRITON_ONLY_DIMENSIONS: Final = frozenset(
+    (
+        shape.local_experts,
+        shape.w1_output_size,
+        shape.w2_input_size,
+        shape.hidden_size,
+        shape.top_k,
+    )
+    for shape in _CALIBRATED_TRITON_CONFIGS
+    if _CALIBRATED_THRESHOLDS.get(shape, _DEFAULT_THRESHOLDS).gemv_max_tokens is None
+    and _CALIBRATED_THRESHOLDS.get(shape, _DEFAULT_THRESHOLDS).grouped_gemm_min_tokens
+    is None
 )
 
 
@@ -498,6 +585,25 @@ def has_calibrated_dimensions(
         hidden_size,
         top_k,
     ) in _CALIBRATED_DIMENSIONS
+
+
+def has_triton_only_calibration(
+    *,
+    local_experts: int,
+    w1_output_size: int,
+    w2_input_size: int,
+    hidden_size: int,
+    top_k: int,
+) -> bool:
+    """Whether the dimensions have Triton configs but no GEMV or grouped threshold."""
+
+    return (
+        local_experts,
+        w1_output_size,
+        w2_input_size,
+        hidden_size,
+        top_k,
+    ) in _TRITON_ONLY_DIMENSIONS
 
 
 def select_fused_moe_backend(
@@ -568,6 +674,7 @@ __all__ = [
     "MusaFusedMoeShape",
     "MusaFusedMoeThresholds",
     "has_calibrated_dimensions",
+    "has_triton_only_calibration",
     "parse_dispatch_backend",
     "select_fused_moe_backend",
     "thresholds_for_shape",
