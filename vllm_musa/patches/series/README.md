@@ -37,8 +37,13 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0027-MUSA-claim-DeepSeek-V4.1-checkpoints-for-the-DeepSee.patch` | The DeepSeek-V4 FP8 config also claims DeepSeek-V4.1 model types, so their FP8 checkpoints get the DeepSeek expert dispatch instead of the generic FP8 config. |
 | `0028-MUSA-load-the-MoE-top-k-gating-rows-element-by-eleme.patch` | The softmax and softplus-sqrt top-k gating kernels load each row element by element on MUSA; the vectorized loads ignore the scores for 320, 384 and 448 experts (DeepSeek-V4.1). |
 | `0029-MUSA-score-decode-indexer-keys-of-any-cache-block-si.patch` | Decode indexer top-k scores cache blocks the materialized scorer does not take (DeepSeek-V4.1's 128-entry ratio-1 blocks) with a graph-safe Triton paged-logits kernel plus the radix top-k; a capture with no graph-safe path fails instead of selecting no keys. |
+| `0030-MUSA-score-prefill-indexer-rows-in-batches.patch` | The exact MUSA prefill indexer fallback scores row chunks against all keys with each row's window masked and one top-k per chunk, instead of one einsum, top-k and two host syncs per query row. |
+| `0031-MUSA-run-fine-block-FP8-linears-through-the-MUSA-blo.patch` | The MUSA block-FP8 linear list tries the MUSA block-GEMV kernel before Triton; it takes scale blocks finer than DeepGEMM's 128 (DeepSeek-V4.1's 32x32) and runs a GEMV for small M. |
+| `0032-MUSA-score-prefill-indexer-rows-with-the-FP8-MQA-log.patch` | The MUSA prefill indexer fallback gathers the FP8 keys and scales without dequantizing, scores them with the FP8 MQA logits kernel and selects each row's window with the windowed top-k kernel; the FP32 path remains the fallback. |
+| `0033-MUSA-score-decode-indexer-keys-with-FP8-dot-products.patch` | The graph-safe MUSA decode paged-logits kernel scores each key tile against all heads with one dot product on the FP8 operands (any cache block size); fewer than 16 heads keep the per-head reduction. |
+| `0034-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch` | MUSA indexer top-k up to 512 uses the staged radix select for decode rows and eager prefill windows that start at zero; it returns the same index set and order as the generic kernel, which the other windows keep. |
 
-Currently **29 patches**.
+Currently **34 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

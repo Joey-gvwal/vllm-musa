@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 12 Oct 2026 17:50:42 +0800
+Subject: [PATCH] MUSA: score prefill indexer rows with the FP8 MQA logits
+ kernel
+
+The MUSA prefill indexer fallback dequantized queries and keys to FP32
+and scored them with an FP32 matmul whose cost grows with the context
+length. Gather the FP8 keys and scales from the cache without
+dequantizing, score them with the FP8 MQA logits kernel, and select
+each row's window with the windowed top-k kernel. The FP32 path stays
+as the fallback when the kernel is unavailable.
+---
+ .../layers/sparse_attn_indexer.py             | 120 ++++++++++++++++++
+ 1 file changed, 120 insertions(+)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 0466ba9..c7370d1 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -1243,6 +1243,116 @@ def _musa_gather_indexer_fp8_cache(
+     return torch.cat(pieces, dim=0)
+ 
+ 
++def _musa_gather_indexer_fp8_cache_quantized(
++    kv_cache: torch.Tensor,
++    block_table: torch.Tensor,
++    cu_seq_lens: torch.Tensor,
++    head_dim: int,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    """FP8 keys and FP32 key scales of each request's cached rows, concatenated."""
++    device = kv_cache.device
++    num_blocks, block_size = kv_cache.shape[0], kv_cache.shape[1]
++    value_bytes = block_size * head_dim
++    rows = _musa_indexer_cache_rows(kv_cache)
++    values, scales = [], []
++    for req_idx in range(block_table.shape[0]):
++        start = int(cu_seq_lens[req_idx].item())
++        length = int(cu_seq_lens[req_idx + 1].item()) - start
++        if length <= 0:
++            continue
++        req_blocks = block_table[req_idx, : (length + block_size - 1) // block_size].to(
++            torch.long
++        )
++        data = rows.index_select(0, req_blocks.clamp(0, num_blocks - 1))
++        valid = ((req_blocks >= 0) & (req_blocks < num_blocks)).repeat_interleave(
++            block_size
++        )[:length]
++        values.append(data[:, :value_bytes].reshape(-1, head_dim)[:length])
++        req_scales = (
++            data[:, value_bytes : value_bytes + block_size * 4]
++            .contiguous()
++            .view(torch.float32)
++            .reshape(-1)[:length]
++        )
++        scales.append(torch.where(valid, req_scales, torch.zeros_like(req_scales)))
++    if not values:
++        return (
++            torch.empty((0, head_dim), dtype=torch.float8_e4m3fn, device=device),
++            torch.empty((0,), dtype=torch.float32, device=device),
++        )
++    return (
++        torch.cat(values).contiguous().view(torch.float8_e4m3fn),
++        torch.cat(scales).contiguous(),
++    )
++
++
++# Bounds the [rows, keys] FP32 logits of one prefill tile.
++_MUSA_INDEXER_MQA_LOGITS_TILE_BYTES = 256 << 20
++
++
++def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
++    q_quant: torch.Tensor,
++    kv_cache: torch.Tensor,
++    weights: torch.Tensor,
++    chunk,
++    topk_indices: torch.Tensor,
++    topk_tokens: int,
++    head_dim: int,
++) -> bool:
++    """Prefill top-k from FP8 MQA logits over the gathered FP8 keys.
++
++    The logits kernel and the windowed top-k take the FP8 cache values and
++    scales directly; indices are window-local with -1 in unused slots.
++    """
++    if (
++        head_dim != 128
++        or q_quant.ndim != 3
++        or q_quant.dtype != torch.float8_e4m3fn
++        or kv_cache.dtype != torch.uint8
++        or kv_cache.ndim != 3
++        or weights.dtype != torch.float32
++        or topk_tokens > 2048
++    ):
++        return False
++    try:
++        from mate.deep_gemm import fp8_mqa_logits
++    except ImportError:
++        return False
++    rows = min(q_quant.shape[0], chunk.cu_seqlen_ks.numel(), topk_indices.shape[0])
++    topk = min(int(topk_tokens), topk_indices.shape[1])
++    if rows <= 0 or topk <= 0:
++        return True
++    k_fp8, k_scale = _musa_gather_indexer_fp8_cache_quantized(
++        kv_cache, chunk.block_table, chunk.cu_seq_lens, head_dim
++    )
++    num_keys = k_fp8.shape[0]
++    if num_keys == 0:
++        topk_indices[:rows, :topk] = -1
++        return True
++    starts = chunk.cu_seqlen_ks[:rows].to(torch.int32).clamp(0, num_keys)
++    ends = chunk.cu_seqlen_ke[:rows].to(torch.int32).clamp(0, num_keys)
++    tile_rows = max(1, _MUSA_INDEXER_MQA_LOGITS_TILE_BYTES // (num_keys * 4))
++    for row_start in range(0, rows, tile_rows):
++        row_end = min(rows, row_start + tile_rows)
++        tile_starts = starts[row_start:row_end].contiguous()
++        tile_ends = ends[row_start:row_end].contiguous()
++        logits = fp8_mqa_logits(
++            q_quant[row_start:row_end].contiguous(),
++            (k_fp8, k_scale),
++            weights[row_start:row_end].contiguous(),
++            tile_starts,
++            tile_ends,
++        )
++        _musa_custom_ops.sparse_indexer_topk(
++            logits,
++            tile_starts,
++            tile_ends,
++            topk_indices[row_start:row_end, :topk],
++            topk,
++        )
++    return True
++
++
+ def _musa_sparse_indexer_logits(
+     q: torch.Tensor,
+     k: torch.Tensor,
+@@ -1579,6 +1689,16 @@ def _musa_fill_exact_sparse_indexer_indices(
+             if sub_chunks is not None:
+                 chunks[:0] = sub_chunks
+                 continue
++            if _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
++                q_quant[token_start:token_end],
++                kv_cache,
++                weights[token_start:token_end],
++                chunk,
++                topk_indices_buffer[token_start:token_end, :topk_tokens],
++                topk_tokens,
++                head_dim,
++            ):
++                continue
+             if q_deq is None:
+                 q_deq = q_quant.to(torch.float32)
+             if weights_fp32 is None:

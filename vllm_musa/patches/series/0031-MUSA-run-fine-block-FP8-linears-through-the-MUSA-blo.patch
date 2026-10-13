@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Mon, 12 Oct 2026 14:08:57 +0800
+Subject: [PATCH] MUSA: run fine-block FP8 linears through the MUSA block GEMV
+
+DeepGEMM takes 128x128 weight blocks only, so block-FP8 linears with
+finer blocks (DeepSeek-V4.1's 32x32) ran the Triton block GEMM, whose K
+tile is one 32-wide scale block, at every M. Select the MUSA block-GEMV
+kernel before Triton: it runs a GEMV for small M and keeps the Triton
+block GEMM for larger M.
+---
+ vllm/model_executor/kernels/linear/__init__.py | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
+index 2825846..2cddd82 100644
+--- a/vllm/model_executor/kernels/linear/__init__.py
++++ b/vllm/model_executor/kernels/linear/__init__.py
+@@ -678,12 +678,16 @@ def choose_scaled_mm_linear_kernel(
+     platform_kernels = possible_kernels.get(current_platform._enum)
+     if platform_kernels is None and current_platform.is_musa():
+         if possible_kernels is _POSSIBLE_FP8_BLOCK_KERNELS:
++            from vllm_musa.model_executor.kernels.linear.scaled_mm.block_gemv import (
++                MUSAFp8BlockGemvScaledMMKernel,
++            )
+             from vllm_musa.model_executor.kernels.linear.scaled_mm.deep_gemm import (
+                 MUSADeepGemmFp8BlockScaledMMKernel,
+             )
+ 
+             platform_kernels = [
+                 MUSADeepGemmFp8BlockScaledMMKernel,
++                MUSAFp8BlockGemvScaledMMKernel,
+                 TritonFp8BlockScaledMMKernel,
+             ]
+         elif possible_kernels is _POSSIBLE_FP8_KERNELS:
