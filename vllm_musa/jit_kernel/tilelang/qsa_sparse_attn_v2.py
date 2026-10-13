@@ -21,7 +21,9 @@ no loop in the tile body is thread-predicated. TileLang's storage-sync pass
 refuses to keep a barrier inside a predicated region and hoists it out
 ("[ThreadSync] Hoisting sync from inside if to before if"), which drops the
 write-then-read ordering on the shared gather metadata and makes the kernel
-nondeterministic.
+nondeterministic. Within those loops only lane ``_u == 0`` stores the gather
+metadata, so each shared element has a single writer; the guard holds no
+barrier.
 """
 
 import functools
@@ -188,10 +190,12 @@ def _qsa_prefill_kernel(
                     # invalid through the column < valid_count check below.
                     if tile < num_tiles - 1:
                         for i, _u in T.Parallel(block_n, dup):
-                            s_idx[i] = indices[row, tile * block_n + i]
+                            if _u == 0:
+                                s_idx[i] = indices[row, tile * block_n + i]
                     else:
                         for i, _u in T.Parallel(block_n, dup):
-                            s_idx[i] = indices[row, T.min(tile * block_n + i, topk)]
+                            if _u == 0:
+                                s_idx[i] = indices[row, T.min(tile * block_n + i, topk)]
 
                     T.sync_threads()
                     for i, _u in T.Parallel(block_n, dup):
@@ -209,9 +213,10 @@ def _qsa_prefill_kernel(
                             and (raw_page >= 0)
                             and (raw_page < num_blocks)
                         )
-                        s_off[i] = tok % page_size
-                        s_phys[i] = T.min(T.max(raw_page, 0), num_blocks - 1)
-                        s_valid[i] = T.if_then_else(ok, 1.0, 0.0)
+                        if _u == 0:
+                            s_off[i] = tok % page_size
+                            s_phys[i] = T.min(T.max(raw_page, 0), num_blocks - 1)
+                            s_valid[i] = T.if_then_else(ok, 1.0, 0.0)
 
                     T.sync_threads()
                     # An explicit vector axis gives one warp per KV row and 16 B
@@ -347,10 +352,12 @@ def _qsa_decode_kernel(
                 if (tile < num_tiles) and (tile * block_n < valid_count):
                     if tile < num_tiles - 1:
                         for i, _u in T.Parallel(block_n, dup):
-                            s_idx[i] = indices[row, tile * block_n + i]
+                            if _u == 0:
+                                s_idx[i] = indices[row, tile * block_n + i]
                     else:
                         for i, _u in T.Parallel(block_n, dup):
-                            s_idx[i] = indices[row, T.min(tile * block_n + i, topk)]
+                            if _u == 0:
+                                s_idx[i] = indices[row, T.min(tile * block_n + i, topk)]
 
                     T.sync_threads()
                     for i, _u in T.Parallel(block_n, dup):
@@ -368,9 +375,10 @@ def _qsa_decode_kernel(
                             and (raw_page >= 0)
                             and (raw_page < num_blocks)
                         )
-                        s_off[i] = tok % page_size
-                        s_phys[i] = T.min(T.max(raw_page, 0), num_blocks - 1)
-                        s_valid[i] = T.if_then_else(ok, 1.0, 0.0)
+                        if _u == 0:
+                            s_off[i] = tok % page_size
+                            s_phys[i] = T.min(T.max(raw_page, 0), num_blocks - 1)
+                            s_valid[i] = T.if_then_else(ok, 1.0, 0.0)
 
                     T.sync_threads()
                     for i, d in T.Parallel(block_n, head_dim):
