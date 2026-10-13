@@ -18,6 +18,16 @@ def _deepgemm_block_fp8(quant_method) -> bool:
     )
 
 
+def _block_gemv_fp8(quant_method):
+    # MUSA: the fine-block FP8 GEMV kernel can apply the clamped SwiGLU itself.
+    if not isinstance(quant_method, Fp8LinearMethod):
+        return None
+    kernel = getattr(quant_method, "fp8_linear", None)
+    if type(kernel).__name__ != "MUSAFp8BlockGemvScaledMMKernel":
+        return None
+    return kernel
+
+
 @RowParallelLinear.register_oot
 class MusaRowParallelLinear(RowParallelLinear):
     def forward_swiglu_clamp(
@@ -27,9 +37,25 @@ class MusaRowParallelLinear(RowParallelLinear):
 
         ``DeepseekV4MLP`` calls this optional OOT hook before materializing the
         activation.  Return ``None`` unless this is the exact MUSA DeepGEMM
-        row-parallel configuration; the model then executes its ordinary
-        activation and linear path unchanged.
+        row-parallel configuration or a small-M fine-block GEMV; the model then
+        executes its ordinary activation and linear path unchanged.
         """
+        gemv = _block_gemv_fp8(self.quant_method)
+        if (
+            gemv is not None
+            and not envs.VLLM_BATCH_INVARIANT
+            and self.input_is_parallel
+            and self.bias is None
+        ):
+            output_parallel = gemv.apply_swiglu_clamp_weights(
+                self, gate_up, swiglu_limit
+            )
+            if output_parallel is None:
+                return None
+            if self.reduce_results and self.tp_size > 1:
+                return tensor_model_parallel_all_reduce(output_parallel)
+            return output_parallel
+
         fast = (
             # This hook is only called by DeepSeek-V4's MLP.  Keep the
             # confirmed kernel path independent of the contract snapshot

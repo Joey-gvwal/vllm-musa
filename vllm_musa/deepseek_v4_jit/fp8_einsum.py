@@ -9,6 +9,7 @@ _GROUP_SIZE = 128
 # The fused GEMV re-reads the weight per token row while DeepGEMM stays
 # weight-bound; keep the GEMV only for single-request verify shapes.
 _DEEPGEMM_MIN_TOKENS = 8
+_BLOCK_GEMV_MAX_TOKENS = 16
 
 
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
@@ -279,6 +280,104 @@ def _normalize_blocked_weight(
     return weight, scales, out_dim, in_dim
 
 
+def _try_musa_fp8_einsum_fine_blocks(
+    activation: torch.Tensor,
+    activation_scale: torch.Tensor,
+    weight: torch.Tensor,
+    weight_scale: torch.Tensor,
+    out: torch.Tensor,
+) -> tuple[bool, str]:
+    """``bhr,hdr->bhd`` for weights whose scale blocks are finer than 128."""
+    if (
+        activation.dim() != 3
+        or activation_scale.dim() != 3
+        or out.dim() != 3
+        or activation.dtype != torch.float8_e4m3fn
+        or weight.dtype != torch.float8_e4m3fn
+        or out.dtype != torch.bfloat16
+    ):
+        return False, "expected 3D FP8 activation and BF16 output"
+    tokens, groups, in_dim = activation.shape
+    try:
+        weight, scales, out_dim, weight_in_dim = _normalize_blocked_weight(
+            weight,
+            weight_scale,
+            groups,
+        )
+    except ValueError as exc:
+        return False, f"ValueError: {exc}"
+    if weight_in_dim != in_dim or out.shape != (tokens, groups, out_dim):
+        return False, "shape mismatch after blocked weight normalization"
+    if activation_scale.shape[:2] != (tokens, groups):
+        return False, f"activation_scale shape {tuple(activation_scale.shape)}"
+    act_scale = activation_scale.to(torch.float32)
+
+    from vllm_musa.kernels.fp8_block_gemv import (
+        fp8_block_gemv,
+        fp8_block_gemv_supported,
+    )
+
+    if tokens <= _BLOCK_GEMV_MAX_TOKENS and all(
+        fp8_block_gemv_supported(act_scale[:, g, :], weight[g], scales[g])
+        for g in range(groups)
+    ):
+        for group_idx in range(groups):
+            fp8_block_gemv(
+                activation[:, group_idx, :],
+                act_scale[:, group_idx, :],
+                weight[group_idx],
+                scales[group_idx],
+                out[:, group_idx, :],
+            )
+        return True, "musa_fp8_block_gemv"
+
+    # The block GEMM takes one activation scale per weight K block; expand
+    # coarser activation groups to the weight's K block.
+    block_n = out_dim // scales.shape[1]
+    block_k = in_dim // scales.shape[2]
+    act_group = in_dim // act_scale.shape[2]
+    if act_group % block_k != 0 or act_group < block_k:
+        return False, f"activation group {act_group} vs weight block {block_k}"
+    from vllm.model_executor.layers.quantization.utils.fp8_utils import (
+        w8a8_triton_block_scaled_mm,
+    )
+
+    from vllm_musa.kernels.fp8_block_gemm import (
+        fp8_block_scaled_mm,
+        fp8_block_scaled_mm_supported,
+    )
+
+    reason = "musa_fp8_block_scaled_mm"
+    for group_idx in range(groups):
+        group_activation = activation[:, group_idx, :].contiguous()
+        group_scale = act_scale[:, group_idx, :]
+        if act_group != block_k:
+            group_scale = group_scale.repeat_interleave(act_group // block_k, dim=-1)
+        group_scale = group_scale.contiguous()
+        if fp8_block_scaled_mm_supported(
+            group_activation, group_scale, weight[group_idx], scales[group_idx]
+        ):
+            result = fp8_block_scaled_mm(
+                group_activation,
+                group_scale,
+                weight[group_idx],
+                scales[group_idx],
+                out.dtype,
+            )
+        else:
+            reason = "triton_block_scaled_mm"
+            result = w8a8_triton_block_scaled_mm(
+                group_activation,
+                weight[group_idx],
+                group_scale,
+                scales[group_idx],
+                [block_n, block_k],
+                out.dtype,
+            )
+        out[:, group_idx, :].copy_(result)
+    return True, reason
+
+
 def try_musa_deepseek_v4_fp8_einsum(
     activation: torch.Tensor,
     activation_scale: torch.Tensor,
@@ -300,6 +399,16 @@ def try_musa_deepseek_v4_fp8_einsum(
         return True, reason
     if equation != "bhr,hdr->bhd":
         return False, f"unsupported equation {equation!r}"
+    if all(_is_musa_tensor(t) for t in (activation, weight, out)):
+        handled, reason = _try_musa_fp8_einsum_fine_blocks(
+            activation,
+            activation_scale,
+            weight,
+            weight_scale,
+            out,
+        )
+        if handled:
+            return True, reason
 
     activation_deq = _dequant_activation(activation, activation_scale)
     weight_deq = _dequant_weight(weight, weight_scale, activation.shape[1])
