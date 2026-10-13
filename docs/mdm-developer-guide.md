@@ -1,8 +1,9 @@
 # vLLM-MUSA Developer Guide — the MUSA Divergence Manifest (MDM)
 
 vLLM-MUSA is an out-of-tree plugin on top of upstream vLLM, plus ~200
-source-level divergences from upstream (210 rows in the manifest census that
-`musa_sync report` prints; 172 of them are `series/` entries). Instead of patching an installed vLLM at runtime, the
+source-level divergences from upstream (`musa_sync report` prints the manifest
+census; `vllm_musa/patches/series/README.md` states how many are `series/`
+entries). Instead of patching an installed vLLM at runtime, the
 **MUSA Divergence Manifest (MDM)** keeps those divergences as a build-time
 `git format-patch` series applied to a *pinned* upstream vLLM clone. This guide
 covers building, the developer edit loop, updating the pinned vLLM, and

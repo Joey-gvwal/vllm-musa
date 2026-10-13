@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 
@@ -13,10 +14,15 @@ PATCH = (
     / "0002-Bugfix-Mooncake-Report-failed-remote-KV-loads-to-the.patch"
 )
 UPSTREAM_COMMIT = "2c7ee87223f0c94f614a0b8600f6f193e6e4388f"
+# sha256 of each upstream commit's changed lines, so an edited body fails.
+UPSTREAM_CHANGE_DIGEST = "8b67c5bf4193f50217f50ed9699cdccc0312f06b539e314e8fe890c9cad2bd0a"
 SCHEDULER_PATCH = PATCH.with_name(
     "0001-Core-Fix-ValueError-on-KV-load-failure-with-a-hybrid.patch"
 )
 SCHEDULER_UPSTREAM_COMMIT = "c351fd3c649569d8a585eb22cfaf2ee728e5fc22"
+SCHEDULER_UPSTREAM_CHANGE_DIGEST = (
+    "6bf9a77a045308e6287f04bbaf5dac50e7714b9c8157caac6c6ba0de44a7c8ae"
+)
 TEST_SPEC_PATCH = PATCH.with_name(
     "0003-MUSA-run-the-DeepSeek-V4-KV-load-failure-test-on-the.patch"
 )
@@ -34,6 +40,18 @@ def _changed_files(text: str) -> set[str]:
     }
 
 
+def _change_digest(text: str) -> str:
+    """sha256 of the diff's added and removed lines, without context, hunk
+    headers or index lines."""
+    diff = text[text.index("\ndiff --git ") + 1 :]
+    changed = [
+        line
+        for line in diff.splitlines()
+        if line[:1] in ("+", "-") and not line.startswith(("+++ ", "--- "))
+    ]
+    return hashlib.sha256("\n".join(changed).encode()).hexdigest()
+
+
 def _diff_lines(text: str, prefix: str) -> str:
     return "\n".join(
         line[1:]
@@ -49,7 +67,9 @@ def test_patch_only_touches_mooncake_connector() -> None:
 
 
 def test_patch_is_the_upstream_commit() -> None:
-    assert f"(cherry picked from commit {UPSTREAM_COMMIT})" in _text()
+    text = _text()
+    assert f"(cherry picked from commit {UPSTREAM_COMMIT})" in text
+    assert _change_digest(text) == UPSTREAM_CHANGE_DIGEST
 
 
 def test_failed_pulls_are_reported_to_the_scheduler() -> None:
@@ -88,6 +108,7 @@ def test_scheduler_handles_load_failures_on_a_hybrid_kv_cache() -> None:
     removed = _diff_lines(text, "-")
 
     assert f"(cherry picked from commit {SCHEDULER_UPSTREAM_COMMIT})" in text
+    assert _change_digest(text) == SCHEDULER_UPSTREAM_CHANGE_DIGEST
     assert "vllm/v1/core/sched/scheduler.py" in _changed_files(text)
     assert "(req_block_ids,) = self.kv_cache_manager.get_block_ids(req_id)" in removed
     assert "req_block_ids_per_group = self.kv_cache_manager.get_block_ids(req_id)" in added
