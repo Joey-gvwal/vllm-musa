@@ -60,7 +60,7 @@ export MODEL_PATH=/models/DeepSeek-V4-Flash-0731-FP8-mt
 ## Single node
 
 ```bash
-CUDAGRAPH_CAPTURE_SIZES="1,2,3,4,5,8,16,24,32,40,48,56,64"
+CUDAGRAPH_CAPTURE_SIZES="5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100,105,110,115,120,125,130,135,140,145,150,155,160,200,240,280,320"
 
 vllm serve "${MODEL_PATH}" \
   --trust-remote-code \
@@ -278,11 +278,12 @@ print(response.choices[0].message.content)
   store for prefix reuse. Decode receives every KV block from prefill, so a
   decode-side prefix cache gets no hits.
 - Prefill does not capture CUDA graphs because it only runs prefill.
-- Decode capture sizes list every DSpark-4 step of 1-32 concurrent requests
-  (5 tokens per request, 5-160 tokens) and 40, 48, 56 and 64 requests, up to
-  `--max-num-seqs 64`. vLLM rounds a capture size up to a multiple of 5, so a
-  missing size runs the batch in the next larger graph; batches above the
-  largest graph run eagerly.
+- Capture sizes count tokens, not requests. The single-node and decode lists
+  cover every DSpark-4 step of 1-32 concurrent requests (5 tokens per request,
+  5-160 tokens) and 40, 48, 56 and 64 requests, up to `--max-num-seqs 64`.
+  vLLM rounds each capture size up to a multiple of 5 and drops any size that
+  rounds above the largest listed one, so a missing size runs the batch in the
+  next larger graph; batches above the largest graph run eagerly.
 - `--global_segment_size=400GB` sizes the store for 128K-input traffic up to
   16 concurrent requests. Mooncake starts evicting at 90% of the segment.
 - `MOONCAKE_OFFLOAD_LOCAL_BUFFER_SIZE_BYTES` is the SSD staging buffer on the
