@@ -18,6 +18,7 @@ from vllm_musa.kernels.fp8_block_gemm import (
     fp8_block_scaled_mm,
     fp8_block_scaled_mm_supported,
 )
+from vllm_musa.kernels.fp8_block_splitk import fp8_block_splitk_config
 from vllm_musa.kernels.fp8_block_gemv import (
     fp8_block_gemv,
     fp8_block_gemv_quant,
@@ -48,11 +49,24 @@ def _env_int(name: str) -> int | None:
 
 _GEMV_MAX_M_OVERRIDE = _env_int("VLLM_MUSA_FP8_BLOCK_GEMV_MAX_M")
 
+# Small-M SwiGLU down projections past the GEMV rows quantize the clamped SwiGLU in
+# one kernel instead of a separate activation and quantization.
+_NATIVE_SWIGLU_QUANT = os.environ.get("VLLM_MUSA_FP8_NATIVE_GEMV", "1") != "0"
+_NATIVE_SWIGLU_QUANT_MAX_ROWS = 64
+
 
 def _gemv_max_m(weight: torch.Tensor) -> int:
     if _GEMV_MAX_M_OVERRIDE is not None:
         return _GEMV_MAX_M_OVERRIDE
     return _GEMV_MAX_M_MEASURED.get(tuple(weight.shape), _GEMV_MAX_M_DEFAULT)
+
+
+def _small_m_path(weight: torch.Tensor, weight_scale: torch.Tensor, rows: int) -> bool:
+    """Whether ``rows`` run the small-M kernels (GEMV or split-K GEMM) rather than
+    the block GEMM."""
+    if 0 < rows <= _gemv_max_m(weight):
+        return True
+    return fp8_block_splitk_config(weight, weight_scale, rows) is not None
 
 
 class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
@@ -107,7 +121,7 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         rows = x.numel() // x.shape[-1] if x.dim() > 0 else 0
         params = self._get_layer_params(layer)
         if (
-            0 < rows <= _gemv_max_m(params.weight)
+            _small_m_path(params.weight, params.block_scale, rows)
             and x.dtype in (torch.bfloat16, torch.float16)
             and x.stride(-1) == 1
             and params.input_scale is None
@@ -143,7 +157,7 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         rows = gate_up.numel() // gate_up.shape[-1] if gate_up.dim() > 0 else 0
         params = self._get_layer_params(layer)
         if not (
-            0 < rows <= _gemv_max_m(params.weight)
+            0 < rows
             and gate_up.dtype == torch.bfloat16
             and gate_up.is_contiguous()
             and gate_up.shape[-1] == 2 * params.weight.shape[1]
@@ -153,6 +167,10 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
             )
         ):
             return None
+        if rows > _gemv_max_m(params.weight):
+            return self._swiglu_clamp_block_mm(
+                gate_up, rows, params, group_size, swiglu_limit
+            )
         output = torch.empty(
             (rows, params.weight.shape[0]),
             dtype=self.config.out_dtype,
@@ -168,6 +186,32 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
         )
         return output.view(*gate_up.shape[:-1], params.weight.shape[0])
 
+    def _swiglu_clamp_block_mm(
+        self,
+        gate_up: torch.Tensor,
+        rows: int,
+        params,
+        group_size: int,
+        swiglu_limit: float,
+    ) -> torch.Tensor | None:
+        """Past the GEMV rows: the clamped SwiGLU quantized in one kernel, then the
+        block GEMM. Returns ``None`` where the native quantization does not apply."""
+        if not (_NATIVE_SWIGLU_QUANT and rows <= _NATIVE_SWIGLU_QUANT_MAX_ROWS):
+            return None
+        if group_size != 32 or params.weight.shape[1] % 32:
+            return None
+        from vllm_musa.jit_kernel.csrc import fp8_block_gemv as native
+
+        aq, a_scale = native.act_quant(gate_up.view(rows, -1), swiglu_limit)
+        if not fp8_block_scaled_mm_supported(
+            aq, a_scale, params.weight, params.block_scale
+        ):
+            return None
+        output = fp8_block_scaled_mm(
+            aq, a_scale, params.weight, params.block_scale, self.config.out_dtype
+        )
+        return output.view(*gate_up.shape[:-1], params.weight.shape[0])
+
     def apply_block_scaled_mm(
         self,
         A: torch.Tensor,
@@ -177,7 +221,7 @@ class MUSAFp8BlockGemvScaledMMKernel(TritonFp8BlockScaledMMKernel):
     ) -> torch.Tensor:
         if (
             A.dim() == 2
-            and A.shape[0] <= _gemv_max_m(B)
+            and _small_m_path(B, Bs, A.shape[0])
             and A.stride(-1) == 1
             and As.dim() == 2
             and As.stride(-1) == 1

@@ -1424,6 +1424,7 @@ def _can_use_musa_fp8_block_moe_gemv(
     block_shape: list[int] | None,
     w1_bias: torch.Tensor | None,
     w2_bias: torch.Tensor | None,
+    gemm1_clamp_limit: float | None = None,
 ) -> bool:
     """Small-M FP8 MoE whose scale blocks are finer than the native GEMV's."""
     if (
@@ -1447,9 +1448,18 @@ def _can_use_musa_fp8_block_moe_gemv(
         or block_shape[1] not in (16, 32, 64)
     ):
         return False
+    max_tokens = _FP8_BLOCK_MOE_GEMV_MAX_TOKENS
+    if hidden_states.dim() == 2 and _native_fp8_block_moe_gemv_supported(
+        hidden_states, w1, w2, topk_ids, block_shape, gemm1_clamp_limit
+    ):
+        max_tokens = max(max_tokens, _NATIVE_FP8_BLOCK_MOE_GEMV_MAX_TOKENS)
+    if hidden_states.dim() == 2 and _fp8_moe_mma_eligible(
+        hidden_states, w1, w2, w1_scale, w2_scale, topk_ids, block_shape, gemm1_clamp_limit
+    ):
+        max_tokens = max(max_tokens, hidden_states.shape[0])
     if (
         hidden_states.dim() != 2
-        or not 0 < hidden_states.shape[0] <= _FP8_BLOCK_MOE_GEMV_MAX_TOKENS
+        or not 0 < hidden_states.shape[0] <= max_tokens
         or hidden_states.dtype != torch.bfloat16
         or not hidden_states.is_contiguous()
         or w1.dim() != 3
@@ -1489,6 +1499,71 @@ def _can_use_musa_fp8_block_moe_gemv(
     )
 
 
+_NATIVE_FP8_BLOCK_MOE_GEMV = (
+    os.environ.get("VLLM_MUSA_FP8_NATIVE_MOE_GEMV", "1") != "0"
+)
+_NATIVE_FP8_BLOCK_MOE_GEMV_MAX_TOKENS = 8
+# The native path takes two more launches than the Triton GEMVs, which quantize
+# in-kernel; it wins from four tokens.
+_NATIVE_FP8_BLOCK_MOE_GEMV_MIN_TOKENS = 4
+
+
+def _native_fp8_block_moe_gemv_supported(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_ids: torch.Tensor,
+    block_shape: list[int],
+    gemm1_clamp_limit: float | None,
+) -> bool:
+    """Shapes the native routed GEMVs are built for: 32x32 blocks, top-3 or top-6,
+    a 288-wide down projection and the clamped SwiGLU, up to 8 tokens."""
+    return (
+        _NATIVE_FP8_BLOCK_MOE_GEMV
+        and gemm1_clamp_limit is not None
+        and block_shape is not None
+        and list(block_shape) == [32, 32]
+        and topk_ids.dim() == 2
+        and topk_ids.shape[1] in (3, 6)
+        and w2.dim() == 3
+        and w2.shape[2] == 288
+        and hidden_states.shape[-1] % 32 == 0
+        and _NATIVE_FP8_BLOCK_MOE_GEMV_MIN_TOKENS
+        <= hidden_states.shape[0]
+        <= _NATIVE_FP8_BLOCK_MOE_GEMV_MAX_TOKENS
+    )
+
+
+
+
+def _fp8_moe_mma_eligible(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w1_scale: torch.Tensor | None,
+    w2_scale: torch.Tensor | None,
+    topk_ids: torch.Tensor,
+    block_shape: list[int] | None,
+    gemm1_clamp_limit: float | None,
+) -> bool:
+    """The FP8-dot MoE for 32x32 blocks and the clamped SwiGLU: from four tokens, or
+    at any batch the router already wrote the expert route map for."""
+    if (
+        gemm1_clamp_limit is None
+        or block_shape is None
+        or list(block_shape) != [32, 32]
+        or w1_scale is None
+        or w2_scale is None
+    ):
+        return False
+    from vllm_musa.kernels.fp8_moe_mma import MIN_TOKENS, fp8_moe_mma_supported
+
+    routed_map = getattr(topk_ids, "musa_route_map", None) is not None
+    return (hidden_states.shape[0] >= MIN_TOKENS or routed_map) and fp8_moe_mma_supported(
+        hidden_states, w1, w2, w1_scale, w2_scale, topk_ids
+    )
+
+
 def _musa_fp8_block_moe_gemv(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -1519,6 +1594,47 @@ def _musa_fp8_block_moe_gemv(
     rows = num_tokens * top_k
     group_size = block_shape[1]
     expert_ids = topk_ids.reshape(-1).contiguous()
+
+    if _fp8_moe_mma_eligible(
+        hidden_states, w1, w2, w1_scale, w2_scale, topk_ids, block_shape, gemm1_clamp_limit
+    ):
+        from vllm_musa.kernels.fp8_moe_mma import fp8_moe_mma
+
+        return fp8_moe_mma(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            w1_scale,
+            w2_scale,
+            gemm1_clamp_limit,
+        )
+    if _native_fp8_block_moe_gemv_supported(
+        hidden_states, w1, w2, topk_ids, block_shape, gemm1_clamp_limit
+    ):
+        from vllm_musa.jit_kernel.csrc import fp8_block_gemv as native
+
+        xq, xs = native.act_quant(hidden_states)
+        cache1 = torch.empty(
+            (rows, w1_output_size),
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+        native.moe_w1_gemv(
+            xq, xs, w1, w1_scale, expert_ids.to(torch.int32), cache1, top_k
+        )
+        aq, a_scale = native.act_quant(cache1, gemm1_clamp_limit)
+        out = torch.empty_like(hidden_states)
+        return native.moe_w2_gemv(
+            aq,
+            a_scale,
+            w2,
+            w2_scale,
+            expert_ids.to(torch.int32),
+            topk_weights.reshape(-1).to(torch.float32).contiguous(),
+            out,
+        )
 
     cache1 = torch.empty(
         (rows, w1_output_size), device=hidden_states.device, dtype=hidden_states.dtype
@@ -2140,6 +2256,7 @@ def _musa_fused_experts_impl_dispatch(
             block_shape=block_shape,
             w1_bias=w1_bias,
             w2_bias=w2_bias,
+            gemm1_clamp_limit=gemm1_clamp_limit,
         )
     ):
         logger.info_once(

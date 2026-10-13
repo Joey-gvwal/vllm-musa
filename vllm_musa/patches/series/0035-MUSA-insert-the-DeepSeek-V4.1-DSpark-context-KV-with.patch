@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 13 Oct 2026 20:00:00 +0800
+Subject: [PATCH] MUSA: insert the DeepSeek-V4.1 DSpark context KV with the
+ MUSA op
+
+DSpark writes the target's context KV into the draft layers' sliding-
+window cache with fused CUDA insert ops that the MUSA build does not
+compile. On MUSA it uses the fused q-norm, RoPE and KV insert of the
+DeepSeek-V4 attention layers; the dummy query output is discarded.
+---
+ vllm/models/deepseek_v41/nvidia/dspark.py | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/vllm/models/deepseek_v41/nvidia/dspark.py b/vllm/models/deepseek_v41/nvidia/dspark.py
+index fbd02ad..9a35899 100644
+--- a/vllm/models/deepseek_v41/nvidia/dspark.py
++++ b/vllm/models/deepseek_v41/nvidia/dspark.py
+@@ -49,6 +49,7 @@ from vllm.models.common.ops.sequence_parallel import (
+     sp_padding_mask,
+     sp_shard,
+ )
++from vllm.platforms import current_platform
+ 
+ from .model import (
+     DeepseekV4DecoderLayer,
+@@ -251,6 +252,23 @@ def _insert_context_kv(
+         dtype=kv.dtype,
+         device=kv.device,
+     )
++    if current_platform.is_musa():
++        # MUSA: the fused CUDA insert ops are not built; use the MUSA insert the
++        # attention layers use. The dummy query result is discarded.
++        assert not attn.kv_mxfp8
++        from vllm_musa import _custom_ops as _musa_custom_ops
++
++        _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
++            dummy_q,
++            kv,
++            swa_cache,
++            slot_mapping.contiguous(),
++            positions.contiguous(),
++            cos_sin_cache,
++            attn.eps,
++            block_size,
++        )
++        return
+     if cache_dtype == torch.uint8:
+         # fp8_ds_mla UE8M0 paged layout
+         swa_2d = swa_cache.view(swa_cache.shape[0], -1)
+-- 
+2.25.1
+

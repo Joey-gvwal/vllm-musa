@@ -1,6 +1,7 @@
 import vllm_musa.model_executor.layers.activation
 import vllm_musa.model_executor.layers.attention.mm_encoder_attention
 import vllm_musa.model_executor.layers.fused_moe.fused_moe
+import vllm_musa.model_executor.layers.fused_moe.router.fused_topk_bias_router
 import vllm_musa.model_executor.layers.fused_moe.router.fused_topk_router
 import vllm_musa.model_executor.layers.fused_moe.router.grouped_topk_router
 import vllm_musa.model_executor.layers.fused_moe.unquantized_fused_moe_method

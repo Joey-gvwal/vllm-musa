@@ -42,8 +42,10 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0032-MUSA-score-prefill-indexer-rows-with-the-FP8-MQA-log.patch` | The MUSA prefill indexer fallback gathers the FP8 keys and scales without dequantizing, scores them with the FP8 MQA logits kernel and selects each row's window with the windowed top-k kernel; the FP32 path remains the fallback. |
 | `0033-MUSA-score-decode-indexer-keys-with-FP8-dot-products.patch` | The graph-safe MUSA decode paged-logits kernel scores each key tile against all heads with one dot product on the FP8 operands (any cache block size); fewer than 16 heads keep the per-head reduction. |
 | `0034-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch` | MUSA indexer top-k up to 512 uses the staged radix select for decode rows and eager prefill windows that start at zero; it returns the same index set and order as the generic kernel, which the other windows keep. |
+| `0035-MUSA-insert-the-DeepSeek-V4.1-DSpark-context-KV-with.patch` | DSpark inserts the target's context KV into the draft layers' sliding-window cache with the MUSA fused q-norm/RoPE/KV insert; the fused CUDA insert ops are not built on MUSA. |
+| `0036-MUSA-fold-the-DeepSeek-V4-shared-expert-into-the-rou.patch` | A TP-only DeepSeek-V4 MoE with sqrt-softplus routing passes its shared expert to vllm-musa instead of the MoE runner: the shared projections join the routed FP8 expert stack after loading and the router gives every token one extra slot on them at weight 1.0. |
 
-Currently **34 patches**.
+Currently **36 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

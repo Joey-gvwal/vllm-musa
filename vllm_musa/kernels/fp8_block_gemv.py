@@ -12,11 +12,35 @@ be quantized per group inside the kernel, with the arithmetic of
 
 from __future__ import annotations
 
+import os
+
 import torch
 from vllm.triton_utils import tl, triton
 
+from vllm_musa.kernels.fp8_block_splitk import (
+    fp8_block_splitk_config,
+    fp8_block_splitk_mm,
+)
+
 _FP8_MAX = 448.0
 _QUANT_EPS = 1e-10
+
+# Native GEMV configs (``vllm_musa/jit_kernel/csrc/gemv``) measured on MTT S5000
+# with a cold L2 for the DeepSeek-V4.1 TP8 projections, keyed by (N, K): the
+# config id for 1-8 rows, or None where the Triton GEMV is faster. The BF16 table
+# includes the separate activation quantization. One row keeps the Triton GEMV: its
+# in-kernel quantization saves a launch, which outweighs the faster loop in a graph.
+_NATIVE_BF16_CFG = {
+    (1792, 5120): (None, 9, 9, 10, 10, 10, 10, 8),
+    (1024, 4096): (None, 9, 3, 3, 2, 3, 2, 0),
+    (576, 5120): (None, 9, 9, 3, 9, 9, 9, 2),
+}
+_NATIVE_FP8_CFG = {
+    (1792, 5120): (None, 9, 9, 10, 10, 10, 10, 8),
+    (1024, 4096): (None, 9, 3, 3, 2, 3, 2, 0),
+    (576, 5120): (None, 9, 9, 3, 9, 9, 9, 2),
+}
+_NATIVE_GEMV = os.environ.get("VLLM_MUSA_FP8_NATIVE_GEMV", "1") != "0"
 
 
 # (BLOCK_N, BLOCK_K, num_warps) measured on MTT S5000, keyed by (N, K, routed
@@ -494,6 +518,25 @@ def _launch(
     return output
 
 
+def _native_cfg(
+    table: dict, weight: torch.Tensor, weight_scale: torch.Tensor, rows: int
+) -> int | None:
+    """Native GEMV config for ``rows`` activation rows, or None for the Triton GEMV."""
+    if not _NATIVE_GEMV or not 0 < rows <= len(next(iter(table.values()))):
+        return None
+    cfgs = table.get(tuple(weight.shape))
+    if cfgs is None or cfgs[rows - 1] is None:
+        return None
+    if (
+        weight_scale.dtype != torch.float32
+        or weight.stride(-1) != 1
+        or weight_scale.stride(-1) != 1
+        or _weight_groups(weight, weight_scale) != (32, 32)
+    ):
+        return None
+    return cfgs[rows - 1]
+
+
 def fp8_block_gemv(
     a: torch.Tensor,
     a_scale: torch.Tensor,
@@ -502,6 +545,29 @@ def fp8_block_gemv(
     output: torch.Tensor,
 ) -> torch.Tensor:
     """``output[m] = dequant(a[m]) @ dequant(weight).T`` for a 2D FP8 weight."""
+    splitk = fp8_block_splitk_config(weight, weight_scale, a.shape[0])
+    if (
+        splitk is not None
+        and a.dtype == torch.float8_e4m3fn
+        and a.stride(-1) == 1
+        and a_scale.stride(-1) == 1
+        and weight.shape[1] % a_scale.shape[-1] == 0
+        and weight.shape[1] // a_scale.shape[-1] in (32, 64, 128)
+    ):
+        return fp8_block_splitk_mm(a, a_scale, weight, weight_scale, output, splitk)
+    cfg = _native_cfg(_NATIVE_FP8_CFG, weight, weight_scale, a.shape[0])
+    if (
+        cfg is not None
+        and a.dtype == torch.float8_e4m3fn
+        and a.stride(-1) == 1
+        and output.stride(-1) == 1
+        and a_scale.stride(-1) == 1
+        and weight.shape[1] % a_scale.shape[-1] == 0
+        and weight.shape[1] // a_scale.shape[-1] in (32, 64, 128)
+    ):
+        from vllm_musa.jit_kernel.csrc import fp8_block_gemv as native
+
+        return native.dense_gemv(a, a_scale, weight, weight_scale, output, cfg)
     return _launch(
         a, a_scale, weight, weight_scale, output, a.shape[0], None, None, 1, 0
     )
@@ -520,6 +586,25 @@ def fp8_block_gemv_quant(
     With ``swiglu_limit``, ``x`` is a ``[gate | up]`` row and the GEMV input is its
     clamped SwiGLU.
     """
+    if swiglu_limit is None and group_size == 32 and x.dtype == torch.bfloat16:
+        splitk = fp8_block_splitk_config(weight, weight_scale, x.shape[0])
+        if splitk is not None and x.stride(-1) == 1:
+            return fp8_block_splitk_mm(x, None, weight, weight_scale, output, splitk)
+    cfg = (
+        _native_cfg(_NATIVE_BF16_CFG, weight, weight_scale, x.shape[0])
+        if swiglu_limit is None and group_size == 32
+        else None
+    )
+    if (
+        cfg is not None
+        and x.dtype == torch.bfloat16
+        and x.stride(-1) == 1
+        and output.stride(-1) == 1
+    ):
+        from vllm_musa.jit_kernel.csrc import fp8_block_gemv as native
+
+        xq, xs = native.act_quant(x)
+        return native.dense_gemv(xq, xs, weight, weight_scale, output, cfg)
     return _launch(
         x,
         None,
