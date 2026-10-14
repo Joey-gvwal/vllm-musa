@@ -45,8 +45,9 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0035-MUSA-insert-the-DeepSeek-V4.1-DSpark-context-KV-with.patch` | DSpark inserts the target's context KV into the draft layers' sliding-window cache with the MUSA fused q-norm/RoPE/KV insert; the fused CUDA insert ops are not built on MUSA. |
 | `0036-MUSA-fold-the-DeepSeek-V4-shared-expert-into-the-rou.patch` | A TP-only DeepSeek-V4 MoE with sqrt-softplus routing passes its shared expert to vllm-musa instead of the MoE runner: the shared projections join the routed FP8 expert stack after loading and the router gives every token one extra slot on them at weight 1.0. |
 | `0037-MUSA-run-the-DeepSeek-V4.1-Engram-wkv-projection-row.patch` | Each tensor-parallel rank already looks up a contiguous slice of the Engram hash heads, so on MUSA the Engram `wkv` projection runs row-parallel on that slice and one all-reduce sums the partial key and value rows; no rank gathers every head or runs the full projection. |
+| `0038-MUSA-share-the-DeepSeek-V4.1-decode-plan-across-KV-c.patch` | Every KV-cache group's sparse-SWA metadata builder makes its own FlashMLA plan objects; the DeepSeek-V4.1 decode attention reuses the forward pass's first plan for a layer type and cache layout, so the tile-scheduler planner runs once per layer type instead of once per group. |
 
-Currently **37 patches**.
+Currently **38 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

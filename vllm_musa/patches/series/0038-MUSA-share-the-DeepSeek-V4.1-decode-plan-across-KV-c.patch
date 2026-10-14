@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 14 Oct 2026 18:21:21 +0800
+Subject: [PATCH] MUSA: share the DeepSeek-V4.1 decode plan across KV-cache
+ groups
+
+Every KV-cache group's sparse-SWA metadata builder allocates its own
+FlashMLASchedMeta per layer type, so same-type layers in different groups
+each ran the tile-scheduler planner. On MUSA the decode attention reuses
+the forward pass's first plan for a layer type and cache layout.
+---
+ vllm/models/deepseek_v41/nvidia/flashmla.py | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/vllm/models/deepseek_v41/nvidia/flashmla.py b/vllm/models/deepseek_v41/nvidia/flashmla.py
+index 324a49bc44..2ee068fae8 100644
+--- a/vllm/models/deepseek_v41/nvidia/flashmla.py
++++ b/vllm/models/deepseek_v41/nvidia/flashmla.py
+@@ -27,6 +27,7 @@ from vllm.v1.attention.backends.mla.sparse_swa import DeepseekSparseSWABackend
+ from vllm_musa.v1.attention.ops.flashmla import (
+     flash_mla_sparse_fwd,
+     flash_mla_with_kvcache,
++    shared_decode_plan,
+ )
+ from vllm.v1.worker.workspace import current_workspace_manager
+ 
+@@ -249,6 +250,16 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
+             "DeepseekSparseSWAMetadataBuilder.build_tile_scheduler did not "
+             "allocate one for this layer type."
+         )
++        # MUSA: each KV-cache group builds its own plans; reuse the forward's
++        # first plan for this layer type and cache layout.
++        tile_metadata = shared_decode_plan(
++            (
++                self.compress_ratio,
++                swa_cache.shape[1],
++                kv_cache.shape[1] if kv_cache is not None else None,
++            ),
++            tile_metadata,
++        )
+ 
+         out, _ = flash_mla_with_kvcache(
+             q=q,
+-- 
+2.25.1
+

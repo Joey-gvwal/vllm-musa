@@ -170,6 +170,26 @@ def get_mla_metadata(*args, **kwargs):
     return flash_mla.get_mla_metadata(*args, **kwargs)
 
 
+def shared_decode_plan(key: object, sched_meta: FlashMLASchedMeta) -> FlashMLASchedMeta:
+    """The first decode plan seen for ``key`` in the current forward pass.
+
+    Each KV-cache group builds its own plan objects, so same-type layers in
+    different groups would each run the tile-scheduler planner. ``key`` must
+    hold everything the plan depends on besides the step's lengths (the layer
+    type and the cache block sizes).
+    """
+    from vllm.forward_context import get_forward_context, is_forward_context_available
+
+    if sched_meta is None or not is_forward_context_available():
+        return sched_meta
+    context = get_forward_context()
+    plans = getattr(context, "_musa_decode_plans", None)
+    if plans is None:
+        plans = {}
+        context._musa_decode_plans = plans
+    return plans.setdefault(key, sched_meta)
+
+
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
     return current_platform.is_musa() and tensor.device.type == "musa"
 
