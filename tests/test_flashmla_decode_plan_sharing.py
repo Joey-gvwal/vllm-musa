@@ -103,3 +103,113 @@ def test_v41_decode_keys_the_global_topk_by_index_source_and_cache() -> None:
     assert "(self.index_source_layer_id, self.compressed_cache_prefix)" in hook
     assert "compute_global_topk_indices_and_lens(" in hook
 
+
+class _FakeTensor:
+    def __init__(self, shape, start=0, size=1, contiguous=True):
+        self.shape, self.dtype, self.device = shape, "bf16", "musa:0"
+        self._start, self._size, self._contiguous = start, size, contiguous
+
+    def is_contiguous(self):
+        return self._contiguous
+
+    def data_ptr(self):
+        return self._start
+
+    def numel(self):
+        return self._size
+
+    def element_size(self):
+        return 1
+
+
+def _fake_decode_common(monkeypatch):
+    def allocate(batch, seq_len, heads, dim, *_):
+        return "glse", "partial", _FakeTensor((batch, seq_len, heads, dim), 1000), "lse"
+
+    common = SimpleNamespace(allocate_scheduled_decode_outputs=allocate)
+    monkeypatch.setattr(flashmla, "_mate_decode_common", common)
+    return common, allocate
+
+
+def test_decode_writes_into_the_caller_buffer_once(monkeypatch) -> None:
+    common, allocate = _fake_decode_common(monkeypatch)
+    out = _FakeTensor((5, 1, 64, 512), 0)
+    q = _FakeTensor((5, 1, 64, 512), 5000)
+    with flashmla._decode_writes_into(out, q, None):
+        first = common.allocate_scheduled_decode_outputs(5, 1, 64, 512)
+        second = common.allocate_scheduled_decode_outputs(5, 1, 64, 512)
+    assert first[2] is out and first[3] == "lse"
+    assert second[2] is not out
+    assert common.allocate_scheduled_decode_outputs is allocate
+
+
+def test_decode_keeps_its_own_buffer_when_out_does_not_fit(monkeypatch) -> None:
+    common, allocate = _fake_decode_common(monkeypatch)
+    q = _FakeTensor((5, 1, 64, 512), 5000, size=10)
+    cases = (
+        (_FakeTensor((5, 1, 16, 512), 0), ()),
+        (_FakeTensor((5, 1, 64, 512), 0, contiguous=False), ()),
+        (_FakeTensor((5, 1, 64, 512), 5004, size=10), (q,)),
+    )
+    for out, inputs in cases:
+        with flashmla._decode_writes_into(out, *inputs):
+            got = common.allocate_scheduled_decode_outputs(5, 1, 64, 512)
+        assert got[2] is not out
+    assert common.allocate_scheduled_decode_outputs is allocate
+
+
+def _has_musa_device() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    return hasattr(torch, "musa") and torch.musa.is_available()
+
+
+@pytest.mark.skipif(not _has_musa_device(), reason="requires a MUSA device")
+def test_mate_sparse_decode_writes_into_out_bitwise() -> None:
+    import torch
+
+    flash_mla = pytest.importorskip("flash_mla")
+    sparse_mla = pytest.importorskip("mate.testing.sparse_mla")
+    case = sparse_mla.SparseMlaCase(
+        name="direct-out",
+        variant="v4",
+        q_len=1,
+        kv_len=4096,
+        heads=64,
+        topk=128,
+        batch=5,
+        page_size=64,
+        topk_length=True,
+        attn_sink=True,
+        extra_kv_len=4096,
+        extra_topk=512,
+    )
+    data = sparse_mla.make_decode_data(case, "musa")
+
+    def decode(out):
+        sched, _ = flash_mla.get_mla_metadata()
+        return flashmla.flash_mla_with_kvcache(
+            q=data.q,
+            k_cache=data.k_cache,
+            block_table=None,
+            cache_seqlens=None,
+            head_dim_v=512,
+            tile_scheduler_metadata=sched,
+            softmax_scale=512**-0.5,
+            is_fp8_kvcache=True,
+            indices=data.indices.view(5, 1, -1),
+            attn_sink=data.attn_sink,
+            extra_k_cache=data.extra_k_cache,
+            extra_indices_in_kvcache=data.extra_indices.view(5, 1, -1),
+            topk_length=data.topk_length,
+            extra_topk_length=data.extra_topk_length,
+            out=out,
+        )
+
+    ref, _ = decode(None)
+    out = torch.full_like(ref, float("nan"))
+    got, _ = decode(out)
+    assert got.data_ptr() == out.data_ptr()
+    assert torch.equal(out.view(torch.int16), ref.view(torch.int16))

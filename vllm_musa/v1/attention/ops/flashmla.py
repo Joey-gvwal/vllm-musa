@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import contextlib
+from collections.abc import Iterator
 from importlib.metadata import version
 from typing import Any, Callable, TypeVar
 
@@ -64,6 +66,13 @@ except Exception as exc:
     _mate_sparse_model1_kernel = None
     _mate_optional_prefill_attn_sink = None
     _mate_require_token_lengths = None
+
+try:
+    from mate.sparse_mla.tilelang import (
+        sparse_mla_decode_scheduled_common as _mate_decode_common,
+    )
+except Exception:
+    _mate_decode_common = None
 
 try:
     _MATE_SPARSE_DIRECT_OUT_ABI_SUPPORTED = version("mate").split("+", 1)[0] == "0.2.4"
@@ -481,6 +490,39 @@ def flash_mla_sparse_fwd(
     return result, max_logits, lse
 
 
+@contextlib.contextmanager
+def _decode_writes_into(
+    out: torch.Tensor | None, *inputs: torch.Tensor | None
+) -> Iterator[None]:
+    """MATE's scheduled sparse decode writes its output into ``out`` instead of a
+    buffer of its own when that buffer would have the same shape, dtype and device."""
+    allocate = getattr(_mate_decode_common, "allocate_scheduled_decode_outputs", None)
+    if (
+        out is None
+        or allocate is None
+        or not out.is_contiguous()
+        or _out_overlaps_inputs(out, *inputs)
+    ):
+        yield
+        return
+    pending = [out]
+
+    def allocate_into_out(*args, **kwargs):
+        outputs = allocate(*args, **kwargs)
+        if pending and len(outputs) == 4:
+            glse, out_partial, own, lse = outputs
+            own_layout = (own.shape, own.dtype, own.device)
+            if own_layout == (out.shape, out.dtype, out.device):
+                return glse, out_partial, pending.pop(), lse
+        return outputs
+
+    _mate_decode_common.allocate_scheduled_decode_outputs = allocate_into_out
+    try:
+        yield
+    finally:
+        _mate_decode_common.allocate_scheduled_decode_outputs = allocate
+
+
 def flash_mla_with_kvcache(
     q: torch.Tensor,
     k_cache: torch.Tensor,
@@ -504,25 +546,39 @@ def flash_mla_with_kvcache(
     scheduler_metadata = _coerce_flashmla_sched_meta(
         tile_scheduler_metadata, num_splits
     )
-    result, softmax_lse = flash_mla.flash_mla_with_kvcache(
-        q=q,
-        k_cache=k_cache,
-        block_table=block_table,
-        cache_seqlens=cache_seqlens,
-        head_dim_v=head_dim_v,
-        tile_scheduler_metadata=scheduler_metadata,
-        num_splits=None,
-        softmax_scale=softmax_scale,
-        causal=causal,
-        is_fp8_kvcache=is_fp8_kvcache,
-        indices=indices,
-        attn_sink=attn_sink,
-        extra_k_cache=extra_k_cache,
-        extra_indices_in_kvcache=extra_indices_in_kvcache,
-        topk_length=topk_length,
-        extra_topk_length=extra_topk_length,
-    )
-    if out is not None:
+    with _decode_writes_into(
+        out,
+        q,
+        k_cache,
+        indices,
+        attn_sink,
+        extra_k_cache,
+        extra_indices_in_kvcache,
+        topk_length,
+        extra_topk_length,
+    ):
+        result, softmax_lse = flash_mla.flash_mla_with_kvcache(
+            q=q,
+            k_cache=k_cache,
+            block_table=block_table,
+            cache_seqlens=cache_seqlens,
+            head_dim_v=head_dim_v,
+            tile_scheduler_metadata=scheduler_metadata,
+            num_splits=None,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            is_fp8_kvcache=is_fp8_kvcache,
+            indices=indices,
+            attn_sink=attn_sink,
+            extra_k_cache=extra_k_cache,
+            extra_indices_in_kvcache=extra_indices_in_kvcache,
+            topk_length=topk_length,
+            extra_topk_length=extra_topk_length,
+        )
+    if out is not None and (result.data_ptr(), result.shape) != (
+        out.data_ptr(),
+        out.shape,
+    ):
         out.copy_(result)
         result = out
     return result, softmax_lse
