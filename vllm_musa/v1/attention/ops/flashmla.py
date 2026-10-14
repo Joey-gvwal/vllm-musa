@@ -190,6 +190,32 @@ def shared_decode_plan(key: object, sched_meta: FlashMLASchedMeta) -> FlashMLASc
     return plans.setdefault(key, sched_meta)
 
 
+def shared_global_topk(
+    key: object, compute: Callable[[], tuple[torch.Tensor, torch.Tensor]]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The global top-k indices and lengths computed first for ``key`` in the
+    current forward pass.
+
+    Layers that share an index source and a compressed cache map the same local
+    indices through the same block table. ``key`` must identify both, and the
+    shared index buffer must not be rewritten between the layers of a key.
+    """
+    from vllm.forward_context import get_forward_context, is_forward_context_available
+
+    if not is_forward_context_available():
+        return compute()
+    context = get_forward_context()
+    results = getattr(context, "_musa_global_topk", None)
+    if results is None:
+        results = {}
+        context._musa_global_topk = results
+    result = results.get(key)
+    if result is None:
+        result = compute()
+        results[key] = result
+    return result
+
+
 def _is_musa_tensor(tensor: torch.Tensor) -> bool:
     return current_platform.is_musa() and tensor.device.type == "musa"
 

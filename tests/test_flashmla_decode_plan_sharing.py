@@ -67,3 +67,39 @@ def test_v41_decode_keys_the_plan_by_layer_type_and_cache_layout() -> None:
         "kv_cache.shape[1] if kv_cache is not None else None",
     ):
         assert part in hook
+
+
+def test_global_topk_is_mapped_once_per_key_and_forward(monkeypatch) -> None:
+    pytest.importorskip("vllm")
+    calls = []
+
+    def compute(tag):
+        def run():
+            calls.append(tag)
+            return (tag, tag)
+
+        return run
+
+    _use_context(monkeypatch, SimpleNamespace())
+    assert flashmla.shared_global_topk((2, "layers.2"), compute("a")) == ("a", "a")
+    assert flashmla.shared_global_topk((2, "layers.2"), compute("b")) == ("a", "a")
+    assert flashmla.shared_global_topk((24, "layers.20"), compute("c")) == ("c", "c")
+    assert calls == ["a", "c"]
+
+    _use_context(monkeypatch, SimpleNamespace())
+    assert flashmla.shared_global_topk((2, "layers.2"), compute("d")) == ("d", "d")
+    _use_context(monkeypatch, None)
+    assert flashmla.shared_global_topk((2, "layers.2"), compute("e")) == ("e", "e")
+    assert calls == ["a", "c", "d", "e"]
+
+
+def test_v41_decode_keys_the_global_topk_by_index_source_and_cache() -> None:
+    (patch,) = SERIES.glob("0040-*.patch")
+    text = patch.read_text(encoding="utf-8")
+    assert "+    shared_global_topk," in text
+    start = "+            global_indices, topk_lens = shared_global_topk("
+    hook = text[text.index(start) :]
+    hook = hook[: hook.index("topk_indices = global_indices.view")]
+    assert "(self.index_source_layer_id, self.compressed_cache_prefix)" in hook
+    assert "compute_global_topk_indices_and_lens(" in hook
+
