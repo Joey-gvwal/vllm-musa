@@ -323,6 +323,32 @@ def mhc_pre_delayed_musa(
                 logger.warning_once(
                     "Fused broadcast mHC decode pre unavailable: %s", exc
                 )
+    if x is None and pre_mix is None and residual.dim() == 3:
+        # Without a carried pre-mix the layer input is copy 0 of the stream: the
+        # identity pre-mix of the fused decode pre.
+        identity = _identity_pre_mix(residual)
+        if identity is not None and _mhc_pre_delayed_decode_norm_fuse_supported(
+            residual, identity, norm_weight
+        ):
+            try:
+                return _mhc_pre_delayed_decode_norm_fuse(
+                    residual,
+                    fn,
+                    hc_scale,
+                    hc_base,
+                    rms_eps,
+                    hc_pre_eps,
+                    hc_sinkhorn_eps,
+                    hc_post_mult_value,
+                    sinkhorn_repeat,
+                    identity,
+                    norm_weight,
+                    norm_eps,
+                )
+            except (ImportError, OSError, NotImplementedError, RuntimeError) as exc:
+                logger.warning_once(
+                    "Fused first-layer mHC decode pre unavailable: %s", exc
+                )
     if x is None and _mhc_pre_delayed_decode_norm_fuse_supported(
         residual, pre_mix, norm_weight
     ):
@@ -437,6 +463,15 @@ def _mhc_pre_delayed_broadcast_inputs(
     else:
         full_fn = (fn / hc_mult).repeat(1, hc_mult).contiguous()
         fn._musa_hc_full_fn = (fn._version, full_fn)
+    identity = _identity_pre_mix(residual)
+    if identity is None:
+        return None
+    return full_fn, identity
+
+
+def _identity_pre_mix(residual: torch.Tensor) -> torch.Tensor | None:
+    """Pre-mix that selects copy 0, built outside graph capture and reused."""
+    num_tokens, hc_mult = residual.shape[0], residual.shape[1]
     key = (residual.device, hc_mult)
     identity = _IDENTITY_PRE_MIX.get(key)
     if identity is None or identity.shape[0] < num_tokens:
@@ -449,7 +484,7 @@ def _mhc_pre_delayed_broadcast_inputs(
         )
         identity[:, 0] = 1.0
         _IDENTITY_PRE_MIX[key] = identity
-    return full_fn, identity[:num_tokens]
+    return identity[:num_tokens]
 
 
 def _mhc_pre_delayed_decode_norm_fuse_supported(

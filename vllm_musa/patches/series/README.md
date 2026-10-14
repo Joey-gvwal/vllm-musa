@@ -44,8 +44,9 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0034-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch` | MUSA indexer top-k up to 512 uses the staged radix select for decode rows and eager prefill windows that start at zero; it returns the same index set and order as the generic kernel, which the other windows keep. |
 | `0035-MUSA-insert-the-DeepSeek-V4.1-DSpark-context-KV-with.patch` | DSpark inserts the target's context KV into the draft layers' sliding-window cache with the MUSA fused q-norm/RoPE/KV insert; the fused CUDA insert ops are not built on MUSA. |
 | `0036-MUSA-fold-the-DeepSeek-V4-shared-expert-into-the-rou.patch` | A TP-only DeepSeek-V4 MoE with sqrt-softplus routing passes its shared expert to vllm-musa instead of the MoE runner: the shared projections join the routed FP8 expert stack after loading and the router gives every token one extra slot on them at weight 1.0. |
+| `0037-MUSA-run-the-DeepSeek-V4.1-Engram-wkv-projection-row.patch` | Each tensor-parallel rank already looks up a contiguous slice of the Engram hash heads, so on MUSA the Engram `wkv` projection runs row-parallel on that slice and one all-reduce sums the partial key and value rows; no rank gathers every head or runs the full projection. |
 
-Currently **36 patches**.
+Currently **37 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM

@@ -70,7 +70,7 @@ def test_linear_kernel_takes_only_fine_k_blocks_and_small_m() -> None:
     source = LINEAR.read_text(encoding="utf-8")
     assert "weight_group.col not in (16, 32, 64)" in source
     assert "act_group.col != weight_group.col" in source
-    assert "A.shape[0] <= _gemv_max_m(B)" in source
+    assert "_small_m_path(B, Bs, A.shape[0])" in source
     assert "fp8_block_scaled_mm(A, As, B, Bs, self.config.out_dtype)" in source
     assert "_upcast_e8m0_to_fp32" in source
     assert "return super().apply_block_scaled_mm(A, B, As, Bs)" in source
@@ -139,7 +139,8 @@ def test_down_gemvs_apply_the_clamped_swiglu_in_kernel() -> None:
     assert "(gate / (1.0 + tl.exp(-gate))).to(tl.bfloat16).to(tl.float32)" in dot
     assert "(silu * up).to(tl.bfloat16).to(tl.float32)" in dot
     fused = _function(LINEAR, "apply_swiglu_clamp_weights")
-    assert "0 < rows <= _gemv_max_m(params.weight)" in fused
+    assert "if rows > _gemv_max_m(params.weight):" in fused
+    assert "self._swiglu_clamp_block_mm(" in fused
     assert "gate_up.shape[-1] == 2 * params.weight.shape[1]" in fused
     assert "swiglu_limit=swiglu_limit" in fused
     hook = _function(LINEAR_LAYER, "forward_swiglu_clamp")

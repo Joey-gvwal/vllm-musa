@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 14 Oct 2026 07:00:00 +0800
+Subject: [PATCH] MUSA: run the DeepSeek-V4.1 Engram wkv projection
+ row-parallel
+
+Each tensor-parallel rank looks up a contiguous slice of the Engram hash
+heads. On MUSA the wkv projection runs row-parallel on that slice of its
+input and one all-reduce sums the partial key and value rows, so no rank
+gathers every head or runs the full projection.
+---
+ vllm/models/deepseek_v41/common/engram.py | 40 ++++++++++++++++++-----
+ 1 file changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/vllm/models/deepseek_v41/common/engram.py b/vllm/models/deepseek_v41/common/engram.py
+index 119d51c..3291b85 100644
+--- a/vllm/models/deepseek_v41/common/engram.py
++++ b/vllm/models/deepseek_v41/common/engram.py
+@@ -47,9 +47,10 @@ from vllm.distributed import (
+     tensor_model_parallel_all_gather,
+ )
+ from vllm.logger import init_logger
+-from vllm.model_executor.layers.linear import ReplicatedLinear
++from vllm.model_executor.layers.linear import ReplicatedLinear, RowParallelLinear
+ from vllm.model_executor.layers.quantization import QuantizationConfig
+ from vllm.model_executor.utils import set_weight_attrs
++from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+ 
+ logger = init_logger(__name__)
+@@ -929,14 +930,35 @@ class Engram(nn.Module):
+         # suffix rule.
+         self.embed_tokens = self._create_embedding(layout, layer_hash_index)
+         n_hash_cols = (layout.max_ngram_size - 1) * layout.n_heads
+-        self.wkv = ReplicatedLinear(
+-            n_hash_cols * layout.head_dim,
+-            self.dim * (self.hc_mult + 1),
+-            bias=False,
+-            quant_config=quant_config,
+-            return_bias=False,
+-            prefix=f"{prefix}.wkv",
++        # MUSA: every rank holds a contiguous slice of the hash heads, so wkv runs
++        # row-parallel on that K slice and one all-reduce sums the partial rows.
++        tp_size = get_tensor_model_parallel_world_size()
++        self.wkv_row_parallel = (
++            current_platform.is_musa()
++            and tp_size > 1
++            and not use_sequence_parallel
++            and getattr(self.embed_tokens, "dp_size", 1) == 1
++            and self.embed_tokens.part_n_hash_cols * tp_size == n_hash_cols
+         )
++        if self.wkv_row_parallel:
++            self.wkv = RowParallelLinear(
++                n_hash_cols * layout.head_dim,
++                self.dim * (self.hc_mult + 1),
++                bias=False,
++                input_is_parallel=True,
++                quant_config=quant_config,
++                return_bias=False,
++                prefix=f"{prefix}.wkv",
++            )
++        else:
++            self.wkv = ReplicatedLinear(
++                n_hash_cols * layout.head_dim,
++                self.dim * (self.hc_mult + 1),
++                bias=False,
++                quant_config=quant_config,
++                return_bias=False,
++                prefix=f"{prefix}.wkv",
++            )
+         self.q_weight = nn.Parameter(
+             torch.empty(self.hc_mult, self.dim, dtype=torch.bfloat16),
+             requires_grad=False,
+@@ -981,6 +1003,8 @@ class Engram(nn.Module):
+         rows = self._ready_rows(hash_ids.shape[0])
+         if self.embed_tokens.tp_size == 1:
+             return rows[:, : self.embed_tokens.n_hash_cols]
++        if self.wkv_row_parallel:
++            return rows
+         if self.use_sequence_parallel:
+             tp_size = self.embed_tokens.tp_size
+             num_tokens, local_heads, dim = rows.shape
+-- 
+2.25.1
+
