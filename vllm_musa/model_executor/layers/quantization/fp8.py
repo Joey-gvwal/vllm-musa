@@ -115,14 +115,6 @@ def create_weights(
     )
 
 
-def _release_cached_blocks() -> None:
-    empty_cache = getattr(current_platform, "empty_cache", None)
-    if callable(empty_cache):
-        empty_cache()
-    elif hasattr(torch, "musa"):
-        torch.musa.empty_cache()
-
-
 def _fold_shared_expert_weights(self, layer: RoutedExperts) -> None:
     """Append the model's shared expert to the routed FP8 expert stack.
 
@@ -130,8 +122,9 @@ def _fold_shared_expert_weights(self, layer: RoutedExperts) -> None:
     when the two carry the same weight format. The shared gate_up/down
     projections and their block scales are concatenated as one extra expert, so
     a single grouped GEMM covers routed + shared work instead of running the
-    shared expert as separate dense GEMMs on every MoE layer. Runs once after
-    load, before any graph capture.
+    shared expert as separate dense GEMMs on every MoE layer. The shared
+    projections are freed afterwards. Runs once after load, before any graph
+    capture.
     """
     mlp = getattr(layer, "_musa_shared_mlp", None)
     if mlp is None or getattr(layer, "_musa_shared_folded", False):
@@ -179,10 +172,11 @@ def _fold_shared_expert_weights(self, layer: RoutedExperts) -> None:
         layer.w2_input_scale,
     )
     del folded
-    # Each expert stack is concatenated while the unfolded one is still alive, so the
-    # freed blocks leave expert-sized holes in the caching allocator. Left there, they
-    # are reserved-but-unusable and the KV cache later fails to find contiguous space.
-    _release_cached_blocks()
+    from vllm_musa.model_executor.layers.fused_moe.shared_expert_fold import (
+        release_shared_expert_weights,
+    )
+
+    release_shared_expert_weights(mlp, scale_name)
     layer._musa_shared_expert_id = num_routed
     layer._musa_shared_folded = True
     logger.info_once(

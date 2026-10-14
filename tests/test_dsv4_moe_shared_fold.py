@@ -169,6 +169,86 @@ def test_shared_fold_eligibility(monkeypatch) -> None:
     assert not fold.deepseek_v4_shared_expert_foldable(_config(), _moe(), hf, quant)
 
 
+def _param(torch, *shape: int, generator=None):
+    return torch.nn.Parameter(
+        torch.rand(*shape, generator=generator), requires_grad=False
+    )
+
+
+def _shared_mlp(torch, inter: int, hidden: int, scale_name: str | None):
+    gen = torch.Generator().manual_seed(7)
+
+    def proj(rows: int, cols: int) -> SimpleNamespace:
+        out = SimpleNamespace(weight=_param(torch, rows, cols, generator=gen))
+        if scale_name is not None:
+            setattr(
+                out, scale_name, _param(torch, rows // 32, cols // 32, generator=gen)
+            )
+        return out
+
+    return SimpleNamespace(
+        gate_up_proj=proj(2 * inter, hidden), down_proj=proj(hidden, inter)
+    )
+
+
+def test_fp8_fold_frees_the_shared_projections() -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("vllm")
+    from vllm_musa.model_executor.layers.quantization import fp8 as musa_fp8
+
+    experts, inter, hidden, name = 4, 64, 128, "weight_scale_inv"
+    mlp = _shared_mlp(torch, inter, hidden, name)
+    shared = [mlp.gate_up_proj.weight.clone(), mlp.down_proj.weight.clone()]
+    layer = SimpleNamespace(
+        w13_weight=_param(torch, experts, 2 * inter, hidden),
+        w2_weight=_param(torch, experts, hidden, inter),
+        w13_weight_scale_inv=_param(torch, experts, 2 * inter // 32, hidden // 32),
+        w2_weight_scale_inv=_param(torch, experts, hidden // 32, inter // 32),
+        w13_input_scale=None,
+        w2_input_scale=None,
+        _musa_shared_mlp=mlp,
+    )
+    bound = {}
+
+    def setup_kernel(layer, w13, w2, w13_scale, w2_scale, *input_scales) -> None:
+        bound.update(w13=w13, w2=w2, w13_scale=w13_scale)
+
+    method = SimpleNamespace(weight_scale_name=name, _setup_kernel=setup_kernel)
+    musa_fp8._fold_shared_expert_weights(method, layer)
+
+    assert bound["w13"].shape[0] == bound["w13_scale"].shape[0] == experts + 1
+    torch.testing.assert_close(bound["w13"][experts], shared[0])
+    torch.testing.assert_close(bound["w2"][experts], shared[1])
+    for proj in (mlp.gate_up_proj, mlp.down_proj):
+        assert proj.weight.numel() == 0 and getattr(proj, name).numel() == 0
+    assert layer._musa_shared_folded and layer._musa_shared_expert_id == experts
+
+
+def test_bf16_fold_frees_the_shared_projections() -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("vllm")
+    from vllm_musa.model_executor.layers.fused_moe import (
+        unquantized_fused_moe_method as unquantized,
+    )
+
+    experts, inter, hidden = 4, 64, 128
+    mlp = _shared_mlp(torch, inter, hidden, None)
+    shared = [mlp.gate_up_proj.weight.clone(), mlp.down_proj.weight.clone()]
+    layer = SimpleNamespace(
+        w13_weight=_param(torch, experts, 2 * inter, hidden),
+        w2_weight=_param(torch, experts, hidden, inter),
+        _musa_shared_mlp=mlp,
+    )
+    unquantized._fold_shared_expert_weights(layer)
+
+    assert layer.w13_weight.shape[0] == layer.w2_weight.shape[0] == experts + 1
+    torch.testing.assert_close(layer.w13_weight[experts], shared[0])
+    torch.testing.assert_close(layer.w2_weight[experts], shared[1])
+    for proj in (mlp.gate_up_proj, mlp.down_proj):
+        assert proj.weight.numel() == 0
+    assert layer._musa_shared_folded and layer._musa_shared_expert_id == experts
+
+
 try:
     import torch
 except ImportError:  # source checks above still run

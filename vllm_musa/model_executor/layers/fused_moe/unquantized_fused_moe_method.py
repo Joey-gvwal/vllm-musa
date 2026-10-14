@@ -137,8 +137,8 @@ def _fold_shared_expert_weights(layer: torch.nn.Module) -> None:
     when the shared and routed intermediate sizes match. Here the shared
     gate_up/down projections are concatenated as one extra expert so a single
     grouped GEMM covers routed + shared work. Runs once after load, before any
-    graph capture, and replaces the routed weights in place so no full copy of
-    the expert stack is kept alive.
+    graph capture, and replaces the routed weights in place and frees the shared
+    projections, so neither the unfolded stack nor a second shared copy stays alive.
     """
     # _musa_shared_mlp is stashed by the block on the same FusedMoE instance whose
     # quant method runs this hook and forward_oot, so the fold that consumes it
@@ -156,6 +156,11 @@ def _fold_shared_expert_weights(layer: torch.nn.Module) -> None:
     ).contiguous()
     layer.w13_weight = torch.nn.Parameter(w13, requires_grad=False)
     layer.w2_weight = torch.nn.Parameter(w2, requires_grad=False)
+    from vllm_musa.model_executor.layers.fused_moe.shared_expert_fold import (
+        release_shared_expert_weights,
+    )
+
+    release_shared_expert_weights(mlp)
     layer._musa_shared_expert_id = int(num_routed)
     layer._musa_shared_folded = True
     router = getattr(layer, "_musa_shared_router", None)

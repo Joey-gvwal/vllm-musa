@@ -101,3 +101,26 @@ def fold_shared_expert(experts: nn.Module, shared_experts: nn.Module) -> None:
     routed = getattr(experts, "routed_experts", experts)
     routed._musa_shared_mlp = shared_experts
     experts.router.num_fused_shared_experts = 1
+
+
+def release_shared_expert_weights(mlp: nn.Module, *scale_names: str) -> None:
+    """Free a folded shared expert's projections, whose copy now lives in the routed
+    expert stack, and return the cached blocks to the device.
+
+    The stack is concatenated while the unfolded one is still alive, so the freed
+    blocks leave expert-sized holes in the caching allocator. Left there, they are
+    reserved-but-unusable and the KV cache later fails to find contiguous space.
+    """
+    for proj in (mlp.gate_up_proj, mlp.down_proj):
+        for name in ("weight", *scale_names):
+            tensor = getattr(proj, name, None)
+            if isinstance(tensor, torch.Tensor):
+                tensor.data = tensor.data.new_empty(0)
+
+    from vllm.platforms import current_platform
+
+    empty_cache = getattr(current_platform, "empty_cache", None)
+    if callable(empty_cache):
+        empty_cache()
+    elif hasattr(torch, "musa"):
+        torch.musa.empty_cache()
