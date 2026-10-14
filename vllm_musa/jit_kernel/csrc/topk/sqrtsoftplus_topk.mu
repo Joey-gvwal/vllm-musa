@@ -6,7 +6,8 @@
 // cleared to -10000. One warp handles one token; lane l holds experts l, l + 32, ...
 // Image tokens (five consecutive sentinel ids from image_lo) select with bias_vl
 // instead of the correction bias. An optional constant slot (a shared expert folded
-// into the routed expert stack) follows the routed top-k.
+// into the routed expert stack) follows the routed top-k. The logits are FP32 or the
+// BF16 gate output, which is widened exactly.
 #include <cstdint>
 
 #include <musa_bf16.h>
@@ -77,6 +78,12 @@ __device__ __forceinline__ void quant16(const uint16_t* __restrict__ x, uint8_t*
   }
 }
 
+__device__ __forceinline__ float load_logit(const float* p) { return *p; }
+
+__device__ __forceinline__ float load_logit(const uint16_t* p) {
+  return __uint_as_float(static_cast<uint32_t>(*p) << 16);
+}
+
 struct RowBias {
   const float* bias;
   const float* bias_vl;
@@ -86,8 +93,8 @@ struct RowBias {
 };
 
 // Routes one token held by one warp: the scaled weights and ids of its top-k.
-template <int VPT, int TOPK>
-__device__ __forceinline__ void route_row(const float* __restrict__ x, const RowBias& rb,
+template <int VPT, int TOPK, typename LT>
+__device__ __forceinline__ void route_row(const LT* __restrict__ x, const RowBias& rb,
                                           int row, int experts, int lane, float scaling,
                                           bool renormalize, float (&wk)[TOPK],
                                           int (&ek)[TOPK]) {
@@ -106,7 +113,7 @@ __device__ __forceinline__ void route_row(const float* __restrict__ x, const Row
 #pragma unroll
   for (int j = 0; j < VPT; ++j) {
     const int e = min(lane + j * kWarpSize, experts - 1);
-    xv[j] = x[e];
+    xv[j] = load_logit(x + e);
     bv[j] = rb.bias[e];
     bvl[j] = image_bias ? rb.bias_vl[e] : 0.0f;
   }
@@ -174,9 +181,9 @@ __device__ __forceinline__ void route_row(const float* __restrict__ x, const Row
   }
 }
 
-template <int VPT, int TOPK>
+template <int VPT, int TOPK, typename LT>
 __global__ void __launch_bounds__(kWarps * kWarpSize)
-    sqrtsoftplus_topk_kernel(const float* __restrict__ logits, int64_t logits_stride,
+    sqrtsoftplus_topk_kernel(const LT* __restrict__ logits, int64_t logits_stride,
                              const RowBias bias, const bool* __restrict__ is_padding,
                              float* __restrict__ out_w, int32_t* __restrict__ out_ids,
                              int64_t out_stride, int rows, int experts, float scaling,
@@ -194,8 +201,8 @@ __global__ void __launch_bounds__(kWarps * kWarpSize)
   const bool pad = is_padding != nullptr && is_padding[row];
   float wk[TOPK];
   int ek[TOPK];
-  route_row<VPT, TOPK>(logits + row * logits_stride, bias, row, experts, lane, scaling,
-                       renormalize, wk, ek);
+  route_row<VPT, TOPK, LT>(logits + row * logits_stride, bias, row, experts, lane, scaling,
+                           renormalize, wk, ek);
   if (pad) {
     if (lane < cols) {
       w_out[lane] = 0.0f;
@@ -226,9 +233,9 @@ constexpr int kMapSlots = 64;
 constexpr int kMapRows = 16;
 constexpr int kMapWidth = 2 + kMapRows;
 
-template <int VPT, int TOPK>
+template <int VPT, int TOPK, typename LT>
 __global__ void __launch_bounds__(kMapTokens * kWarpSize)
-    sqrtsoftplus_route_map_kernel(const float* __restrict__ logits, int64_t logits_stride,
+    sqrtsoftplus_route_map_kernel(const LT* __restrict__ logits, int64_t logits_stride,
                                   const RowBias bias, const bool* __restrict__ is_padding,
                                   float* __restrict__ out_w,
                                   int32_t* __restrict__ out_ids, int64_t out_stride,
@@ -264,8 +271,8 @@ __global__ void __launch_bounds__(kMapTokens * kWarpSize)
     const bool pad = is_padding != nullptr && is_padding[warp];
     float wk[TOPK];
     int ek[TOPK];
-    route_row<VPT, TOPK>(logits + warp * logits_stride, bias, warp, experts, lane, scaling,
-                         renormalize, wk, ek);
+    route_row<VPT, TOPK, LT>(logits + warp * logits_stride, bias, warp, experts, lane,
+                             scaling, renormalize, wk, ek);
     if (pad) {
       if (lane < cols) {
         w_out[lane] = 0.0f;
@@ -337,8 +344,8 @@ __global__ void __launch_bounds__(kMapTokens * kWarpSize)
   }
 }
 
-template <int VPT>
-void launch_topk(int top_k, dim3 grid, musaStream_t stream, const float* logits,
+template <int VPT, typename LT>
+void launch_topk(int top_k, dim3 grid, musaStream_t stream, const LT* logits,
                  int64_t logits_stride, const RowBias& bias, const bool* is_padding, float* out_w,
                  int32_t* out_ids, int64_t out_stride, int32_t* route_map, const uint16_t* x,
                  int64_t x_stride, uint8_t* xq, float* xs, int hidden, int rows, int experts,
@@ -350,12 +357,13 @@ void launch_topk(int top_k, dim3 grid, musaStream_t stream, const float* logits,
 #define TOPK_CASE(K)                                                                           \
   case K:                                                                                      \
     if (route_map != nullptr) {                                                                \
-      sqrtsoftplus_route_map_kernel<VPT, K><<<map_grid, kMapTokens * kWarpSize, 0, stream>>>(  \
-          logits, logits_stride, bias, is_padding, out_w, out_ids, out_stride, route_map, x,    \
+      sqrtsoftplus_route_map_kernel<VPT, K, LT>                                                \
+          <<<map_grid, kMapTokens * kWarpSize, 0, stream>>>(                                   \
+          logits, logits_stride, bias, is_padding, out_w, out_ids, out_stride, route_map, x,   \
           x_stride, xq, xs, hidden, rows, experts, scaling, renormalize, shared_id,            \
           shared_weight);                                                                      \
     } else {                                                                                   \
-      sqrtsoftplus_topk_kernel<VPT, K><<<grid, kWarps * kWarpSize, 0, stream>>>(               \
+      sqrtsoftplus_topk_kernel<VPT, K, LT><<<grid, kWarps * kWarpSize, 0, stream>>>(           \
           logits, logits_stride, bias, is_padding, out_w, out_ids, out_stride, rows, experts,  \
           scaling, renormalize, shared_id, shared_weight);                                     \
     }                                                                                          \
@@ -375,6 +383,30 @@ void launch_topk(int top_k, dim3 grid, musaStream_t stream, const float* logits,
 #undef TOPK_CASE
 }
 
+template <typename LT>
+void launch_for_experts(const void* logits, int64_t logits_stride, int top_k, dim3 grid,
+                        musaStream_t stream, const RowBias& rb, const bool* pp, float* wp,
+                        int32_t* ip, int64_t out_stride, int32_t* mp, const uint16_t* xp,
+                        int64_t x_stride, uint8_t* qp, float* sp, int hidden, int rows,
+                        int experts, float sc, bool renormalize, int sid, float sw) {
+  const auto* lp = static_cast<const LT*>(logits);
+  if (experts <= 128) {
+    launch_topk<4>(top_k, grid, stream, lp, logits_stride, rb, pp, wp, ip, out_stride, mp, xp,
+                   x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
+  } else if (experts <= 256) {
+    launch_topk<8>(top_k, grid, stream, lp, logits_stride, rb, pp, wp, ip, out_stride, mp, xp,
+                   x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
+  } else if (experts <= 384) {
+    launch_topk<12>(top_k, grid, stream, lp, logits_stride, rb, pp, wp, ip, out_stride, mp, xp,
+                    x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
+  } else if (experts <= 512) {
+    launch_topk<16>(top_k, grid, stream, lp, logits_stride, rb, pp, wp, ip, out_stride, mp, xp,
+                    x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
+  } else {
+    TVM_FFI_THROW(ValueError) << "at most 512 experts, got " << experts;
+  }
+}
+
 }  // namespace
 
 void sqrtsoftplus_topk(ffi::TensorView logits, ffi::TensorView bias, ffi::TensorView bias_vl,
@@ -389,6 +421,10 @@ void sqrtsoftplus_topk(ffi::TensorView logits, ffi::TensorView bias, ffi::Tensor
   const int experts = static_cast<int>(logits.size(1));
   const int cols = static_cast<int>(out_w.size(1));
   const int top_k = cols - (shared_id >= 0 ? 1 : 0);
+  const DLDataType ldt = logits.dtype();
+  const bool bf16_logits = ldt.code == kDLBfloat && ldt.bits == 16;
+  TVM_FFI_ICHECK(bf16_logits || (ldt.code == kDLFloat && ldt.bits == 32))
+      << "logits must be float32 or bfloat16";
   TVM_FFI_ICHECK_EQ(logits.stride(1), 1);
   TVM_FFI_ICHECK_EQ(out_w.stride(0), out_ids.stride(0));
   TVM_FFI_ICHECK_EQ(out_w.stride(1), 1);
@@ -427,7 +463,6 @@ void sqrtsoftplus_topk(ffi::TensorView logits, ffi::TensorView bias, ffi::Tensor
   const dim3 grid((rows + kWarps - 1) / kWarps);
   const musaStream_t stream = static_cast<musaStream_t>(
       TVMFFIEnvGetStream(logits.device().device_type, logits.device().device_id));
-  const auto* lp = static_cast<const float*>(logits.data_ptr());
   const RowBias rb{static_cast<const float*>(bias.data_ptr()),
                    image_bias ? static_cast<const float*>(bias_vl.data_ptr()) : nullptr,
                    image_bias ? input_ids.data_ptr() : nullptr,
@@ -443,20 +478,14 @@ void sqrtsoftplus_topk(ffi::TensorView logits, ffi::TensorView bias, ffi::Tensor
   const int sid = static_cast<int>(shared_id);
   const float sw = static_cast<float>(shared_weight);
   const float sc = static_cast<float>(scaling);
-  if (experts <= 128) {
-    launch_topk<4>(top_k, grid, stream, lp, logits.stride(0), rb, pp, wp, ip, out_w.stride(0), mp,
-                   xp, x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
-  } else if (experts <= 256) {
-    launch_topk<8>(top_k, grid, stream, lp, logits.stride(0), rb, pp, wp, ip, out_w.stride(0), mp,
-                   xp, x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
-  } else if (experts <= 384) {
-    launch_topk<12>(top_k, grid, stream, lp, logits.stride(0), rb, pp, wp, ip, out_w.stride(0), mp,
-                    xp, x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
-  } else if (experts <= 512) {
-    launch_topk<16>(top_k, grid, stream, lp, logits.stride(0), rb, pp, wp, ip, out_w.stride(0), mp,
-                    xp, x_stride, qp, sp, hidden, rows, experts, sc, renormalize, sid, sw);
+  if (bf16_logits) {
+    launch_for_experts<uint16_t>(logits.data_ptr(), logits.stride(0), top_k, grid, stream, rb, pp,
+                                 wp, ip, out_w.stride(0), mp, xp, x_stride, qp, sp, hidden, rows,
+                                 experts, sc, renormalize, sid, sw);
   } else {
-    TVM_FFI_THROW(ValueError) << "at most 512 experts, got " << experts;
+    launch_for_experts<float>(logits.data_ptr(), logits.stride(0), top_k, grid, stream, rb, pp, wp,
+                              ip, out_w.stride(0), mp, xp, x_stride, qp, sp, hidden, rows, experts,
+                              sc, renormalize, sid, sw);
   }
   const musaError_t err = musaGetLastError();
   TVM_FFI_ICHECK_EQ(err, musaSuccess) << "sqrtsoftplus_topk failed: " << musaGetErrorString(err);

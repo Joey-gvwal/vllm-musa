@@ -59,16 +59,38 @@ def test_router_override_keeps_hash_routing_upstream() -> None:
         "router._hash_indices_table is None",
         "router.num_fused_shared_experts <= 1",
         "indices_type in (None, torch.int32)",
-        "router_logits.dtype == torch.float32",
+        "router_logits.dtype in (torch.float32, torch.bfloat16)",
         "input_ids is not None",
     ):
         assert cond in gate
     body = _function(ROUTER, "_compute_routing")
     assert "_ORIGINAL_COMPUTE_ROUTING" in body
+    # The upstream fallback keeps routing on FP32 logits.
+    assert "router_logits.float()" in body
     assert "self.global_num_experts if self.num_fused_shared_experts else -1" in body
     assert "_get_padding_mask" in body
     assert "image_sentinel_lo=self.image_sentinel_lo" in body
     assert "topk_ids.musa_route_map = route_map" in body
+
+
+def test_biased_dsv4_gates_keep_bf16_logits_on_musa() -> None:
+    (patch,) = (ROOT / "vllm_musa" / "patches" / "series").glob(
+        "0039-MUSA-let-the-DeepSeek-V4-router-read-the-BF16-gate-o.patch"
+    )
+    text = patch.read_text(encoding="utf-8")
+    assert "+++ b/vllm/models/deepseek_v4/nvidia/model.py" in text
+    hook = text[text.index("+        if (\n") :]
+    hook = hook[: hook.index("+            self.gate.out_dtype = None\n")]
+    for cond in (
+        "current_platform.is_musa()",
+        "not self.use_mega_moe",
+        "self.gate.tid2eid is None",
+        "self.gate.e_score_correction_bias is not None",
+    ):
+        assert cond in hook
+    kernel = TOPK_KERNEL.read_text(encoding="utf-8")
+    assert "__uint_as_float(static_cast<uint32_t>(*p) << 16)" in kernel
+    assert "ldt.code == kDLBfloat && ldt.bits == 16" in kernel
 
 
 def test_image_tokens_select_with_bias_vl_like_the_reference() -> None:
@@ -324,6 +346,57 @@ def test_routing_matches_topk_softplus_sqrt_bitwise(experts, top_k, rows) -> Non
         xq, xs = native.act_quant(x)
         assert torch.equal(x_quant[0].view(torch.uint8), xq.view(torch.uint8))
         assert torch.equal(x_quant[1], xs)
+
+
+@requires_mp31
+@pytest.mark.parametrize("experts,top_k", [(384, 6), (128, 3)])
+@pytest.mark.parametrize("rows", [1, 5, 16, 37])
+def test_bf16_logits_route_like_their_fp32_widening(experts, top_k, rows) -> None:
+    from vllm_musa.jit_kernel.csrc.sqrtsoftplus_topk import sqrtsoftplus_topk
+
+    torch.manual_seed(rows * 7 + experts)
+    logits = (torch.randn(rows, experts, device="musa") * 3.0).to(torch.bfloat16)
+    logits[:, ::5] = logits[:, 1::5][:, : logits[:, ::5].shape[1]]
+    bias = torch.randn(experts, device="musa") * 0.3
+    bias_vl = torch.randn(experts, device="musa") * 0.5
+    lo = 129270
+    input_ids = torch.randint(0, 129280, (rows,), device="musa")
+    input_ids[::2] = lo + torch.arange(0, rows, 2, device="musa") % 5
+    x = torch.randn(rows, 5120, device="musa").to(torch.bfloat16)
+    is_padding = torch.zeros(rows, dtype=torch.bool, device="musa")
+    is_padding[rows - 1] = rows > 1
+    kwargs = dict(
+        is_padding=is_padding,
+        shared_id=experts,
+        bias_vl=bias_vl,
+        input_ids=input_ids,
+        image_sentinel_lo=lo,
+    )
+    for with_route_map in (False, True):
+        got = sqrtsoftplus_topk(
+            logits, bias, top_k, True, 1.5, with_route_map=with_route_map, x=x, **kwargs
+        )
+        ref = sqrtsoftplus_topk(
+            logits.float(),
+            bias,
+            top_k,
+            True,
+            1.5,
+            with_route_map=with_route_map,
+            x=x,
+            **kwargs,
+        )
+        assert torch.equal(got[1], ref[1])
+        assert torch.equal(got[0].view(torch.int32), ref[0].view(torch.int32))
+        assert (got[2] is None) == (ref[2] is None)
+        if got[2] is not None:
+            distinct = int(ref[2][64 * 18])
+            assert int(got[2][64 * 18]) == distinct
+            for u in range(distinct):
+                want = ref[2][u * 18 : u * 18 + 2 + int(ref[2][u * 18 + 1])]
+                assert torch.equal(got[2][u * 18 : u * 18 + want.numel()], want)
+            assert torch.equal(got[3][0].view(torch.uint8), ref[3][0].view(torch.uint8))
+            assert torch.equal(got[3][1], ref[3][1])
 
 
 @requires_mp31

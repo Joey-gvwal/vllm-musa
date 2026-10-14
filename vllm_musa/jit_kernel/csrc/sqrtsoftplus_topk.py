@@ -104,8 +104,9 @@ def sqrtsoftplus_topk(
     tuple[torch.Tensor, torch.Tensor] | None,
 ]:
     """``(weights, ids, route_map, x_quant)`` of ``topk_hash_softplus_sqrt`` without a
-    hash table; with ``shared_id >= 0`` one more column routes every token to
-    ``shared_id`` at ``shared_weight``. Padding rows get id -1 in every column.
+    hash table, for FP32 or BF16 ``logits``; with ``shared_id >= 0`` one more column
+    routes every token to ``shared_id`` at ``shared_weight``. Padding rows get id -1
+    in every column.
     With ``bias_vl`` and ``image_sentinel_lo > 0``, tokens whose ``input_ids`` fall
     in the five sentinel ids from ``image_sentinel_lo`` select with ``bias_vl``.
 

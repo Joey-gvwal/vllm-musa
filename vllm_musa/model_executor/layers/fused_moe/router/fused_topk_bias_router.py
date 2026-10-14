@@ -6,7 +6,8 @@ bit and also writes the constant column of a shared expert folded into the route
 expert stack, which upstream appends with separate fill and concat kernels. For
 small batches it also writes the expert route map and the FP8-quantized input of
 the FP8 MoE (``kernels/fp8_moe_mma.py``), which ride on the returned ids tensor.
-Hash routing and other scoring functions keep the upstream path.
+The kernel reads FP32 logits or the BF16 gate output. Hash routing and other scoring
+functions keep the upstream path, on FP32 logits.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ def _musa_routing_supported(
         and bias.dim() == 1
         and bias.is_contiguous()
         and router_logits.dim() == 2
-        and router_logits.dtype == torch.float32
+        and router_logits.dtype in (torch.float32, torch.bfloat16)
         and router_logits.stride(-1) == 1
         and bias.shape[0] == router_logits.shape[1] <= MAX_EXPERTS
         and 0 < router.top_k <= min(MAX_TOP_K, router_logits.shape[1])
@@ -78,7 +79,7 @@ def _compute_routing(
         return _ORIGINAL_COMPUTE_ROUTING(
             self,
             hidden_states,
-            router_logits,
+            router_logits.float(),
             indices_type,
             input_ids=input_ids,
         )
