@@ -9,10 +9,10 @@ Subject: [PATCH] MUSA: use stream waits for DSV4 overlap hand-off
  2 files changed, 35 insertions(+), 1 deletion(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index f495d3d552..7d3a7859ca 100644
+index cbe6ed9ae3..e86e92d9d3 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -592,6 +592,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -597,6 +597,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                      if aux_streams is not None
                      else None,
                      enable=aux_streams is not None,
@@ -20,7 +20,7 @@ index f495d3d552..7d3a7859ca 100644
                  )
              else:
                  assert indexer_weights is not None
-@@ -614,6 +615,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -619,6 +620,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                      if aux_streams is not None
                      else None,
                      enable=aux_streams is not None,
@@ -28,7 +28,7 @@ index f495d3d552..7d3a7859ca 100644
                  )
                  index_q, index_q_scale, index_weights_out = indexer_inputs
          elif compressor is not None:
-@@ -624,6 +626,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -629,6 +631,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
                  self.ln_events[0],
                  self.ln_events[1],
                  aux_stream,
@@ -36,15 +36,15 @@ index f495d3d552..7d3a7859ca 100644
              )
          else:
              q = project_query_and_cache_kv()
-@@ -712,6 +715,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
-                     hidden_states.shape[0]
-                 )
+@@ -715,6 +718,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 <= envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD
+                 and _musa_deepseek_v4_aux_overlap()
              ),
 +            use_stream_waits=current_platform.is_musa(),
          )
  
          return qr_kv, kv_score, indexer_kv_score, indexer_weights
-@@ -1145,6 +1149,7 @@ class DeepseekV4Indexer(nn.Module):
+@@ -1146,6 +1150,7 @@ class DeepseekV4Indexer(nn.Module):
              self.ln_events[0],
              self.ln_events[1],
              aux_stream,

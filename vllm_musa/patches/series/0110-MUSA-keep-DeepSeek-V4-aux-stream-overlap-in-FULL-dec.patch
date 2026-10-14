@@ -1,37 +1,52 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Mon, 24 Aug 2026 13:18:26 +0800
-Subject: [PATCH] fix(musa): serialize DSV4 long-prefill attention overlap
+Subject: [PATCH] MUSA: keep DeepSeek-V4 aux-stream overlap in FULL decode
+ graphs
 
 ---
- vllm/models/deepseek_v4/attention.py | 20 +++++++++++++++++---
- 1 file changed, 17 insertions(+), 3 deletions(-)
+ vllm/models/deepseek_v4/attention.py | 23 +++++++++++++++++++----
+ 1 file changed, 19 insertions(+), 4 deletions(-)
 
 diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
-index 034d073dab..9628020587 100644
+index 034d073dab..3f3576096d 100644
 --- a/vllm/models/deepseek_v4/attention.py
 +++ b/vllm/models/deepseek_v4/attention.py
-@@ -93,6 +93,10 @@ def _fill_short_context_topk_indices(
+@@ -36,6 +36,7 @@ if TYPE_CHECKING:
+ 
+ from vllm.config import (
+     CacheConfig,
++    CUDAGraphMode,
+     VllmConfig,
+     get_current_vllm_config,
+ )
+@@ -93,6 +94,16 @@ def _fill_short_context_topk_indices(
  _MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS = 16
  
  
-+def _musa_deepseek_v4_serialize_long_prefill(num_tokens: int) -> bool:
-+    return current_platform.device_type == "musa" and num_tokens > 8192
++# MUSA: overlapping prefill or mixed steps on the aux streams can stall the
++# compute queue until the GPU run timeout fires, so overlap only in FULL decode
++# graphs. The V2 model runner captures them under CUDAGraphMode.NONE.
++def _musa_deepseek_v4_aux_overlap() -> bool:
++    mode = get_forward_context().cudagraph_runtime_mode
++    return mode == CUDAGraphMode.FULL or (
++        mode == CUDAGraphMode.NONE and torch.cuda.is_current_stream_capturing()
++    )
 +
 +
  def _musa_deepseek_v4_use_score_fp32_deepgemm(
      a: torch.Tensor,
      weight: torch.Tensor,
-@@ -553,6 +557,8 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -552,7 +563,7 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         attn_metadata = get_forward_context().attn_metadata
          indexer = self.indexer
          compressor = self.compressor
-         aux_streams = self.aux_stream_list
-+        if _musa_deepseek_v4_serialize_long_prefill(hidden_states.size(0)):
-+            aux_streams = None
+-        aux_streams = self.aux_stream_list
++        aux_streams = self.aux_stream_list if _musa_deepseek_v4_aux_overlap() else None
  
          def project_query_and_cache_kv() -> torch.Tensor:
              q = self.wq_b(qr).view(-1, self.n_local_heads, self.head_dim)
-@@ -699,8 +705,13 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+@@ -699,8 +710,11 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
              self.ln_events[0],
              self.ln_events[1:4],
              aux_streams,
@@ -40,20 +55,16 @@ index 034d073dab..9628020587 100644
 +            enable=(
 +                hidden_states.shape[0]
 +                <= envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD
-+                and not _musa_deepseek_v4_serialize_long_prefill(
-+                    hidden_states.shape[0]
-+                )
++                and _musa_deepseek_v4_aux_overlap()
 +            ),
          )
  
          return qr_kv, kv_score, indexer_kv_score, indexer_weights
-@@ -1125,12 +1136,15 @@ class DeepseekV4Indexer(nn.Module):
+@@ -1125,12 +1139,13 @@ class DeepseekV4Indexer(nn.Module):
  
          # compressor returns None and writes K to the indexer KV cache; the
          # join orders that write before indexer_op (skip_k_cache_insert=True).
-+        aux_stream = self.aux_stream
-+        if _musa_deepseek_v4_serialize_long_prefill(hidden_states.size(0)):
-+            aux_stream = None
++        aux_stream = self.aux_stream if _musa_deepseek_v4_aux_overlap() else None
          (q_quant, weights), _ = maybe_execute_in_parallel(
              wq_b_and_q_quant,
              lambda: compressor(compressed_kv_score, positions, rotary_emb),
