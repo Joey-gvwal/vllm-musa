@@ -35,6 +35,16 @@ def _keyword_values(func: ast.FunctionDef, keyword: str) -> list[str]:
     ]
 
 
+def _keyword_callees(func: ast.FunctionDef, keyword: str, value: str) -> list[str]:
+    return sorted(
+        ast.unparse(node.func)
+        for node in ast.walk(func)
+        if isinstance(node, ast.Call)
+        for kw in node.keywords
+        if kw.arg == keyword and ast.unparse(kw.value) == value
+    )
+
+
 def test_upstream_functional_path_forwards_clamp() -> None:
     patch = SERIES_PATCH.read_text(encoding="utf-8")
     assert "gemm1_clamp_limit=quant_config.gemm1_clamp_limit" in patch
@@ -46,7 +56,18 @@ def test_dispatcher_forwards_clamp_to_every_backend() -> None:
     dispatch = _function("_musa_fused_experts_impl_dispatch")
     assert "gemm1_clamp_limit" in [a.arg for a in dispatch.args.args]
     assert _keyword_values(dispatch, "swiglu_limit").count("gemm1_clamp_limit") == 2
-    assert _keyword_values(dispatch, "gemm1_clamp_limit") == ["gemm1_clamp_limit"]
+    # The FP8 block GEMV gate sees the clamp; the upstream path receives it.
+    assert _keyword_callees(dispatch, "gemm1_clamp_limit", "gemm1_clamp_limit") == [
+        "_can_use_musa_fp8_block_moe_gemv",
+        "_upstream_fused_moe._musa_original_fused_experts_impl",
+    ]
+    block_gemv = next(
+        node
+        for node in ast.walk(dispatch)
+        if isinstance(node, ast.Call)
+        and ast.unparse(node.func) == "_musa_fp8_block_moe_gemv"
+    )
+    assert ast.unparse(block_gemv.args[-1]) == "gemm1_clamp_limit"
     source = ast.unparse(dispatch)
     assert "'_swiglu_limit': gemm1_clamp_limit" in source
     assert "gemm1_clamp_limit is None" in source
