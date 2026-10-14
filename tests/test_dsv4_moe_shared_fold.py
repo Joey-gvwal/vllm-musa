@@ -124,23 +124,21 @@ def _moe(**overrides):
 
 
 def _config(**overrides):
-    parallel = SimpleNamespace(
-        enable_expert_parallel=False,
-        enable_eplb=False,
-        data_parallel_size=1,
-        tensor_parallel_size=8,
-    )
+    from .test_deepseek_v41_optimization_contract import _v41_flash_config
+
+    config = _v41_flash_config()
     for key, value in overrides.items():
-        setattr(parallel, key, value)
-    return SimpleNamespace(parallel_config=parallel)
+        setattr(config.parallel_config, key, value)
+    return config
 
 
-def test_shared_fold_eligibility(monkeypatch) -> None:
+def test_shared_fold_eligibility() -> None:
     pytest.importorskip("torch")
     pytest.importorskip("vllm")
     from vllm_musa.model_executor.layers.fused_moe import shared_expert_fold as fold
 
-    monkeypatch.setattr(fold, "_ENABLED", True)
+    from .test_deepseek_v4_optimization_contract import _flash_base_config
+
     hf = SimpleNamespace(
         n_shared_experts=1, moe_intermediate_size=2304, hidden_size=5120
     )
@@ -165,8 +163,13 @@ def test_shared_fold_eligibility(monkeypatch) -> None:
     assert not fold.deepseek_v4_shared_expert_foldable(
         _config(tensor_parallel_size=4), _moe(), hf, quant
     )
-    monkeypatch.setattr(fold, "_ENABLED", False)
-    assert not fold.deepseek_v4_shared_expert_foldable(_config(), _moe(), hf, quant)
+    # The contract keeps DeepSeek-V4-Flash off the fold even when its layers fit.
+    dsv4 = _flash_base_config(
+        speculative=True, speculative_method="dspark", max_num_seqs=64
+    )
+    dsv4.parallel_config.enable_expert_parallel = False
+    dsv4.parallel_config.enable_eplb = False
+    assert not fold.deepseek_v4_shared_expert_foldable(dsv4, _moe(), hf, quant)
 
 
 def _param(torch, *shape: int, generator=None):

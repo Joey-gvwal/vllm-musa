@@ -7,6 +7,7 @@ from enum import Enum
 class ModelFamily(str, Enum):
     UNKNOWN = "unknown"
     DEEPSEEK_V4 = "deepseek_v4"
+    DEEPSEEK_V41 = "deepseek_v4.1"
     GLM5 = "glm5"
     QWEN2 = "qwen2"
     QWEN3 = "qwen3"
@@ -47,6 +48,7 @@ class OptimizationFeature(str, Enum):
     DEEPSEEK_V4_FINAL_PROMPT_TOKEN_DECODE_GRAPH = (
         "deepseek_v4.final_prompt_token_decode_graph"
     )
+    DEEPSEEK_V41_SHARED_EXPERT_FOLD = "deepseek_v4.1.shared_expert_fold"
     QWEN_V2_SAMPLING = "qwen.v2_sampling"
     QWEN_LEGACY_SAMPLING = "qwen.legacy_sampling"
     QWEN_FA3_SCHEDULER = "qwen.fa3_scheduler"

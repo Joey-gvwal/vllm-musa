@@ -1,26 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Fold a DeepSeek-V4 shared expert into the routed FP8 expert stack.
+"""Fold a DeepSeek-V4-family shared expert into the routed FP8 expert stack.
 
 The shared MLP has the per-rank shape and FP8 block format of a routed expert, so
 after loading its projections are appended to the routed weights as one more
 expert (``quantization/fp8.py``) and the router gives every token one extra slot
 at weight 1.0 on that expert. The MoE then runs routed and shared work in one
 grouped kernel chain, without the shared expert's separate GEMMs, activation and
-output add.
+output add. Only models whose optimization contract prefers the fold take it.
 """
 
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
 from vllm.config import VllmConfig
 
-_ENABLED = (
-    getattr(torch.version, "musa", None) is not None
-    and os.environ.get("VLLM_MUSA_DSV4_SHARED_EXPERT_FOLD", "1") != "0"
+from vllm_musa.optimization_contract import (
+    OptimizationFeature,
+    resolve_optimization_contract,
 )
 
 
@@ -58,14 +57,17 @@ def _routed_block_size(
 def deepseek_v4_shared_expert_foldable(
     vllm_config: VllmConfig, moe: nn.Module, config: object, quant_config: object
 ) -> bool:
-    """Whether ``moe.shared_experts`` can join the routed FP8 experts: TP-only
-    sqrt-softplus routing and a single shared expert with the experts' FP8 blocks
-    and per-rank intermediate size."""
+    """Whether ``moe.shared_experts`` joins the routed FP8 experts: the optimization
+    contract prefers the fold, routing is TP-only sqrt-softplus, and the single
+    shared expert has the experts' FP8 blocks and per-rank intermediate size."""
+    if not resolve_optimization_contract(vllm_config).prefers(
+        OptimizationFeature.DEEPSEEK_V41_SHARED_EXPERT_FOLD
+    ):
+        return False
     parallel_config = vllm_config.parallel_config
     shared = getattr(moe, "shared_experts", None)
     if (
-        not _ENABLED
-        or shared is None
+        shared is None
         or getattr(config, "n_shared_experts", None) != 1
         or parallel_config.enable_expert_parallel
         or parallel_config.enable_eplb
