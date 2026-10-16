@@ -14,7 +14,7 @@ and compressed cache in a forward pass.
  1 file changed, 13 insertions(+), 6 deletions(-)
 
 diff --git a/vllm/models/deepseek_v41/nvidia/flashmla.py b/vllm/models/deepseek_v41/nvidia/flashmla.py
-index 2ee068fae8..a231d43998 100644
+index 2ee068f..a231d43 100644
 --- a/vllm/models/deepseek_v41/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v41/nvidia/flashmla.py
 @@ -28,6 +28,7 @@ from vllm_musa.v1.attention.ops.flashmla import (

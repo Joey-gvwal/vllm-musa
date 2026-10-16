@@ -13,7 +13,7 @@ the forward pass's first plan for a layer type and cache layout.
  1 file changed, 11 insertions(+)
 
 diff --git a/vllm/models/deepseek_v41/nvidia/flashmla.py b/vllm/models/deepseek_v41/nvidia/flashmla.py
-index 324a49bc44..2ee068fae8 100644
+index 324a49b..2ee068f 100644
 --- a/vllm/models/deepseek_v41/nvidia/flashmla.py
 +++ b/vllm/models/deepseek_v41/nvidia/flashmla.py
 @@ -27,6 +27,7 @@ from vllm.v1.attention.backends.mla.sparse_swa import DeepseekSparseSWABackend
