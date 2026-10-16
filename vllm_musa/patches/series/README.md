@@ -48,8 +48,10 @@ editable or wheel install. They are source patches; runtime registrations in
 | `0038-MUSA-share-the-DeepSeek-V4.1-decode-plan-across-KV-c.patch` | Every KV-cache group's sparse-SWA metadata builder makes its own FlashMLA plan objects; the DeepSeek-V4.1 decode attention reuses the forward pass's first plan for a layer type and cache layout, so the tile-scheduler planner runs once per layer type instead of once per group. |
 | `0039-MUSA-let-the-DeepSeek-V4-router-read-the-BF16-gate-o.patch` | On MUSA the non-hash DeepSeek-V4 MoE gates keep their BF16 output; the MUSA biased router widens it exactly, so routing runs no FP32 cast kernel. Hash layers and the upstream fallback route on FP32 logits. |
 | `0040-MUSA-map-the-DeepSeek-V4.1-decode-top-k-once-per-ind.patch` | The DeepSeek-V4.1 layers after an index source read its top-k indices through the same compressed cache until the next source; the MUSA decode attention maps them to global KV slots once per index source and cache in a forward pass instead of once per layer. |
+| `0041-MUSA-let-adaptive-verification-trim-the-flattened-DS.patch` | On MUSA the flattened DSA indexer decode accepts device-decided verify lengths: each verify token is its own indexer row built from device metadata, so adaptive verification can trim DSpark verify batches. |
+| `0042-MUSA-profile-adaptive-verification-costs-in-the-real.patch` | The CUDA graph memory profile skips the adaptive verification step timings: as eager dummy runs inside that pass, their cached activations would count as graph memory and shrink the KV cache. The real capture profiles them. |
 
-Currently **40 patches**.
+Currently **42 patches**.
 
 Keep each patch as a `git format-patch` artifact with its `index` lines. To
 verify the stack, use a **pristine** checkout or archive of the pinned vLLM
