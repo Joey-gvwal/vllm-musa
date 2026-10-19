@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Wed, 17 Sep 2026 09:30:00 +0800
+Subject: [PATCH] MUSA: run QSA split-k attention with 4 warps
+
+Single-warp split-k reductions in the QSA attention kernel yield
+unnormalized attention outputs on MUSA; always run with 4 warps.
+---
+ vllm/models/qwen4_exp/nvidia/ops/qsa.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/vllm/models/qwen4_exp/nvidia/ops/qsa.py b/vllm/models/qwen4_exp/nvidia/ops/qsa.py
+index 709acbde00a4d5c40517006aa95c1e83110d2934..951f999e1249bed236cd03506fb446a9916e81e1 100644
+--- a/vllm/models/qwen4_exp/nvidia/ops/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/ops/qsa.py
+@@ -443,6 +443,9 @@ def _select_config(
+     num_tiles = triton.cdiv(num_columns, BLOCK_N)
+     # Never more splits than tiles, never empty.
+     num_splits = min(target_splits, num_tiles)
++    # MUSA: single-warp split-k reductions yield unnormalized attention
++    # outputs; always run with 4 warps.
++    num_warps = 4
+     return BLOCK_N, num_warps, num_tiles, num_splits
+ 
+ 

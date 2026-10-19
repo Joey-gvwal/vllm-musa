@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Mon, 12 Oct 2026 21:10:00 +0800
+Subject: [PATCH] MUSA: look up fused MoE configs shipped with vllm-musa
+
+vllm-musa packages tuned fused MoE configs under vllm_musa/configs, but the
+lookup only searched VLLM_TUNED_CONFIG_FOLDER and vLLM's own configs
+directory, so those files were never used and the kernel fell back to the
+default config. Search vllm_musa/configs between the two.
+
+---
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -1185,6 +1185,16 @@
+         )
+         config_file_paths.append(user_defined_config_file_path)
+ 
++    # MUSA: configs tuned on MUSA devices ship with vllm-musa.
++    try:
++        import vllm_musa
++
++        config_file_paths.append(
++            os.path.join(os.path.dirname(vllm_musa.__file__), "configs", json_file_name)
++        )
++    except ImportError:
++        pass
++
+     default_config_file_path = os.path.join(
+         os.path.dirname(os.path.realpath(__file__)), "configs", json_file_name
+     )
+-- 
+2.43.0

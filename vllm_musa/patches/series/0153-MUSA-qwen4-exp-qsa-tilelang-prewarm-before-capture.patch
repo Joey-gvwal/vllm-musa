@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wzc-claude <wzc-claude@local>
+Date: Tue, 22 Sep 2026 10:30:00 +0800
+Subject: [PATCH] MUSA: build the QSA TileLang kernels and scratch before graph
+ capture
+
+The decode path is first reached while the decode graphs are being captured, so
+the TileLang JIT build and the split-k scratch allocation are recorded into the
+graph memory pool. With more than one captured size the scratch then aliases
+another graph's tensors and the merge kernel reads non-finite partials. Build
+and allocate at layer construction instead, when either TileLang gate is set.
+
+---
+--- a/vllm/models/qwen4_exp/nvidia/qsa.py
++++ b/vllm/models/qwen4_exp/nvidia/qsa.py
+@@ -27,6 +27,7 @@
+ from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding, get_rope
+ from vllm.model_executor.models.qwen3_next import Qwen3NextAttention
+ from vllm.platforms import current_platform
++from vllm.utils.math_utils import cdiv
+ from vllm.transformers_utils.configs.qwen4_exp import (
+     Qwen4ExpTextConfig,
+ )
+@@ -404,6 +405,41 @@
+             raise ValueError(f"Duplicate layer name: {self.layer_name}")
+         static_context[self.layer_name] = self
+ 
++        self._musa_prewarm_qsa_tilelang(vllm_config)
++
++    def _musa_prewarm_qsa_tilelang(self, vllm_config: VllmConfig) -> None:
++        """Build the TileLang kernels and their scratch before graph capture.
++
++        The decode path is first reached inside the decode-graph capture, so a
++        lazy build or allocation there is recorded into the graph memory pool.
++        """
++        if not current_platform.is_musa():
++            return
++        if os.environ.get("VLLM_MUSA_QSA_TILELANG", "") not in ("1", "legacy") and (
++            os.environ.get("VLLM_MUSA_QSA_TILELANG_DECODE") != "1"
++        ):
++            return
++        try:
++            from vllm_musa.jit_kernel.tilelang.qsa_sparse_attn_v2 import (
++                prewarm_qsa_kernels,
++            )
++
++            cache_config = vllm_config.cache_config
++            page_size = cache_config.block_size
++            rows = set(vllm_config.compilation_config.cudagraph_capture_sizes or ())
++            rows.update(range(1, vllm_config.scheduler_config.max_num_seqs + 1))
++            prewarm_qsa_kernels(
++                self.num_heads // self.num_kv_heads,
++                self.head_dim,
++                self.indexer.packed_output_width - 1,
++                page_size,
++                cdiv(vllm_config.model_config.max_model_len, page_size),
++                self.kv_cache_torch_dtype,
++                decode_rows=tuple(sorted(rows)),
++            )
++        except Exception as error:  # a prewarm failure must not break serving
++            logger.warning_once("QSA TileLang prewarm skipped: %s", error)
++
+     def get_attn_backend(self) -> type[AttentionBackend]:
+         return self.attn_backend
+ 
