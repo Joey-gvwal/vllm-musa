@@ -526,6 +526,33 @@ def deepseek_v4_qnorm_rope_kv_insert(
         # Graph+MTP warmup can carry padded cache slots while q/kv only hold
         # active rows. The native op stores one KV row per q/kv row.
         slot_mapping = slot_mapping[: q.shape[0]].contiguous()
+    from vllm_musa.kernels.deepseek_v4_rope_kv_insert import (
+        rope_kv_insert,
+        rope_kv_insert_supported,
+    )
+
+    if rope_kv_insert_supported(
+        q,
+        kv,
+        kv_cache,
+        slot_mapping,
+        positions,
+        cos_sin_cache,
+        cache_block_size,
+        q_head_padded,
+    ):
+        return rope_kv_insert(
+            q,
+            kv,
+            kv_cache,
+            slot_mapping,
+            positions,
+            cos_sin_cache,
+            eps,
+            cache_block_size,
+            q_head_padded,
+            apply_q_norm,
+        )
     return torch.ops._C_musa_ops.deepseek_v4_qnorm_rope_kv_insert(
         q,
         kv,
