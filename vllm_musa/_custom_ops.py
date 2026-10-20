@@ -907,6 +907,23 @@ def deepseek_v4_fused_inv_rope_fp8_quant(
     quant_group_size: int,
     tma_aligned_scales: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    from vllm_musa.kernels.deepseek_v4_inv_rope_fp8_quant import (
+        inv_rope_fp8_quant,
+        inv_rope_fp8_quant_supported,
+    )
+
+    if inv_rope_fp8_quant_supported(
+        o,
+        positions,
+        cos_sin_cache,
+        nope_dim,
+        rope_dim,
+        quant_group_size,
+        tma_aligned_scales,
+    ):
+        return inv_rope_fp8_quant(
+            o, positions, cos_sin_cache, n_groups, heads_per_group
+        )
     return torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant(
         o,
         positions,
