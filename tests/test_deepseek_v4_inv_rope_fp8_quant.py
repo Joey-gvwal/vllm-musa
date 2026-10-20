@@ -81,8 +81,7 @@ def test_triton_kernel_matches_the_native_op(tokens) -> None:
     assert scales.shape == native_scales.shape
     assert scales.stride() == native_scales.stride()
     assert torch.equal(scales, native_scales)
-    codes, native_codes = q.view(torch.uint8), native_q.view(torch.uint8)
-    assert (codes != native_codes).float().mean().item() < 1e-4
+    assert torch.equal(q.view(torch.uint8), native_q.view(torch.uint8))
 
     x, ref_scales = _reference(o, positions, cache)
     assert torch.equal(scales[:, 0], ref_scales.view(tokens, heads * 4))
