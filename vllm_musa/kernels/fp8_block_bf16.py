@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""BF16 GEMM for 32x32 block-FP8 linears at prefill row counts.
+"""BF16 GEMM for 32x32 block-FP8 linears past decode row counts.
 
-Past a few hundred rows the vendor BF16 GEMM outruns the FP8 block GEMM on MUSA
-by several times. The weight is dequantized per call into a scratch BF16 copy,
-which is exact for power-of-two block scales, and the activation stays BF16
-instead of being quantized per 32-wide group. An FP8 activation with per-row
-group scales is dequantized the same way.
+From a few dozen rows the vendor BF16 GEMM outruns the FP8 split-K and block GEMMs
+on MUSA. The weight is dequantized per call into a scratch BF16 copy, which is
+exact for power-of-two block scales, and the activation stays BF16 instead of
+being quantized per 32-wide group. An FP8 activation with per-row group scales is
+dequantized the same way.
 """
 
 from __future__ import annotations
@@ -15,9 +15,20 @@ import os
 import torch
 from vllm.triton_utils import tl, triton
 
-# Rows from which dequantization plus the BF16 GEMM beats the block GEMM on every
-# DeepSeek-V4.1 TP8 projection, measured on MTT S5000 with a cold L2.
+# Rows from which dequantization plus the BF16 GEMM beats the split-K and block
+# GEMMs, measured in CUDA graphs on MTT S5000 for the DeepSeek-V4.1 TP8 projections
+# and keyed by (N, K); other shapes switch at MIN_ROWS. The split-K row ranges end
+# below these.
 MIN_ROWS = 512
+_MIN_ROWS_BY_SHAPE = {
+    (1792, 5120): 33,
+    (576, 5120): 65,
+    (1024, 4096): 192,
+    (4096, 1280): 33,
+    (5120, 1024): 33,
+    (5120, 15360): 65,
+    (25600, 768): 65,
+}
 _ENABLED = os.environ.get("VLLM_MUSA_FP8_BLOCK_BF16_GEMM", "1") != "0"
 # Dequantization tile, measured on MTT S5000.
 _BLOCK_R, _BLOCK_C = 64, 256
@@ -84,9 +95,11 @@ def fp8_block_bf16_supported(
     weight: torch.Tensor, weight_scale: torch.Tensor, rows: int
 ) -> bool:
     """Whether ``rows`` activation rows run the BF16 GEMM on a 32x32 block-FP8 weight."""
-    if not _ENABLED or rows < MIN_ROWS or weight.dim() != 2:
+    if not _ENABLED or weight.dim() != 2:
         return False
     n, k = weight.shape
+    if rows < _MIN_ROWS_BY_SHAPE.get((n, k), MIN_ROWS):
+        return False
     return (
         weight.dtype == torch.float8_e4m3fn
         and weight_scale.dtype == torch.float32

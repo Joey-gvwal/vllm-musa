@@ -24,15 +24,15 @@ BLOCK_M = 16
 # (SPLIT, BLOCK_N, num_warps, UNROLL, MIN_ROWS, MAX_ROWS, TILE_M) measured on MTT
 # S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections, keyed by (N, K). The
 # reduction is a second launch, so below MIN_ROWS the single-kernel GEMV wins; past
-# MAX_ROWS the block GEMM does. TILE_M rows per program where that pads no more
-# rows than BLOCK_M-row tiles.
+# MAX_ROWS the BF16 GEMM of fp8_block_bf16 or the block GEMM does. TILE_M rows per
+# program where that pads no more rows than BLOCK_M-row tiles.
 _CONFIGS = {
-    (1792, 5120): (16, 64, 4, 2, 2, 192, 32),
-    (576, 5120): (16, 64, 4, 2, 4, 320, 16),
-    (1024, 4096): (16, 64, 4, 2, 3, 320, 16),
-    (4096, 1280): (8, 64, 4, 1, 4, 96, 32),
-    (5120, 1024): (8, 64, 4, 2, 4, 48, 16),
-    (5120, 15360): (8, 64, 4, 2, 2, 96, 16),
+    (1792, 5120): (16, 64, 4, 2, 2, 32, 32),
+    (576, 5120): (16, 64, 4, 2, 4, 64, 16),
+    (1024, 4096): (16, 64, 4, 2, 3, 191, 16),
+    (4096, 1280): (8, 64, 4, 1, 4, 32, 32),
+    (5120, 1024): (8, 64, 4, 2, 4, 32, 16),
+    (5120, 15360): (8, 64, 4, 2, 2, 64, 16),
     (25600, 768): (2, 64, 4, 1, 2, 32, 16),
 }
 _ENABLED = os.environ.get("VLLM_MUSA_FP8_SPLITK_MM", "1") != "0"

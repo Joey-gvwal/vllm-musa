@@ -265,9 +265,16 @@ def test_splitk_row_tiles_add_no_padding() -> None:
     assert {tile_rows(r, 16) for r in range(1, 321)} == {16}
 
 
-def test_prefill_rows_take_the_bf16_gemm_past_the_splitk_rows() -> None:
-    max_rows = max(config[5] for config in _literal(SPLITK, "_CONFIGS").values())
-    assert _literal(BF16, "MIN_ROWS") > max_rows
+def test_bf16_gemm_rows_start_past_the_splitk_rows() -> None:
+    configs = _literal(SPLITK, "_CONFIGS")
+    min_rows = _literal(BF16, "MIN_ROWS")
+    by_shape = _literal(BF16, "_MIN_ROWS_BY_SHAPE")
+    assert set(by_shape) <= set(configs)
+    for shape, config in configs.items():
+        assert by_shape.get(shape, min_rows) > config[5]
+    assert all(rows <= min_rows for rows in by_shape.values())
+    source = _function(BF16, "fp8_block_bf16_supported")
+    assert "_MIN_ROWS_BY_SHAPE.get((n, k), MIN_ROWS)" in source
     body = _function(LINEAR, "apply_weights")
     assert (
         body.index("_small_m_path(")
@@ -354,7 +361,7 @@ def test_splitk_row_tiles_keep_each_row_result(shape) -> None:
     x = torch.randn(max_rows, k).to(torch.bfloat16).to("musa")
     xq, xs = per_token_group_quant_fp8(x, 32, use_ue8m0=False)
     ref = (xq.float() * xs.repeat_interleave(32, -1)) @ _dequant(weight, scale).T
-    for rows in (17, 40, 64, max_rows):
+    for rows in [r for r in (17, 40, 64) if r < max_rows] + [max_rows]:
         config = sk.fp8_block_splitk_config(weight, scale, rows)
         assert config is not None
         out = torch.empty((rows, n), dtype=torch.bfloat16, device="musa")
@@ -383,8 +390,9 @@ def test_bf16_gemm_dequantizes_power_of_two_scales_exactly(shape) -> None:
     weight, scale = _block_fp8_weight(n, k)
     dense = _dequant(weight, scale)
     assert torch.equal(bf._dequant(weight, scale, 32, 32).float(), dense)
-    rows = bf.MIN_ROWS + 88
-    assert not bf.fp8_block_bf16_supported(weight, scale, bf.MIN_ROWS - 1)
+    min_rows = bf._MIN_ROWS_BY_SHAPE.get(shape, bf.MIN_ROWS)
+    rows = min_rows + 88
+    assert not bf.fp8_block_bf16_supported(weight, scale, min_rows - 1)
     assert bf.fp8_block_bf16_supported(weight, scale, rows)
     x = torch.randn(rows, k).to(torch.bfloat16).to("musa")
     out = bf.fp8_block_bf16_linear(x, weight, scale)
