@@ -27,7 +27,8 @@ _SCALE_EPS = 1e-10
 _CONFIGS = ((80, 1, 4), (512, 1, 2), (1 << 62, 4, 4))
 
 
-@triton.jit
+# The row counts change with every batch; one kernel serves all of them.
+@triton.jit(do_not_specialize=["num_tokens", "aligned_tokens"])
 def _dsv4_inv_rope_quant_rows_kernel(
     o_ptr,
     pos_ptr,
