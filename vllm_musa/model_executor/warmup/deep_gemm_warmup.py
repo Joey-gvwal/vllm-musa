@@ -129,6 +129,44 @@ def _warmup_bf16_grouped_moe(model: torch.nn.Module, max_tokens: int) -> None:
         _BF16_WARMUP_CACHE.add(cache_key)
 
 
+# The MUSA sparse indexer runs mate's paged MQA logits on at most 512 query rows
+# per call, and mate builds one schedule-metadata module per 32-row bucket.
+_MQA_LOGITS_METADATA_MAX_ROWS = 512
+_MQA_LOGITS_METADATA_ROW_ALIGN = 32
+
+
+def _uses_sparse_indexer(model: torch.nn.Module) -> bool:
+    from vllm.model_executor.layers.sparse_attn_indexer import SparseAttnIndexer
+
+    return any(isinstance(module, SparseAttnIndexer) for module in model.modules())
+
+
+def _warmup_paged_mqa_logits_metadata(model: torch.nn.Module) -> None:
+    """Build mate's paged MQA logits metadata modules before serving.
+
+    mate compiles the module for a row bucket the first time a step reaches it,
+    which stalls that step for seconds; prefill row blocks reach every bucket.
+    """
+    if not _uses_sparse_indexer(model):
+        return
+    try:
+        from mate.jit.gemm.deep_gemm import get_paged_mqa_logits_metadata_module
+    except ImportError:
+        return
+    buckets = range(
+        _MQA_LOGITS_METADATA_ROW_ALIGN,
+        _MQA_LOGITS_METADATA_MAX_ROWS + 1,
+        _MQA_LOGITS_METADATA_ROW_ALIGN,
+    )
+    logger.info(
+        "Building mate paged MQA logits metadata for %d-%d rows",
+        buckets[0],
+        buckets[-1],
+    )
+    for rows in buckets:
+        get_paged_mqa_logits_metadata_module(rows)
+
+
 _upstream_deep_gemm_warmup = (
     vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup
 )
@@ -137,6 +175,7 @@ _upstream_deep_gemm_warmup = (
 def deep_gemm_warmup(model: torch.nn.Module, max_tokens: int, pbar=None):
     _upstream_deep_gemm_warmup(model, max_tokens)
     _warmup_bf16_grouped_moe(model, max_tokens)
+    _warmup_paged_mqa_logits_metadata(model)
 
 
 vllm.model_executor.warmup.deep_gemm_warmup.deep_gemm_warmup = deep_gemm_warmup
