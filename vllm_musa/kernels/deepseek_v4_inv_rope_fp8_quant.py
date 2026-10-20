@@ -63,7 +63,8 @@ def _dsv4_inv_rope_quant_rows_kernel(
     src = o_ptr + rows[:, None] * stride_ot + head.to(tl.int64) * stride_oh
     x = tl.load(src + d[None, :], mask=live[:, None], other=0.0).to(tl.float32)
 
-    # x[2i] * cos + x[2i+1] * sin and x[2i+1] * cos - x[2i] * sin on the RoPE dims.
+    # fma(x[2i], cos, x[2i+1] * sin) and fma(x[2i+1], cos, -x[2i] * sin) on the
+    # RoPE dims, the rounding of the native op.
     is_rope = d >= NOPE_DIM
     rope_mask = live[:, None] & is_rope[None, :]
     partner = tl.load(src + (d ^ 1)[None, :], mask=rope_mask, other=0.0).to(tl.float32)
@@ -73,7 +74,9 @@ def _dsv4_inv_rope_quant_rows_kernel(
     cos = tl.load(cs, mask=rope_mask, other=1.0)
     sin = tl.load(cs + HALF_ROPE, mask=rope_mask, other=0.0)
     even = ((d & 1) == 0)[None, :]
-    rotated = tl.where(even, x * cos + partner * sin, x * cos - partner * sin)
+    rotated = tl.where(
+        even, tl.fma(x, cos, partner * sin), tl.fma(x, cos, -(partner * sin))
+    )
     x = tl.where(is_rope[None, :], rotated, x)
 
     x = tl.reshape(x, (BLOCK_T, CHUNKS, GROUP))
