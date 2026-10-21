@@ -136,8 +136,10 @@ _MQA_LOGITS_METADATA_ROW_ALIGN = 32
 
 
 def _uses_sparse_indexer(model: torch.nn.Module) -> bool:
-    from vllm.model_executor.layers.sparse_attn_indexer import SparseAttnIndexer
-
+    try:
+        from vllm.model_executor.layers.sparse_attn_indexer import SparseAttnIndexer
+    except ImportError:
+        return False
     return any(isinstance(module, SparseAttnIndexer) for module in model.modules())
 
 

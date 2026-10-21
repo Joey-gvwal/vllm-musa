@@ -53,6 +53,18 @@ def test_metadata_warmup_skips_models_without_the_sparse_indexer(
     assert built == []
 
 
+def test_sparse_indexer_check_without_the_layer_module_is_false(
+    warmup, monkeypatch
+) -> None:
+    module, _ = warmup
+    torch = pytest.importorskip("torch")
+    monkeypatch.setitem(
+        sys.modules, "vllm.model_executor.layers.sparse_attn_indexer", None
+    )
+
+    assert module._uses_sparse_indexer(torch.nn.Linear(2, 2)) is False
+
+
 def test_metadata_warmup_without_mate_is_a_no_op(warmup, monkeypatch) -> None:
     module, built = warmup
     monkeypatch.setattr(module, "_uses_sparse_indexer", lambda model: True)
