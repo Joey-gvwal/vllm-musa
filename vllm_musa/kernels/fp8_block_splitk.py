@@ -25,7 +25,9 @@ BLOCK_M = 16
 # S5000 with a cold L2 for the DeepSeek-V4.1 TP8 projections, keyed by (N, K). The
 # reduction is a second launch, so below MIN_ROWS the single-kernel GEMV wins; past
 # MAX_ROWS the BF16 GEMM of fp8_block_bf16 or the block GEMM does. TILE_M rows per
-# program where that pads no more rows than BLOCK_M-row tiles.
+# program where that pads no more rows than BLOCK_M-row tiles. MAX_ROWS holds while
+# a CUDA graph is captured (decode); eager steps, prefill included, use
+# _EAGER_MAX_ROWS, past which the block GEMM runs up to fp8_block_bf16.MIN_ROWS.
 _CONFIGS = {
     (1792, 5120): (16, 64, 4, 2, 2, 32, 32),
     (576, 5120): (16, 64, 4, 2, 4, 64, 16),
@@ -34,6 +36,15 @@ _CONFIGS = {
     (5120, 1024): (8, 64, 4, 2, 4, 32, 16),
     (5120, 15360): (8, 64, 4, 2, 2, 64, 16),
     (25600, 768): (2, 64, 4, 1, 2, 32, 16),
+}
+_EAGER_MAX_ROWS = {
+    (1792, 5120): 192,
+    (576, 5120): 320,
+    (1024, 4096): 320,
+    (4096, 1280): 96,
+    (5120, 1024): 48,
+    (5120, 15360): 96,
+    (25600, 768): 32,
 }
 _ENABLED = os.environ.get("VLLM_MUSA_FP8_SPLITK_MM", "1") != "0"
 
@@ -127,8 +138,14 @@ def fp8_block_splitk_config(
     """Measured config for ``rows`` activation rows, or None when the GEMM does not apply."""
     if not _ENABLED or weight.dim() != 2:
         return None
-    config = _CONFIGS.get(tuple(weight.shape))
-    if config is None or not config[4] <= rows <= config[5]:
+    shape = tuple(weight.shape)
+    config = _CONFIGS.get(shape)
+    if config is None:
+        return None
+    max_rows = config[5]
+    if not torch.cuda.is_current_stream_capturing():
+        max_rows = _EAGER_MAX_ROWS[shape]
+    if not config[4] <= rows <= max_rows:
         return None
     n, k = weight.shape
     if (

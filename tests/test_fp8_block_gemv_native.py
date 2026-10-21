@@ -244,13 +244,16 @@ MOE_MMA = ROOT / "vllm_musa" / "kernels" / "fp8_moe_mma.py"
 
 def test_splitk_configs_tile_k_and_keep_one_row_on_the_gemv() -> None:
     configs = _literal(SPLITK, "_CONFIGS")
+    eager_max_rows = _literal(SPLITK, "_EAGER_MAX_ROWS")
+    assert set(eager_max_rows) == set(configs)
     for (n, k), config in configs.items():
         split, block_n, warps, unroll, min_rows, max_rows, tile_m = config
         assert k % (split * 32 * unroll) == 0
         assert 2 <= min_rows <= 16 <= max_rows
+        assert 16 <= eager_max_rows[(n, k)]
         assert tile_m in (16, 32)
     source = _function(SPLITK, "fp8_block_splitk_config")
-    assert "config[4] <= rows <= config[5]" in source
+    assert "config[4] <= rows <= max_rows" in source
 
 
 def test_splitk_row_tiles_add_no_padding() -> None:
@@ -267,20 +270,48 @@ def test_splitk_row_tiles_add_no_padding() -> None:
 
 def test_bf16_gemm_rows_start_past_the_splitk_rows() -> None:
     configs = _literal(SPLITK, "_CONFIGS")
+    eager_max_rows = _literal(SPLITK, "_EAGER_MAX_ROWS")
     min_rows = _literal(BF16, "MIN_ROWS")
     by_shape = _literal(BF16, "_MIN_ROWS_BY_SHAPE")
     assert set(by_shape) <= set(configs)
     for shape, config in configs.items():
         assert by_shape.get(shape, min_rows) > config[5]
+        assert min_rows > eager_max_rows[shape]
     assert all(rows <= min_rows for rows in by_shape.values())
     source = _function(BF16, "fp8_block_bf16_supported")
     assert "_MIN_ROWS_BY_SHAPE.get((n, k), MIN_ROWS)" in source
+    for path, name in (
+        (BF16, "fp8_block_bf16_supported"),
+        (SPLITK, "fp8_block_splitk_config"),
+    ):
+        assert "torch.cuda.is_current_stream_capturing()" in _function(path, name)
     body = _function(LINEAR, "apply_weights")
     assert (
         body.index("_small_m_path(")
         < body.index("fp8_block_bf16_supported(")
         < body.index("super().apply_weights(")
     )
+
+
+@pytest.mark.parametrize("capturing", [False, True])
+def test_measured_rows_apply_only_in_graph_capture(monkeypatch, capturing) -> None:
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("vllm")
+    from vllm_musa.kernels import fp8_block_bf16 as bf
+    from vllm_musa.kernels import fp8_block_splitk as sk
+
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: capturing)
+    shape = (1792, 5120)
+    weight = torch.empty(shape, dtype=torch.float8_e4m3fn)
+    scale = torch.empty((shape[0] // 32, shape[1] // 32), dtype=torch.float32)
+    if capturing:
+        splitk_max, bf16_min = sk._CONFIGS[shape][5], bf._MIN_ROWS_BY_SHAPE[shape]
+    else:
+        splitk_max, bf16_min = sk._EAGER_MAX_ROWS[shape], bf.MIN_ROWS
+    assert sk.fp8_block_splitk_config(weight, scale, splitk_max) is not None
+    assert sk.fp8_block_splitk_config(weight, scale, splitk_max + 1) is None
+    assert not bf.fp8_block_bf16_supported(weight, scale, bf16_min - 1)
+    assert bf.fp8_block_bf16_supported(weight, scale, bf16_min)
 
 
 def test_splitk_reduction_sums_partials_in_a_fixed_order() -> None:
@@ -357,7 +388,7 @@ def test_splitk_row_tiles_keep_each_row_result(shape) -> None:
     torch.manual_seed(shape[0])
     n, k = shape
     weight, scale = _block_fp8_weight(n, k)
-    max_rows = sk._CONFIGS[shape][5]
+    max_rows = sk._EAGER_MAX_ROWS[shape]
     x = torch.randn(max_rows, k).to(torch.bfloat16).to("musa")
     xq, xs = per_token_group_quant_fp8(x, 32, use_ue8m0=False)
     ref = (xq.float() * xs.repeat_interleave(32, -1)) @ _dequant(weight, scale).T
@@ -390,7 +421,7 @@ def test_bf16_gemm_dequantizes_power_of_two_scales_exactly(shape) -> None:
     weight, scale = _block_fp8_weight(n, k)
     dense = _dequant(weight, scale)
     assert torch.equal(bf._dequant(weight, scale, 32, 32).float(), dense)
-    min_rows = bf._MIN_ROWS_BY_SHAPE.get(shape, bf.MIN_ROWS)
+    min_rows = bf.MIN_ROWS
     rows = min_rows + 88
     assert not bf.fp8_block_bf16_supported(weight, scale, min_rows - 1)
     assert bf.fp8_block_bf16_supported(weight, scale, rows)
