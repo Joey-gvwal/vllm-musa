@@ -293,15 +293,19 @@ def test_bf16_gemm_rows_start_past_the_splitk_rows() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "shape", sorted(_literal(SPLITK, "_CONFIGS")), ids=lambda s: f"{s[0]}x{s[1]}"
+)
 @pytest.mark.parametrize("capturing", [False, True])
-def test_measured_rows_apply_only_in_graph_capture(monkeypatch, capturing) -> None:
+def test_measured_rows_apply_only_in_graph_capture(
+    monkeypatch, capturing, shape
+) -> None:
     torch = pytest.importorskip("torch")
     pytest.importorskip("vllm")
     from vllm_musa.kernels import fp8_block_bf16 as bf
     from vllm_musa.kernels import fp8_block_splitk as sk
 
     monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: capturing)
-    shape = (1792, 5120)
     weight = torch.empty(shape, dtype=torch.float8_e4m3fn)
     scale = torch.empty((shape[0] // 32, shape[1] // 32), dtype=torch.float32)
     if capturing:
