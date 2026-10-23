@@ -2,9 +2,8 @@
 """Collapse of the mHC residual streams into one hidden state.
 
 ``out[t] = sum_h mix[t, h] * residual[t, h]`` (or the mean over ``h`` without
-``mix``) with FP32 products and sum, rounded once to the residual dtype. One pass
-over the BF16 streams replaces an FP32 copy, a broadcast product, a reduction
-and a cast.
+``mix``), accumulated in FP32 and rounded once to the residual dtype, in one pass
+over the BF16 streams without FP32 temporaries.
 """
 
 from __future__ import annotations
