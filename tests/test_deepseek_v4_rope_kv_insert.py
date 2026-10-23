@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-CUSTOM_OPS = ROOT / "vllm_musa" / "_custom_ops.py"
 
 try:
     import torch
-except ImportError:  # the source check still runs
+except ImportError:
     torch = None
 
 requires_mp31 = pytest.mark.skipif(
@@ -20,26 +14,6 @@ requires_mp31 = pytest.mark.skipif(
     or tuple(torch.musa.get_device_capability()) != (3, 1),
     reason="requires an mp31 MUSA device",
 )
-
-
-def _function(path: Path, name: str) -> str:
-    source = path.read_text(encoding="utf-8")
-    node = next(
-        n
-        for n in ast.walk(ast.parse(source))
-        if isinstance(n, ast.FunctionDef) and n.name == name
-    )
-    return ast.get_source_segment(source, node)
-
-
-def test_supported_calls_take_the_triton_kernel_before_the_native_op() -> None:
-    body = _function(CUSTOM_OPS, "deepseek_v4_qnorm_rope_kv_insert")
-    assert (
-        body.index("slot_mapping[: q.shape[0]]")
-        < body.index("rope_kv_insert_supported(")
-        < body.index("return rope_kv_insert(")
-        < body.index("torch.ops._C_musa_ops.deepseek_v4_qnorm_rope_kv_insert(")
-    )
 
 
 def _rope_cache(max_pos: int) -> torch.Tensor:
@@ -125,3 +99,57 @@ def test_a_strided_rope_cache_keeps_the_native_op() -> None:
     assert not rk.rope_kv_insert_supported(
         q, kv, kv_cache, slots, positions, wide[:, :64], 64, 64
     )
+
+
+def _dispatch_inputs() -> tuple[torch.Tensor, ...]:
+    """Five rows of a supported call, with three padded slots past them."""
+    torch.manual_seed(5)
+    q = (torch.randn(5, 8, 512) * 4).to(torch.bfloat16).to("musa")
+    kv = (torch.randn(5, 512) * 4).to(torch.bfloat16).to("musa")
+    kv_cache = torch.randint(0, 256, (4, 64, 584), dtype=torch.uint8).to("musa")
+    slots = torch.randperm(4 * 64)[:8].to("musa")
+    positions = torch.randint(0, 256, (5,)).to("musa")
+    return q, kv, kv_cache, slots, positions, _rope_cache(256)
+
+
+@requires_mp31
+def test_supported_calls_take_the_triton_kernel(monkeypatch) -> None:
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
+
+    seen, result = [], object()
+
+    def spy(q, kv, kv_cache, slot_mapping, *args, **kwargs):
+        seen.append(slot_mapping)
+        return result
+
+    monkeypatch.setattr(rk, "rope_kv_insert", spy)
+    q, kv, kv_cache, slots, positions, cache = _dispatch_inputs()
+    out = ops.deepseek_v4_qnorm_rope_kv_insert(
+        q, kv, kv_cache, slots, positions, cache, 1e-6, 64, 64, apply_q_norm=False
+    )
+    assert out is result
+    # The padded slots are dropped before the kernel.
+    assert len(seen) == 1 and torch.equal(seen[0], slots[:5])
+
+
+@requires_mp31
+def test_unsupported_calls_take_the_native_op(monkeypatch) -> None:
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
+
+    def no_kernel(*args, **kwargs):
+        raise AssertionError("an unsupported call reached the Triton kernel")
+
+    monkeypatch.setattr(rk, "rope_kv_insert", no_kernel)
+    monkeypatch.setattr(rk, "_ENABLED", False)
+    q, kv, kv_cache, slots, positions, cache = _dispatch_inputs()
+    native_q, native_cache = q.clone(), kv_cache.clone()
+    out = ops.deepseek_v4_qnorm_rope_kv_insert(
+        q, kv, kv_cache, slots, positions, cache, 1e-6, 64, 64, apply_q_norm=False
+    )
+    ref = torch.ops._C_musa_ops.deepseek_v4_qnorm_rope_kv_insert(
+        native_q, kv, native_cache, slots[:5], positions, cache, 1e-6, 64, 64, False
+    )
+    assert torch.equal(out, ref)
+    assert torch.equal(kv_cache, native_cache)
