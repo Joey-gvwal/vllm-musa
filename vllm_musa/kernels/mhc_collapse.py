@@ -8,9 +8,12 @@ over the BF16 streams without FP32 temporaries.
 
 from __future__ import annotations
 
+import os
+
 import torch
 from vllm.triton_utils import tl, triton
 
+_ENABLED = os.environ.get("VLLM_MUSA_MHC_COLLAPSE_TRITON", "1") != "0"
 # Measured on MTT S5000 for hidden 5120 at 320-4096 tokens.
 _BLOCK_D = 1024
 _NUM_WARPS = 4
@@ -52,7 +55,8 @@ def mhc_collapse(
     without ``mix``, in the residual dtype; ``residual`` is (tokens, hc, hidden)."""
     tokens, hc, hidden = residual.shape
     supported = (
-        residual.device.type == "musa"
+        _ENABLED
+        and residual.device.type == "musa"
         and residual.dtype == torch.bfloat16
         and residual.stride(-1) == 1
         and (
