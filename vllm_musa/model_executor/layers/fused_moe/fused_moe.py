@@ -2202,6 +2202,53 @@ def _upstream_triton_config_scope(config: dict[str, int] | None):
         upstream_fused_moe_pkg._config = previous
 
 
+def _musa_fp8_moe_k128_eligible(
+    *,
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w1_scale: torch.Tensor | None,
+    activation: str,
+    apply_router_weight_on_input: bool,
+    use_fp8_w8a8: bool,
+    use_int8_w8a8: bool,
+    use_int8_w8a16: bool,
+    use_int4_w4a16: bool,
+    ocp_mx_scheme: str | None,
+    per_channel_quant: bool,
+    expert_map: torch.Tensor | None,
+    w1_zp: torch.Tensor | None,
+    w2_zp: torch.Tensor | None,
+    a1_scale: torch.Tensor | None,
+    a2_scale: torch.Tensor | None,
+    block_shape: list[int] | None,
+    w1_bias: torch.Tensor | None,
+    w2_bias: torch.Tensor | None,
+) -> bool:
+    """FP8 block MoE with the SiLU activation whose gate/up projection can step K
+    by 128 (``kernels/fp8_moe_k128.py``)."""
+    if (
+        not use_fp8_w8a8
+        or use_int8_w8a8
+        or use_int8_w8a16
+        or use_int4_w4a16
+        or ocp_mx_scheme is not None
+        or per_channel_quant
+        or apply_router_weight_on_input
+        or activation != "silu"
+        or expert_map is not None
+        or w1_zp is not None
+        or w2_zp is not None
+        or a1_scale is not None
+        or a2_scale is not None
+        or w1_bias is not None
+        or w2_bias is not None
+    ):
+        return False
+    from vllm_musa.kernels.fp8_moe_k128 import fp8_moe_k128_supported
+
+    return fp8_moe_k128_supported(hidden_states, w1, w1_scale, block_shape)
+
+
 def _musa_fused_experts_impl_dispatch(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,
@@ -2722,6 +2769,44 @@ def _musa_fused_experts_impl_dispatch(
         else None
     )
     with _upstream_triton_config_scope(triton_config):
+        if _musa_fp8_moe_k128_eligible(
+            hidden_states=hidden_states,
+            w1=w1,
+            w1_scale=w1_scale,
+            activation=activation,
+            apply_router_weight_on_input=apply_router_weight_on_input,
+            use_fp8_w8a8=use_fp8_w8a8,
+            use_int8_w8a8=use_int8_w8a8,
+            use_int8_w8a16=use_int8_w8a16,
+            use_int4_w4a16=use_int4_w4a16,
+            ocp_mx_scheme=ocp_mx_scheme,
+            per_channel_quant=per_channel_quant,
+            expert_map=expert_map,
+            w1_zp=w1_zp,
+            w2_zp=w2_zp,
+            a1_scale=a1_scale,
+            a2_scale=a2_scale,
+            block_shape=block_shape,
+            w1_bias=w1_bias,
+            w2_bias=w2_bias,
+        ):
+            from vllm_musa.kernels.fp8_moe_k128 import fp8_moe_k128_experts
+
+            logger.info_once(
+                "MUSA fused MoE uses 128-wide K steps for the FP8 gate/up projection."
+            )
+            return fp8_moe_k128_experts(
+                hidden_states,
+                w1,
+                w2,
+                topk_weights,
+                topk_ids,
+                w1_scale,
+                w2_scale,
+                block_shape,
+                global_num_experts,
+                gemm1_clamp_limit=gemm1_clamp_limit,
+            )
         return _upstream_fused_moe._musa_original_fused_experts_impl(
             hidden_states,
             w1,
