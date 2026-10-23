@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-CUSTOM_OPS = ROOT / "vllm_musa" / "_custom_ops.py"
 
 try:
     import torch
-except ImportError:  # the source check still runs
+except ImportError:
     torch = None
 
 requires_mp31 = pytest.mark.skipif(
@@ -20,25 +14,6 @@ requires_mp31 = pytest.mark.skipif(
     or tuple(torch.musa.get_device_capability()) != (3, 1),
     reason="requires an mp31 MUSA device",
 )
-
-
-def _function(path: Path, name: str) -> str:
-    source = path.read_text(encoding="utf-8")
-    node = next(
-        n
-        for n in ast.walk(ast.parse(source))
-        if isinstance(n, ast.FunctionDef) and n.name == name
-    )
-    return ast.get_source_segment(source, node)
-
-
-def test_fp32_scale_calls_take_the_triton_kernel_before_the_native_op() -> None:
-    body = _function(CUSTOM_OPS, "deepseek_v4_fused_inv_rope_fp8_quant")
-    assert (
-        body.index("inv_rope_fp8_quant_supported(")
-        < body.index("return inv_rope_fp8_quant(")
-        < body.index("torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant(")
-    )
 
 
 def _rope_cache(max_pos: int) -> torch.Tensor:
@@ -124,4 +99,50 @@ def test_scales_just_above_a_power_of_two_match_the_native_op() -> None:
     native = torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant
     native_q, native_scales = native(o, positions, cache, 1, 8, 448, 64, 128, False)
     assert torch.equal(scales, native_scales)
+    assert torch.equal(q.view(torch.uint8), native_q.view(torch.uint8))
+
+
+def _dispatch_inputs() -> tuple[torch.Tensor, ...]:
+    """Five tokens of 16 heads, two groups of eight."""
+    torch.manual_seed(5)
+    o = (torch.randn(5, 16, 512) * 4).to(torch.bfloat16).to("musa")
+    positions = torch.randint(0, 256, (5,)).to("musa")
+    return o, positions, _rope_cache(256)
+
+
+@requires_mp31
+def test_fp32_scale_calls_take_the_triton_kernel(monkeypatch) -> None:
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_inv_rope_fp8_quant as ir
+
+    seen, result = [], object()
+
+    def spy(o, positions, cos_sin_cache, n_groups, heads_per_group):
+        seen.append((n_groups, heads_per_group))
+        return result
+
+    monkeypatch.setattr(ir, "inv_rope_fp8_quant", spy)
+    o, positions, cache = _dispatch_inputs()
+    out = ops.deepseek_v4_fused_inv_rope_fp8_quant(
+        o, positions, cache, 2, 8, 448, 64, 128, False
+    )
+    assert out is result and seen == [(2, 8)]
+
+
+@requires_mp31
+def test_packed_scale_calls_take_the_native_op(monkeypatch) -> None:
+    from vllm_musa import _custom_ops as ops
+    from vllm_musa.kernels import deepseek_v4_inv_rope_fp8_quant as ir
+
+    def no_kernel(*args, **kwargs):
+        raise AssertionError("a packed-scale call reached the Triton kernel")
+
+    monkeypatch.setattr(ir, "inv_rope_fp8_quant", no_kernel)
+    o, positions, cache = _dispatch_inputs()
+    q, scales = ops.deepseek_v4_fused_inv_rope_fp8_quant(
+        o, positions, cache, 2, 8, 448, 64, 128, True
+    )
+    native = torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant
+    native_q, native_scales = native(o, positions, cache, 2, 8, 448, 64, 128, True)
+    assert scales.dtype == torch.int32 and torch.equal(scales, native_scales)
     assert torch.equal(q.view(torch.uint8), native_q.view(torch.uint8))
