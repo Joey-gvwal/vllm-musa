@@ -24,9 +24,10 @@ _HEAD_DIM = _NOPE_DIM + _ROPE_DIM
 _QUANT_GROUP = 64
 _TOKEN_BYTES = _NOPE_DIM + _ROPE_DIM * 2
 _SCALE_BYTES = 8
-# (max tokens, HEADS, num_warps) measured in CUDA graphs on MTT S5000 for eight
-# heads per rank padded to 64; the last row covers the rest.
-_CONFIGS = ((16, 2, 4), (1024, 1, 2), (1 << 62, 8, 2))
+# (max tokens, HEADS, num_warps) measured on MTT S5000 for eight heads per rank
+# padded to 64; the last row covers the rest, prefill included, so the CUDA graph
+# captures compile every config.
+_CONFIGS = ((16, 2, 4), (1 << 62, 1, 2))
 
 
 @triton.jit
@@ -198,7 +199,7 @@ def rope_kv_insert_supported(
         and cos_sin_cache.dtype == torch.float32
         and cos_sin_cache.dim() == 2
         and cos_sin_cache.shape[1] == _ROPE_DIM
-        and cos_sin_cache.stride(1) == 1
+        and cos_sin_cache.is_contiguous()
     )
 
 
