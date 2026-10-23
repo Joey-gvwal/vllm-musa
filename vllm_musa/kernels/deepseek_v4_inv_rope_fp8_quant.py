@@ -64,7 +64,7 @@ def _dsv4_inv_rope_quant_rows_kernel(
     src = o_ptr + rows[:, None] * stride_ot + head.to(tl.int64) * stride_oh
     x = tl.load(src + d[None, :], mask=live[:, None], other=0.0).to(tl.float32)
 
-    # fma(x[2i], cos, x[2i+1] * sin) and fma(x[2i+1], cos, -x[2i] * sin) on the
+    # fma(x[2i+1], sin, x[2i] * cos) and fma(x[2i+1], cos, -x[2i] * sin) on the
     # RoPE dims, the rounding of the native op.
     is_rope = d >= NOPE_DIM
     rope_mask = live[:, None] & is_rope[None, :]
@@ -76,18 +76,18 @@ def _dsv4_inv_rope_quant_rows_kernel(
     sin = tl.load(cs + HALF_ROPE, mask=rope_mask, other=0.0)
     even = ((d & 1) == 0)[None, :]
     rotated = tl.where(
-        even, tl.fma(x, cos, partner * sin), tl.fma(x, cos, -(partner * sin))
+        even, tl.fma(partner, sin, x * cos), tl.fma(x, cos, -(partner * sin))
     )
     x = tl.where(is_rope[None, :], rotated, x)
 
     x = tl.reshape(x, (BLOCK_T, CHUNKS, GROUP))
     scale = tl.maximum(tl.max(tl.abs(x), axis=2) / FP8_MAX, SCALE_EPS)
-    # Round the positive normal scale up to a power of two in its bits.
-    scale = ((scale.to(tl.int32, bitcast=True) + 0x7FFFFF) & -0x800000).to(
-        tl.float32, bitcast=True
-    )
+    # exp2(ceil(log2(s))) like the native op: log2 of a scale just above a power
+    # of two can round to that power's exponent.
+    scale = tl.exp2(tl.ceil(tl.log2(scale)))
     q = tl.clamp(x / scale[:, :, None], -FP8_MAX, FP8_MAX)
     q = tl.reshape(q, (BLOCK_T, HEAD_DIM)).to(out_ptr.dtype.element_ty)
+    g = g.to(tl.int64)
     out = out_ptr + g * stride_out_g + rows[:, None] * stride_out_t + h * HEAD_DIM
     tl.store(out + d[None, :], q, mask=live[:, None])
 
@@ -121,7 +121,10 @@ def inv_rope_fp8_quant_supported(
         and o.shape[2] == _HEAD_DIM
         and o.stride(2) == 1
         and positions.dim() == 1
+        and positions.dtype in (torch.int32, torch.int64)
+        and positions.numel() == o.shape[0]
         and positions.is_contiguous()
+        and o.device == positions.device == cos_sin_cache.device
         and cos_sin_cache.dtype == torch.float32
         and cos_sin_cache.dim() == 2
         and cos_sin_cache.shape[1] == _ROPE_DIM

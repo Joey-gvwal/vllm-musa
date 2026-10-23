@@ -60,22 +60,26 @@ def _reference(o, positions, cache):
 
 
 @requires_mp31
-@pytest.mark.parametrize("tokens", [1, 5, 40, 161, 1030])
-def test_triton_kernel_matches_the_native_op(tokens) -> None:
+@pytest.mark.parametrize("tokens", [1, 5, 40, 161, 1030, 4096])
+@pytest.mark.parametrize(
+    "heads,groups,strided", [(8, 1, False), (8, 1, True), (16, 2, True)]
+)
+def test_triton_kernel_matches_the_native_op(tokens, heads, groups, strided) -> None:
     import vllm_musa._custom_ops  # noqa: F401
     from vllm_musa.kernels import deepseek_v4_inv_rope_fp8_quant as ir
 
     torch.manual_seed(tokens)
-    heads, groups = 8, 1
-    o = (torch.randn(tokens, heads, 512) * 4).to(torch.bfloat16).to("musa")
+    width = heads * 8 if strided else heads
+    o = (torch.randn(tokens, width, 512) * 4).to(torch.bfloat16).to("musa")
+    o = o[:, :heads]  # the real heads of the padded attention output
     positions = torch.randint(0, 8192, (tokens,), dtype=torch.int64).to("musa")
     cache = _rope_cache(8192)
     assert ir.inv_rope_fp8_quant_supported(o, positions, cache, 448, 64, 128, False)
     assert not ir.inv_rope_fp8_quant_supported(o, positions, cache, 448, 64, 128, True)
-    q, scales = ir.inv_rope_fp8_quant(o, positions, cache, groups, heads)
+    q, scales = ir.inv_rope_fp8_quant(o, positions, cache, groups, heads // groups)
     native = torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant
     native_q, native_scales = native(
-        o, positions, cache, groups, heads, 448, 64, 128, False
+        o, positions, cache, groups, heads // groups, 448, 64, 128, False
     )
     assert q.shape == native_q.shape and q.stride() == native_q.stride()
     assert scales.shape == native_scales.shape
@@ -84,14 +88,40 @@ def test_triton_kernel_matches_the_native_op(tokens) -> None:
     assert torch.equal(q.view(torch.uint8), native_q.view(torch.uint8))
 
     x, ref_scales = _reference(o, positions, cache)
-    assert torch.equal(scales[:, 0], ref_scales.view(tokens, heads * 4))
+    # The NoPE chunks hold BF16 values, whose scales the reference reproduces.
+    nope = scales.reshape(tokens, heads, 4)[..., :3]
+    assert torch.equal(nope, ref_scales[..., :3])
     # Within half an FP8 step of the rotated value: 2^-4 relative, 2^-10 scales below.
-    s = scales.view(tokens, heads, 4)[..., None]
-    deq = q.float().view(tokens, heads, 4, 128) * s
+    s = scales.reshape(tokens, heads, 4)[..., None]
+    deq = q.float().reshape(tokens, heads, 4, 128) * s
     assert ((deq - x).abs() <= x.abs() * 2**-4 + s * 2**-10).all()
 
     aligned = (tokens + 3) // 4 * 4
+    blocks = heads // groups * 4
     padded = scales.transpose(0, 1).as_strided(
-        (groups, aligned, heads * 4), (heads * 4 * aligned, heads * 4, 1)
+        (groups, aligned, blocks), (blocks * aligned, blocks, 1)
     )
     assert torch.count_nonzero(padded[:, tokens:]) == 0
+
+
+@requires_mp31
+def test_scales_just_above_a_power_of_two_match_the_native_op() -> None:
+    import vllm_musa._custom_ops  # noqa: F401
+    from vllm_musa.kernels import deepseek_v4_inv_rope_fp8_quant as ir
+
+    # A rotated value k ulps above 7 * 2^j puts amax / 448 just above 2^(j - 6).
+    combos = [(j, k) for j in range(-16, 13) for k in range(9)]
+    o = torch.zeros(len(combos), 8, 512, dtype=torch.bfloat16)
+    cache = torch.zeros(len(combos), 64, dtype=torch.float32)
+    cache[:, :32] = 1.0
+    for t, (j, k) in enumerate(combos):
+        partner = 2.0 ** (j - 10)
+        o[t, 0, 448], o[t, 0, 449] = 7.0 * 2.0**j, partner
+        cache[t, 32] = k * 2.0 ** (j - 21) / partner
+    o, cache = o.to("musa"), cache.to("musa")
+    positions = torch.arange(len(combos), device="musa")
+    q, scales = ir.inv_rope_fp8_quant(o, positions, cache, 1, 8)
+    native = torch.ops._C_musa_ops.deepseek_v4_fused_inv_rope_fp8_quant
+    native_q, native_scales = native(o, positions, cache, 1, 8, 448, 64, 128, False)
+    assert torch.equal(scales, native_scales)
+    assert torch.equal(q.view(torch.uint8), native_q.view(torch.uint8))
