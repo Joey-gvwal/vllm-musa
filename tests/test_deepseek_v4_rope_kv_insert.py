@@ -64,7 +64,8 @@ def test_triton_kernel_matches_the_native_op(tokens, padded, q_norm) -> None:
     kv = (torch.randn(tokens, 512) * 4).to(torch.bfloat16)
     kv[::3, :64] *= 1e-6  # groups under the 1e-4 amax floor
     kv = kv.to("musa")
-    positions = torch.randint(0, 8192, (tokens,), dtype=torch.int64).to("musa")
+    pos_dtype = torch.int32 if tokens % 2 == 0 else torch.int64
+    positions = torch.randint(0, 8192, (tokens,), dtype=pos_dtype).to("musa")
     slots = torch.randperm(num_blocks * block_size)[:tokens]
     slots[::7] = -1  # padding slots skip the insert
     num_slots = tokens - tokens // 4  # fewer slots than rows
@@ -105,3 +106,22 @@ def test_triton_kernel_matches_the_native_op(tokens, padded, q_norm) -> None:
     assert out.shape == ref.shape
     assert torch.equal(out, ref)
     assert torch.equal(kv_cache, native_cache)
+
+
+@requires_mp31
+def test_a_strided_rope_cache_keeps_the_native_op() -> None:
+    from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
+
+    q = torch.zeros(4, 8, 512, dtype=torch.bfloat16, device="musa")
+    kv = torch.zeros(4, 512, dtype=torch.bfloat16, device="musa")
+    kv_cache = torch.zeros(2, 64, 584, dtype=torch.uint8, device="musa")
+    slots = torch.arange(4, device="musa")
+    positions = torch.arange(4, device="musa")
+    cache = _rope_cache(16)
+    assert rk.rope_kv_insert_supported(q, kv, kv_cache, slots, positions, cache, 64, 64)
+    # The native op reads the cache rows at a stride of 64.
+    wide = torch.zeros(16, 128, device="musa")
+    wide[:, :64] = cache
+    assert not rk.rope_kv_insert_supported(
+        q, kv, kv_cache, slots, positions, wide[:, :64], 64, 64
+    )
