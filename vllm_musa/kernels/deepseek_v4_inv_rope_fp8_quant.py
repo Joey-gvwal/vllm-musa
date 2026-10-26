@@ -141,7 +141,8 @@ def inv_rope_fp8_quant(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """FP8 ``[token, group, heads * 512]`` and its ``[token, group, block]`` scales."""
     num_tokens, num_heads, _ = o.shape
-    assert num_heads == n_groups * heads_per_group and positions.numel() == num_tokens
+    if num_heads != n_groups * heads_per_group or positions.numel() != num_tokens:
+        raise ValueError("Head split or position count does not match the input")
     d = heads_per_group * _HEAD_DIM
     blocks = d // _QUANT_GROUP
     aligned = triton.cdiv(num_tokens, 4) * 4
