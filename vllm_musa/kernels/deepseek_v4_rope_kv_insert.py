@@ -62,6 +62,7 @@ def _dsv4_rope_kv_insert_kernel(
     HALF_ROPE: tl.constexpr,
     GROUP: tl.constexpr,
     TOKEN_BYTES: tl.constexpr,
+    SCALE_BYTES: tl.constexpr,
 ):
     HEAD_DIM: tl.constexpr = NOPE_DIM + 2 * HALF_ROPE
     PAIRS: tl.constexpr = HEAD_DIM // 2
@@ -79,7 +80,7 @@ def _dsv4_rope_kv_insert_kernel(
             in_block = slot - block * block_size
             block_base = cache_ptr + block * block_stride
             token = block_base + in_block * TOKEN_BYTES
-            scale = block_base + block_size * TOKEN_BYTES + in_block * 8
+            scale = block_base + block_size * TOKEN_BYTES + in_block * SCALE_BYTES
             kv = tl.load(kv_ptr + row * HEAD_DIM + d).to(tl.float32)
 
             # ceil(log2(amax / 448)) with amax >= 1e-4: the exponent of amax minus
@@ -250,6 +251,7 @@ def rope_kv_insert(
         HALF_ROPE=_ROPE_DIM // 2,
         GROUP=_QUANT_GROUP,
         TOKEN_BYTES=_TOKEN_BYTES,
+        SCALE_BYTES=_SCALE_BYTES,
         num_warps=num_warps,
     )
     return q_out

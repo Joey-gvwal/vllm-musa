@@ -24,14 +24,15 @@ def _rope_cache(max_pos: int) -> torch.Tensor:
 
 @requires_mp31
 @pytest.mark.parametrize("tokens", [1, 5, 40, 161, 1030, 4096])
+@pytest.mark.parametrize("heads", [7, 8])
 @pytest.mark.parametrize("padded", [64, 0])
 @pytest.mark.parametrize("q_norm", [False, True])
-def test_triton_kernel_matches_the_native_op(tokens, padded, q_norm) -> None:
+def test_triton_kernel_matches_the_native_op(tokens, heads, padded, q_norm) -> None:
     import vllm_musa._custom_ops  # noqa: F401
     from vllm_musa.kernels import deepseek_v4_rope_kv_insert as rk
 
     torch.manual_seed(tokens + padded)
-    heads, block_size, num_blocks = 8, 64, 80
+    block_size, num_blocks = 64, 80
     q = (torch.randn(tokens, heads, 512) * 4).to(torch.bfloat16)
     q[1::5] = 0  # a zero query, as the DSpark context insert passes
     q = q.to("musa")
