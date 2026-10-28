@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:10 +0800
+Subject: [PATCH] MUSA: bound DSV4 long-prefill indexer logits
+
+---
+ vllm/model_executor/layers/sparse_attn_indexer.py | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index a8894e9387..0cef23dd5e 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -23,6 +23,10 @@ from vllm.distributed import (
+     get_tensor_model_parallel_rank,
+     get_tp_group,
+ )
++from vllm_musa.optimization_contract import (
++    deepseek_v4_long_prefill_logits_budget_mb,
++    deepseek_v4_long_prefill_tp_partition_min_seq_len,
++)
+ from vllm.forward_context import get_forward_context
+ from vllm.logger import init_logger
+ from vllm.model_executor.custom_op import CustomOp

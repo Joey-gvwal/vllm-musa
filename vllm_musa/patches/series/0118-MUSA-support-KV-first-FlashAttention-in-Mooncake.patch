@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:09 +0800
+Subject: [PATCH] MUSA: support KV-first FlashAttention in Mooncake
+
+---
+ .../kv_connector/v1/mooncake/mooncake_connector.py            | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
+index 41c1337ecd..ec214e3a9a 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/mooncake/mooncake_connector.py
+@@ -1372,7 +1372,9 @@ class MooncakeConnectorWorker:
+ 
+     def shutdown(self):
+         """Cleanup background threads on destruction."""
+-        self.async_zmq_ctx.term()
++        async_zmq_ctx = getattr(self, "async_zmq_ctx", None)
++        if async_zmq_ctx is not None:
++            async_zmq_ctx.term()
+         if not self.is_kv_consumer:
+             self._sender_executor.shutdown(wait=False)
+             if self.sender_loop.is_running():

@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:09 +0800
+Subject: [PATCH] MUSA: mamba2-ssd-concrete-optional-pointer
+
+---
+ .../model_executor/layers/mamba/ops/ssd_chunk_scan.py | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+index 237dd33b52..e7732eb75c 100644
+--- a/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
++++ b/vllm/model_executor/layers/mamba/ops/ssd_chunk_scan.py
+@@ -488,6 +488,15 @@ def _chunk_scan_fwd(
+         else (0, 0, 0, 0)
+     )
+ 
++    # MUSA Triton 3.2.x requires optional pointer arguments to retain a
++    # concrete pointer type even when the constexpr branch is disabled.
++    initstates_ptr = initial_states
++    if is_musa_triton_32() and initial_states is None:
++        initstates_ptr = states
++
++    # Keep the BF16 dot lowering scoped to the affected MUSA Triton stack.
++    is_musa = is_musa_triton_32()
++
+     _chunk_scan_fwd_kernel[grid](
+         cb_ptr=cb,
+         x_ptr=x,
+@@ -499,7 +508,7 @@ def _chunk_scan_fwd(
+         C_ptr=C,
+         states_ptr=states,
+         D_ptr=D,
+-        initstates_ptr=initial_states,
++        initstates_ptr=initstates_ptr,
+         cu_chunk_seqlens_ptr=cu_chunk_seqlens,
+         chunk_size=chunk_size,
+         hdim=headdim,

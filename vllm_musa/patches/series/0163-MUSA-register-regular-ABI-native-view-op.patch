@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:11 +0800
+Subject: [PATCH] MUSA: register regular-ABI native view op
+
+---
+ csrc/musa_cuda_view.cu       | 56 ++++++++++++++++++++++++++++++++++
+ csrc/musa_dispatch_utils.h   | 58 ++++++++++++++++++++++++++++++++++++
+ csrc/musa_torch_bindings.cpp | 15 ++++++++++
+ 3 files changed, 129 insertions(+)
+ create mode 100644 csrc/musa_cuda_view.cu
+ create mode 100644 csrc/musa_dispatch_utils.h
+ create mode 100644 csrc/musa_torch_bindings.cpp
+
+diff --git a/csrc/musa_cuda_view.cu b/csrc/musa_cuda_view.cu
+new file mode 100644
+index 0000000000..41f2893016
+--- /dev/null
++++ b/csrc/musa_cuda_view.cu
+@@ -0,0 +1,56 @@
++#include <torch/all.h>
++#include <torch/cuda.h>
++#include <cuda_runtime.h>
++
++// MUSA: regular-ABI view op registered by vllm._C; torchada maps the CUDA
++// runtime calls to MUSA.
++torch::Tensor get_cuda_view_from_cpu_tensor(torch::Tensor& cpu_tensor) {
++  TORCH_CHECK(cpu_tensor.device().is_cpu(), "Input tensor must be on CPU");
++
++  if (cpu_tensor.numel() == 0) {
++    return torch::empty(cpu_tensor.sizes(),
++                        cpu_tensor.options().device(torch::kCUDA));
++  }
++
++  if (cpu_tensor.is_pinned()) {
++    void* host_ptr = const_cast<void*>(cpu_tensor.data_ptr());
++    void* device_ptr = nullptr;
++    cudaError_t err = cudaHostGetDevicePointer(&device_ptr, host_ptr, 0);
++    TORCH_CHECK(err == cudaSuccess,
++                "cudaHostGetDevicePointer failed: ", cudaGetErrorString(err));
++
++    return torch::from_blob(
++        device_ptr, cpu_tensor.sizes(), cpu_tensor.strides(),
++        [base = cpu_tensor](void*) {},
++        cpu_tensor.options().device(torch::kCUDA));
++  }
++
++  torch::Tensor contiguous_cpu = cpu_tensor.contiguous();
++  size_t nbytes = contiguous_cpu.nbytes();
++
++  void* host_ptr = nullptr;
++  cudaError_t err = cudaHostAlloc(&host_ptr, nbytes, cudaHostAllocMapped);
++  if (err != cudaSuccess) {
++    AT_ERROR("cudaHostAlloc failed: ", cudaGetErrorString(err));
++  }
++
++  err = cudaMemcpy(host_ptr, contiguous_cpu.data_ptr(), nbytes,
++                   cudaMemcpyDefault);
++  if (err != cudaSuccess) {
++    cudaFreeHost(host_ptr);
++    AT_ERROR("cudaMemcpy failed: ", cudaGetErrorString(err));
++  }
++
++  void* device_ptr = nullptr;
++  err = cudaHostGetDevicePointer(&device_ptr, host_ptr, 0);
++  if (err != cudaSuccess) {
++    cudaFreeHost(host_ptr);
++    AT_ERROR("cudaHostGetDevicePointer failed: ", cudaGetErrorString(err));
++  }
++
++  auto deleter = [host_ptr](void*) { cudaFreeHost(host_ptr); };
++
++  return torch::from_blob(device_ptr, contiguous_cpu.sizes(),
++                          contiguous_cpu.strides(), deleter,
++                          contiguous_cpu.options().device(torch::kCUDA));
++}
+diff --git a/csrc/musa_dispatch_utils.h b/csrc/musa_dispatch_utils.h
+new file mode 100644
+index 0000000000..09af7b7b89
+--- /dev/null
++++ b/csrc/musa_dispatch_utils.h
+@@ -0,0 +1,58 @@
++#pragma once
++
++// MUSA: ATen dispatch macros for the regular-ABI kernels.
++#include <torch/all.h>
++
++// Nested FP8 dispatch names the dispatched type 'fp8_t' instead of 'scalar_t'.
++#define AT_DISPATCH_FP8_CASE(enum_type, ...) \
++  AT_PRIVATE_CASE_TYPE_USING_HINT(enum_type, fp8_t, __VA_ARGS__)
++
++#define VLLM_DISPATCH_CASE_FP8_TYPES(...) \
++  AT_DISPATCH_FP8_CASE(at::ScalarType::Float8_e4m3fn, __VA_ARGS__)
++
++#define VLLM_DISPATCH_FP8_TYPES(TYPE, NAME, ...) \
++  AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FP8_TYPES(__VA_ARGS__))
++
++// Dispatch int32/int64 index tensors inside an outer value-type dispatch
++// without shadowing the outer scalar_t alias.
++#define VLLM_DISPATCH_IDX_CASE(enum_type, ...) \
++  AT_PRIVATE_CASE_TYPE_USING_HINT(enum_type, idx_t, __VA_ARGS__)
++
++#define VLLM_DISPATCH_CASE_IDX_TYPES(...)                  \
++  VLLM_DISPATCH_IDX_CASE(at::ScalarType::Int, __VA_ARGS__) \
++  VLLM_DISPATCH_IDX_CASE(at::ScalarType::Long, __VA_ARGS__)
++
++#define VLLM_DISPATCH_IDX_TYPES(TYPE, NAME, ...) \
++  AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_IDX_TYPES(__VA_ARGS__))
++
++#define VLLM_DISPATCH_CASE_FLOATING_TYPES(...)         \
++  AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
++  AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
++  AT_DISPATCH_CASE(at::ScalarType::BFloat16, __VA_ARGS__)
++
++#define VLLM_DISPATCH_FLOATING_TYPES(TYPE, NAME, ...) \
++  AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
++
++#define VLLM_DISPATCH_CASE_INTEGRAL_TYPES(...)         \
++  AT_DISPATCH_CASE(at::ScalarType::Byte, __VA_ARGS__)  \
++  AT_DISPATCH_CASE(at::ScalarType::Char, __VA_ARGS__)  \
++  AT_DISPATCH_CASE(at::ScalarType::Short, __VA_ARGS__) \
++  AT_DISPATCH_CASE(at::ScalarType::Int, __VA_ARGS__)   \
++  AT_DISPATCH_CASE(at::ScalarType::Long, __VA_ARGS__)
++
++#define VLLM_DISPATCH_CASE_INTEGRAL_AND_UNSIGNED_TYPES(...) \
++  AT_DISPATCH_CASE(at::ScalarType::Byte, __VA_ARGS__)       \
++  AT_DISPATCH_CASE(at::ScalarType::Char, __VA_ARGS__)       \
++  AT_DISPATCH_CASE(at::ScalarType::Short, __VA_ARGS__)      \
++  AT_DISPATCH_CASE(at::ScalarType::Int, __VA_ARGS__)        \
++  AT_DISPATCH_CASE(at::ScalarType::Long, __VA_ARGS__)       \
++  AT_DISPATCH_CASE(at::ScalarType::UInt16, __VA_ARGS__)     \
++  AT_DISPATCH_CASE(at::ScalarType::UInt32, __VA_ARGS__)     \
++  AT_DISPATCH_CASE(at::ScalarType::UInt64, __VA_ARGS__)
++
++#define VLLM_DISPATCH_INTEGRAL_TYPES(TYPE, NAME, ...) \
++  AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_INTEGRAL_TYPES(__VA_ARGS__))
++
++#define VLLM_DISPATCH_INTEGRAL_AND_UNSIGNED_TYPES(TYPE, NAME, ...) \
++  AT_DISPATCH_SWITCH(TYPE, NAME,                                   \
++                     VLLM_DISPATCH_CASE_INTEGRAL_AND_UNSIGNED_TYPES(__VA_ARGS__))
+diff --git a/csrc/musa_torch_bindings.cpp b/csrc/musa_torch_bindings.cpp
+new file mode 100644
+index 0000000000..f7fa7c561e
+--- /dev/null
++++ b/csrc/musa_torch_bindings.cpp
+@@ -0,0 +1,15 @@
++#include "core/registration.h"
++
++#include <torch/all.h>
++#include <torch/library.h>
++
++// MUSA: vllm._C carries only the regular-ABI CPU-to-device view op; the other
++// _C ops are registered by _C_stable_libtorch.
++torch::Tensor get_cuda_view_from_cpu_tensor(torch::Tensor& cpu_tensor);
++
++TORCH_LIBRARY_FRAGMENT(TORCH_EXTENSION_NAME, mcv) {
++  mcv.impl("get_cuda_view_from_cpu_tensor", torch::kCPU,
++           &get_cuda_view_from_cpu_tensor);
++}
++
++REGISTER_EXTENSION(TORCH_EXTENSION_NAME)

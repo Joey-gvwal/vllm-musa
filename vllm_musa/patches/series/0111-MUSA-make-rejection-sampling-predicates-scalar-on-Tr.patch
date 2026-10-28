@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:08 +0800
+Subject: [PATCH] MUSA: make rejection sampling predicates scalar on Triton
+
+---
+ .../gpu/spec_decode/rejection_sampler_utils.py       | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+index 4387b1d38a..7dd26ad9f3 100644
+--- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler_utils.py
+@@ -589,6 +589,8 @@ def _rejection_kernel(
+                 else:
+                     accepted = target_argmax == draft_sampled
+                 accepted &= is_valid_draft
++                accepted |= tl.zeros((1,), tl.int1)
++                accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0
+                 verifying = accepted
+                 accepted_length += accepted
+                 tl.store(
+@@ -626,7 +628,10 @@ def _rejection_kernel(
+                     h = tl.where(denom > 0.0, residual_mass / denom, 1.0)
+                 else:
+                     h = prefix_joint_ratio
+-                accepted_length = tl.where(u <= h, i + 1, accepted_length)
++                accepted = u <= h
++                accepted |= tl.zeros((1,), tl.int1)
++                accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0
++                accepted_length = tl.where(accepted, i + 1, accepted_length)
+                 tl.store(sampled_ptr + req_idx * sampled_stride + i, draft_sampled)
+             else:
+                 # Speculative decoding (Leviathan et al., 2023): https://arxiv.org/abs/2211.17192
+@@ -663,12 +668,14 @@ def _rejection_kernel(
+                     # Probability ratio test: p(x) > u * q(x)
+                     # Equivalent log form: log_p(x) > log(u) + log_q(x)
+                     accepted = target_logprob > tl.log(u) + draft_logprob
++                accepted |= tl.zeros((1,), tl.int1)
++                accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0
+                 verifying = accepted
+                 accepted_length += accepted
+                 tl.store(sampled_ptr + req_idx * sampled_stride + i, draft_sampled)
+ 
+     tl.store(rejected_steps_ptr + req_idx, accepted_length)
+-    if USE_BLOCK_VERIFICATION and not is_greedy and accepted_length < num_draft_tokens:
++    if USE_BLOCK_VERIFICATION and ((not is_greedy) & (accepted_length < num_draft_tokens)):
+         # Compute the target and draft log exponential sums for the
+         # rejected token.
+         rejected_idx = start_idx + accepted_length
+@@ -711,6 +718,7 @@ def _seeded_resample_argmax(
+     return gumbel_block_argmax(
+         residual_logits,
+         block,
++        block,
+         mask,
+         resample_token_idx,
+         expanded_idx_mapping_ptr,

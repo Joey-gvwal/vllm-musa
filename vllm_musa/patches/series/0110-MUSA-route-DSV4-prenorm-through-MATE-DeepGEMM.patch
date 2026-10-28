@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:08 +0800
+Subject: [PATCH] MUSA: route DSV4 prenorm through MATE DeepGEMM
+
+---
+ vllm/model_executor/kernels/mhc/tilelang.py | 28 +++++++++++++++++++++
+ vllm/utils/deep_gemm.py                     | 11 ++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
+index 75d83a6d37..38b2767a0a 100644
+--- a/vllm/model_executor/kernels/mhc/tilelang.py
++++ b/vllm/model_executor/kernels/mhc/tilelang.py
+@@ -732,6 +732,34 @@ def mhc_pre_broadcast_tilelang(
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+     """First-layer mHC pre for a residual broadcast from ``(T, H)``."""
+     # n_splits is retained for the shared API; split selection is internal.
++    if residual.device.type == "musa":
++        assert norm_weight is not None, (
++            "broadcast mHC pre currently requires fused RMSNorm"
++        )
++        hidden_size = residual.shape[-1]
++        hc_mult = fn.shape[1] // hidden_size
++        residual_out = (
++            residual.unsqueeze(-2)
++            .expand(*residual.shape[:-1], hc_mult, hidden_size)
++            .contiguous()
++        )
++        from vllm_musa.deepseek_v4_mhc import mhc_pre_musa_with_norm
++
++        post_mix, comb_mix, layer_input = mhc_pre_musa_with_norm(
++            residual_out,
++            fn,
++            hc_scale,
++            hc_base,
++            rms_eps,
++            hc_pre_eps,
++            hc_sinkhorn_eps,
++            hc_post_mult_value,
++            sinkhorn_repeat,
++            norm_weight,
++            norm_eps,
++        )
++        return residual_out, post_mix, comb_mix, layer_input
++
+     from vllm.model_executor.kernels.mhc.tilelang_kernels import (
+         _MHC_PRE_BIG_FUSE_TILELANG_KERNEL,
+     )
+diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
+index 5a673a1074..f1be74891e 100644
+--- a/vllm/utils/deep_gemm.py
++++ b/vllm/utils/deep_gemm.py
+@@ -333,6 +333,17 @@ def _lazy_init() -> None:
+     _tf32_hc_prenorm_gemm_impl = getattr(_dg, "tf32_hc_prenorm_gemm", None)
+     _mega_mhc_impl = getattr(_dg, "mega_mhc", None)
+     _bf16_mega_gate_impl = getattr(_dg, "bf16_mega_gate", None)
++    if _tf32_hc_prenorm_gemm_impl is None:
++        # MUSA provides the TF32 HyperConnection prenorm kernel through MATE,
++        # while the standalone deep_gemm package does not expose it.
++        try:
++            import mate.deep_gemm as _mate_dg
++        except Exception:
++            _mate_dg = None
++        if _mate_dg is not None:
++            _tf32_hc_prenorm_gemm_impl = getattr(
++                _mate_dg, "tf32_hc_prenorm_gemm", None
++            )
+     _get_mn_major_tma_aligned_tensor_impl = getattr(
+         _dg, "get_mn_major_tma_aligned_tensor", None
+     )

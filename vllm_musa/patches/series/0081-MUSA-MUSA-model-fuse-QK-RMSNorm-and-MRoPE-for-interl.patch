@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] MUSA: MUSA(model): fuse QK-RMSNorm and MRoPE for interleaved
+ MRoPE
+
+---
+ vllm/model_executor/models/qwen3_next.py | 68 +++++++++++++++++++++++-
+ 1 file changed, 66 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
+index d6e72123ba..2e87704de1 100644
+--- a/vllm/model_executor/models/qwen3_next.py
++++ b/vllm/model_executor/models/qwen3_next.py
+@@ -339,6 +339,23 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+         return final_hidden_states.view(orig_shape)
+ 
+ 
++_MUSA_MROPE_COS_SIN_CACHE: dict[tuple[int, torch.dtype], torch.Tensor] = {}
++
++
++def _musa_mrope_cos_sin_cache(
++    cos_sin_cache: torch.Tensor, dtype: torch.dtype
++) -> torch.Tensor:
++    """Convert the shared rotary cache once for the fused MUSA kernel."""
++    if cos_sin_cache.dtype == dtype:
++        return cos_sin_cache
++    key = (cos_sin_cache.data_ptr(), dtype)
++    converted = _MUSA_MROPE_COS_SIN_CACHE.get(key)
++    if converted is None:
++        converted = cos_sin_cache.to(dtype)
++        _MUSA_MROPE_COS_SIN_CACHE[key] = converted
++    return converted
++
++
+ class Qwen3NextAttention(nn.Module):
+     def __init__(
+         self,
+@@ -454,13 +471,60 @@ class Qwen3NextAttention(nn.Module):
+             and supports_dtype
+             and (text_only or supports_mrope)
+         )
++        self.use_gated_qkv_rms_norm_rope = (
++            self.attn_output_gate
++            and self.dual_chunk_attention_config is None
++            and hasattr(self.rotary_emb, "cos_sin_cache")
++        )
++        self.mrope_section = list(getattr(self.rotary_emb, "mrope_section", None) or [])
++        self.mrope_interleaved = bool(
++            getattr(self.rotary_emb, "mrope_interleaved", False)
++        )
++        from vllm_musa.optimization_contract import (
++            OptimizationFeature,
++            resolve_optimization_contract,
++        )
++
++        optimization_contract = resolve_optimization_contract(
++            model_config=model_config
++        )
++        self._musa_fused_qk_mrope = (
++            self.attn_output_gate
++            and current_platform.is_musa()
++            and optimization_contract.prefers(
++                OptimizationFeature.QWEN35_INTERLEAVED_MROPE_QK
++            )
++            and len(self.mrope_section) == 3
++            and self.mrope_interleaved
++        )
++        self._musa_mrope_cos_sin_cache = None
++        self._musa_fused_qk_mrope_cache = False
++        if self._musa_fused_qk_mrope:
++            dtype = model_config.dtype if model_config else torch.bfloat16
++            self._musa_fused_qk_mrope = dtype == torch.bfloat16
++            if self._musa_fused_qk_mrope:
++                self._musa_mrope_cos_sin_cache = _musa_mrope_cos_sin_cache(
++                    self.rotary_emb.cos_sin_cache, dtype
++                )
++                self._musa_mrope_section = tuple(int(x) for x in self.mrope_section)
++                self._musa_fused_qk_mrope_cache = getattr(
++                    self.attn.impl,
++                    "qwen3_qk_rope_kvcache_supported",
++                    lambda: False,
++                )()
+ 
+     def _project_qkv_gate(
+         self,
+         qkv: torch.Tensor,
+         positions: torch.Tensor,
+-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+-        """Return post-norm, post-RoPE (q, k, v) and the pre-sigmoid gate.
++    ) -> tuple[
++        torch.Tensor,
++        torch.Tensor,
++        torch.Tensor,
++        torch.Tensor | None,
++        torch.Tensor | None,
++    ]:
++        """Return post-norm Q/K/V, gate, and an optional KV-cache dependency.
+ 
+         Dispatches between the fused Triton kernel and the eager
+         split + QK-RMSNorm + RoPE path. ``gate`` is ``None`` when output

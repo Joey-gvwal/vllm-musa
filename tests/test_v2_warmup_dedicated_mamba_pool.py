@@ -8,12 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH = (
-    ROOT
-    / "vllm_musa"
-    / "patches"
-    / "series"
-    / "0054-MUSA-number-warmup-blocks-within-each-dedicated-Mamb.patch"
+PATCH = next(
+    (ROOT / "vllm_musa" / "patches" / "series").glob(
+        "*-number-warmup-blocks-within-each-dedicated-Mamb.patch"
+    )
 )
 
 # Nemotron-3.5 MTP6 shape: four Mamba groups and one attention group.

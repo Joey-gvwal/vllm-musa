@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:11 +0800
+Subject: [PATCH] MUSA: export attention compatibility helpers
+
+---
+ vllm/v1/attention/backends/utils.py   | 19 +++++++++++++++++++
+ vllm/v1/attention/ops/common.py       |  7 +++++++
+ vllm/v1/attention/ops/dcp_alltoall.py |  4 ++++
+ 3 files changed, 30 insertions(+)
+ create mode 100644 vllm/v1/attention/ops/dcp_alltoall.py
+
+diff --git a/vllm/v1/attention/backends/utils.py b/vllm/v1/attention/backends/utils.py
+index f93156d53f..473ea1174c 100644
+--- a/vllm/v1/attention/backends/utils.py
++++ b/vllm/v1/attention/backends/utils.py
+@@ -1,3 +1,4 @@
++import functools
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ import math
+@@ -256,6 +257,24 @@ def record_kv_cache_layout(cache_config: CacheConfig, layout_name: str) -> None:
+     cache_config.kv_cache_layout = layout.name
+ 
+ 
++_KV_CACHE_LAYOUT_OVERRIDE: str | None = None
++
++
++@functools.lru_cache
++def get_kv_cache_layout() -> str:
++    """Compatibility accessor for MUSA backends ported from v0.28."""
++    if _KV_CACHE_LAYOUT_OVERRIDE is not None:
++        return _KV_CACHE_LAYOUT_OVERRIDE
++    requested = getattr(envs, "VLLM_KV_CACHE_LAYOUT", None)
++    return requested or "NHD"
++
++
++def set_kv_cache_layout(layout: str | None) -> None:
++    global _KV_CACHE_LAYOUT_OVERRIDE
++    _KV_CACHE_LAYOUT_OVERRIDE = layout
++    get_kv_cache_layout.cache_clear()
++
++
+ def resolve_kv_cache_layout(
+     vllm_config: VllmConfig,
+     supported_layouts: list[list[str]],
+diff --git a/vllm/v1/attention/ops/common.py b/vllm/v1/attention/ops/common.py
+index 5c1677cac4..89ddc6f689 100644
+--- a/vllm/v1/attention/ops/common.py
++++ b/vllm/v1/attention/ops/common.py
+@@ -385,3 +385,10 @@ def unpack_seq_triton(
+ 
+ _PACK_SEQ_TRITON_KERNEL = PackSeqTritonKernel()
+ _UNPACK_SEQ_TRITON_KERNEL = UnpackSeqTritonKernel()
++
++# v0.28 MUSA backends imported the DCP combine helper from this module.
++# v0.30 moved it to dcp.py; retain the compatibility export.
++try:
++    from vllm.v1.attention.ops.dcp import cp_lse_ag_out_rs  # noqa: F401
++except ImportError:
++    cp_lse_ag_out_rs = None
+diff --git a/vllm/v1/attention/ops/dcp_alltoall.py b/vllm/v1/attention/ops/dcp_alltoall.py
+new file mode 100644
+index 0000000000..2cef956d38
+--- /dev/null
++++ b/vllm/v1/attention/ops/dcp_alltoall.py
+@@ -0,0 +1,4 @@
++"""Compatibility exports for v0.28 MUSA attention backends."""
++from vllm.v1.attention.ops.dcp import dcp_a2a_lse_reduce
++
++__all__ = ["dcp_a2a_lse_reduce"]

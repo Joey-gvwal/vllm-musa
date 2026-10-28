@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:06 +0800
+Subject: [PATCH] MUSA: vllm.model_executor.kernels.mhc.tilelang
+
+---
+ vllm/model_executor/kernels/mhc/tilelang.py | 49 +++++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+
+diff --git a/vllm/model_executor/kernels/mhc/tilelang.py b/vllm/model_executor/kernels/mhc/tilelang.py
+index 62741bbda1..75d83a6d37 100644
+--- a/vllm/model_executor/kernels/mhc/tilelang.py
++++ b/vllm/model_executor/kernels/mhc/tilelang.py
+@@ -579,6 +579,26 @@ def mhc_pre_tilelang(
+         layer_input: shape (..., hidden_size), dtype torch.bfloat16
+ 
+     """
++    # MUSA: the upstream prenorm GEMM lowers to deep_gemm's tf32_hc_prenorm_gemm,
++    # which the MUSA deep_gemm backend does not provide. Route the whole pre
++    # block through the MUSA MHC provider, which selects a native or TileLang
++    # path without that symbol.
++    if residual.device.type == "musa":
++        from vllm_musa.deepseek_v4_mhc import mhc_pre_musa_with_norm
++
++        return mhc_pre_musa_with_norm(
++            residual,
++            fn,
++            hc_scale,
++            hc_base,
++            rms_eps,
++            hc_pre_eps,
++            hc_sinkhorn_eps,
++            hc_post_mult_value,
++            sinkhorn_repeat,
++            norm_weight,
++            norm_eps,
++        )
+     from vllm.model_executor.kernels.mhc.tilelang_kernels import (
+         _MHC_PRE_BIG_FUSE_TILELANG_KERNEL,
+     )
+@@ -794,6 +814,12 @@ def mhc_post_tilelang(
+     post_layer_mix: torch.Tensor,
+     comb_res_mix: torch.Tensor,
+ ) -> torch.Tensor:
++    # MUSA: route the post block through the MUSA MHC provider so it does not
++    # depend on the CUDA TileLang post kernels.
++    if residual.device.type == "musa":
++        from vllm_musa.deepseek_v4_mhc import mhc_post_musa
++
++        return mhc_post_musa(x, residual, post_layer_mix, comb_res_mix)
+     from vllm.model_executor.kernels.mhc.tilelang_kernels import (
+         _MHC_POST_TILELANG_KERNEL,
+     )
+@@ -845,6 +871,29 @@ def mhc_fused_post_pre_tilelang(
+         layer_input_cur: shape (..., hidden_size)
+ 
+     """
++    # MUSA: same deep_gemm tf32_hc_prenorm_gemm gap as mhc_pre_tilelang. Run the
++    # post+pre pair through the MUSA MHC provider.
++    if residual.device.type == "musa":
++        from vllm_musa.deepseek_v4_mhc import mhc_fused_post_pre_musa
++
++        return mhc_fused_post_pre_musa(
++            x,
++            residual,
++            post_layer_mix,
++            comb_res_mix,
++            fn,
++            hc_scale,
++            hc_base,
++            rms_eps,
++            hc_pre_eps,
++            hc_sinkhorn_eps,
++            hc_post_mult_value,
++            sinkhorn_repeat,
++            n_splits,
++            tile_n,
++            norm_weight,
++            norm_eps,
++        )
+     from vllm.model_executor.kernels.mhc.tilelang_kernels import (
+         _MHC_FUSED_TILELANG_KERNEL,
+         _MHC_POST_TILELANG_KERNEL,

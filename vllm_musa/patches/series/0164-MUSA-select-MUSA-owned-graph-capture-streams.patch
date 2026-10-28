@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:11 +0800
+Subject: [PATCH] MUSA: select MUSA-owned graph capture streams
+
+---
+ vllm/compilation/cuda_graph.py        | 9 ++++++++-
+ vllm/v1/worker/gpu/cudagraph_utils.py | 8 +++++++-
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/compilation/cuda_graph.py b/vllm/compilation/cuda_graph.py
+index 2dea34e0ff..887836623b 100644
+--- a/vllm/compilation/cuda_graph.py
++++ b/vllm/compilation/cuda_graph.py
+@@ -314,7 +314,14 @@ class CUDAGraphWrapper:
+                 with torch.cuda.graph(
+                     cudagraph,
+                     pool=graph_pool,
+-                    stream=current_stream(),
++                    # torch_musa selects a dedicated non-default capture
++                    # stream when stream is None. Capturing on the current
++                    # default stream raises in MUSA graph capture.
++                    stream=(
++                        None
++                        if current_platform.device_type == "musa"
++                        else current_stream()
++                    ),
+                 ):
+                     # `output` is managed by pytorch's cudagraph pool
+                     output = self.runnable(*args, **kwargs)
+diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
+index 73be62319a..1a9e29fb53 100644
+--- a/vllm/v1/worker/gpu/cudagraph_utils.py
++++ b/vllm/v1/worker/gpu/cudagraph_utils.py
+@@ -408,11 +408,17 @@ class CudaGraphManager:
+     def needs_capture(self) -> bool:
+         return len(self._capture_descs) > 0
+ 
+-    def _capture_stream(self, desc: BatchExecutionDescriptor) -> torch.cuda.Stream:
++    def _capture_stream(
++        self, desc: BatchExecutionDescriptor
++    ) -> torch.cuda.Stream | None:
+         """Capture on the stream used by the microbatch threads."""
+         if desc.num_ubatches > 1:
+             assert self.ubatch_runner is not None
+             return self.ubatch_runner.capture_stream
++        # torch_musa.graph uses its own non-default stream when none is
++        # supplied; capturing on the current default stream is unsupported.
++        if current_platform.device_type == "musa":
++            return None
+         return current_stream()
+ 
+     @torch.inference_mode()

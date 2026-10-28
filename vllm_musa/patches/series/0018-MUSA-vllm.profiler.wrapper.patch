@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:04 +0800
+Subject: [PATCH] MUSA: vllm.profiler.wrapper
+
+---
+ vllm/profiler/wrapper.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/vllm/profiler/wrapper.py b/vllm/profiler/wrapper.py
+index ebe7d90c3b..312d2c06d4 100644
+--- a/vllm/profiler/wrapper.py
++++ b/vllm/profiler/wrapper.py
+@@ -217,6 +217,7 @@ TorchProfilerActivityMap = {
+     "CPU": torch.profiler.ProfilerActivity.CPU,
+     "CUDA": torch.profiler.ProfilerActivity.CUDA,
+     "PrivateUse1": torch.profiler.ProfilerActivity.PrivateUse1,
++    "MUSA": torch.profiler.ProfilerActivity.MUSA,
+     "XPU": torch.profiler.ProfilerActivity.XPU,
+ }
+ 
+@@ -683,6 +684,7 @@ class CudaProfilerWrapper(WorkerProfiler):
+ _DEFAULT_TORCH_PROFILER_ACTIVITIES: dict[str, tuple[TorchProfilerActivity, ...]] = {
+     "cpu": ("CPU",),
+     "cuda": ("CPU", "CUDA"),
++    "musa": ("CPU", "MUSA"),
+     "xpu": ("CPU", "XPU"),
+ }
+ _SUPPORTED_TORCH_PROFILER_ACTIVITIES = {
+@@ -692,6 +694,7 @@ _SUPPORTED_TORCH_PROFILER_ACTIVITIES = {
+ _SUPPORTED_PROFILER_KINDS: dict[str, frozenset[ProfilerKind]] = {
+     "cpu": frozenset(("torch",)),
+     "cuda": frozenset(("torch", "cuda", "proton")),
++    "musa": frozenset(("torch", "cuda", "proton")),
+     "xpu": frozenset(("torch",)),
+ }
+ 

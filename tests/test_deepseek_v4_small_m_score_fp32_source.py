@@ -7,7 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PATCH = next(
     (REPO_ROOT / "vllm_musa/patches/series").glob(
-        "0090-MUSA-*DeepSeek-V4-small-M-score-FP32*.patch"
+        "0014-MUSA-vllm.models.deepseek_v4.attention.patch"
     )
 )
 

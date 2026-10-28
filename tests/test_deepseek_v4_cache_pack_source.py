@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+ATTENTION = ROOT / "third_party" / "vllm" / "vllm" / "models" / "deepseek_v4" / "attention.py"
 
 
 def test_flashmla_cache_pack_uses_one_warp_per_fp8_group():
@@ -40,9 +41,30 @@ def test_flashmla_q_pad_is_written_in_the_fused_kernel():
     assert "int64_t in_heads, int64_t out_heads" in source
     assert "if (head >= in_heads)" in source
     assert "q_head_padded" in source
-    assert "int q_head_padded=0) -> Tensor" in (
+    assert "int q_head_padded=0, bool apply_q_norm=True) -> Tensor" in (
         ROOT / "csrc/musa/torch_bindings.cpp"
     ).read_text()
     assert "q_head_padded: int = 0" in wrapper
-    assert "F.pad(q," not in patch
-    assert "padded_heads," in patch
+    pad_removal = next(
+        (ROOT / "vllm_musa/patches/series").glob("0174-*.patch")
+    ).read_text()
+    assert "+        return F.pad(q," in patch
+    assert "-        return F.pad(q," in pad_removal
+    assert "+        padded_heads," in pad_removal
+
+
+
+def test_final_attention_keeps_padding_outside_musa_cache_pack() -> None:
+    source = ATTENTION.read_text()
+    method_start = source.index("    def _fused_qnorm_rope_kv_insert(")
+    method_end = source.index("    def ", method_start + 1)
+    method = source[method_start:method_end]
+
+    assert "if self.n_local_heads < self.padded_heads:" in method
+    profile_pad = method.index("if self.n_local_heads < self.padded_heads:")
+    native_call = method.index(
+        "return _musa_deepseek_v4_qnorm_rope_kv_insert(", profile_pad
+    )
+    assert "F.pad(" in method[profile_pad:native_call]
+    assert "self.padded_heads," in method[native_call:]
+    assert "F.pad(" not in method[native_call:]

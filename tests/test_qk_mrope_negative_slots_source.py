@@ -2,6 +2,7 @@
 """Source contracts for negative qk_mrope cache slots."""
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -55,13 +56,17 @@ def test_specialized_cache_kernel_guards_negative_slots(kernel_name: str) -> Non
 
     value_cache_block = _braced_body(body, "if (group == 0 && write_cache)")
     assert "v_cache" in value_cache_block
-    assert body.count("v_cache") == value_cache_block.count("v_cache")
+    v_cache_access = re.compile(r"\bv_cache\s*(?:\[|\+)")
+    assert len(v_cache_access.findall(body)) == len(
+        v_cache_access.findall(value_cache_block)
+    )
 
     cache_write_blocks = _all_braced_bodies(body, "if (write_cache)")
     assert cache_write_blocks
     assert any("k_cache" in block for block in cache_write_blocks)
-    assert body.count("k_cache") == sum(
-        block.count("k_cache") for block in cache_write_blocks
+    k_cache_access = re.compile(r"\bk_cache\s*(?:\[|\+)")
+    assert len(k_cache_access.findall(body)) == sum(
+        len(k_cache_access.findall(block)) for block in cache_write_blocks
     )
     assert all("k_out" not in block for block in cache_write_blocks)
     assert "if constexpr (STORE_K_OUT)" in body
@@ -78,13 +83,12 @@ def test_generic_cache_kernel_guards_negative_slots_but_keeps_k_out() -> None:
 
     value_cache_block = _braced_body(body, "if (group == 0 && write_cache)")
     assert "v_cache" in value_cache_block
-    assert body.count("v_cache") == value_cache_block.count("v_cache")
+    assert body.count("v_cache +") == value_cache_block.count("v_cache +")
 
     cache_write_blocks = _all_braced_bodies(body, "if (write_cache)")
     assert len(cache_write_blocks) == 2
     assert all("k_cache" in block for block in cache_write_blocks)
-    assert body.count("k_cache") == sum(
-        block.count("k_cache") for block in cache_write_blocks
-    )
+    for write in ("k_cache[", "k_cache +"):
+        assert body.count(write) == sum(block.count(write) for block in cache_write_blocks)
     assert all("k_out" not in block for block in cache_write_blocks)
     assert body.count("if (k_out != nullptr)") == 2

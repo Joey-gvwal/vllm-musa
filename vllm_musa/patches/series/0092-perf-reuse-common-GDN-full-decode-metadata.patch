@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] perf: reuse common GDN full decode metadata
+
+---
+ .../v1/attention/test_gdn_metadata_builder.py | 19 +++++++++++
+ vllm/v1/attention/backends/gdn_attn.py        | 34 ++++++++++++-------
+ 2 files changed, 41 insertions(+), 12 deletions(-)
+
+diff --git a/tests/v1/attention/test_gdn_metadata_builder.py b/tests/v1/attention/test_gdn_metadata_builder.py
+index 4b52eb9c09..53592dfdb9 100644
+--- a/tests/v1/attention/test_gdn_metadata_builder.py
++++ b/tests/v1/attention/test_gdn_metadata_builder.py
+@@ -488,3 +488,22 @@ def test_update_block_table_regathers_checkpoint(num_spec):
+     assert not torch.equal(
+         actual.checkpoint.state_indices, source.checkpoint.state_indices
+     )
++
++
++def test_full_cudagraph_regular_decode_reuses_common_tensors():
++    """Uniform non-spec decode can use stable model-runner buffers directly."""
++    builder = _create_gdn_builder(full_cuda_graph=True)
++    builder.vllm_config.cache_config.mamba_cache_mode = "none"
++    batch = BatchSpec(seq_lens=[40, 30, 20], query_lens=[1, 1, 1])
++    common = create_common_attn_metadata(batch, BLOCK_SIZE, DEVICE)
++
++    meta = builder.build(common_prefix_len=0, common_attn_metadata=common)
++
++    assert meta.non_spec_query_start_loc is not None
++    assert meta.non_spec_query_start_loc.data_ptr() == common.query_start_loc.data_ptr()
++    assert meta.non_spec_state_indices_tensor is not None
++    assert (
++        meta.non_spec_state_indices_tensor.data_ptr()
++        == common.block_table_tensor[:, 0].data_ptr()
++    )
++    assert common._num_computed_tokens_cache is None
+diff --git a/vllm/v1/attention/backends/gdn_attn.py b/vllm/v1/attention/backends/gdn_attn.py
+index 0ea954b64a..0eb22520a0 100644
+--- a/vllm/v1/attention/backends/gdn_attn.py
++++ b/vllm/v1/attention/backends/gdn_attn.py
+@@ -590,20 +590,30 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
+             num_accepted_tokens[num_spec_decodes:].fill_(1)
+ 
+         if self._stage_decode(num_prefills, num_decodes, num_spec_decodes):
+-            self.non_spec_state_indices_tensor[:num_decodes].copy_(
+-                non_spec_state_indices_tensor, non_blocking=True
++            reuse_common_decode_tensors = (
++                self.vllm_config.cache_config.mamba_cache_mode == "none"
++                and num_decodes == batch_size
+             )
+-            non_spec_state_indices_tensor = self.non_spec_state_indices_tensor[
+-                :batch_size
+-            ]
+-            non_spec_state_indices_tensor[num_decodes:].fill_(NULL_BLOCK_ID)
++            if not reuse_common_decode_tensors:
++                self.non_spec_state_indices_tensor[:num_decodes].copy_(
++                    non_spec_state_indices_tensor, non_blocking=True
++                )
++                non_spec_state_indices_tensor = self.non_spec_state_indices_tensor[
++                    :batch_size
++                ]
++                non_spec_state_indices_tensor[num_decodes:].fill_(NULL_BLOCK_ID)
+ 
+-            self.non_spec_query_start_loc[: num_decodes + 1].copy_(
+-                non_spec_query_start_loc, non_blocking=True
+-            )
+-            non_spec_num_query_tokens = non_spec_query_start_loc[-1]  # type: ignore[index]
+-            non_spec_query_start_loc = self.non_spec_query_start_loc[: batch_size + 1]
+-            non_spec_query_start_loc[num_decodes + 1 :].fill_(non_spec_num_query_tokens)
++                self.non_spec_query_start_loc[: num_decodes + 1].copy_(
++                    non_spec_query_start_loc, non_blocking=True
++                )
++                non_spec_query_start_loc = self.non_spec_query_start_loc[
++                    : batch_size + 1
++                ]
++                if num_decodes < batch_size:
++                    assert non_spec_query_start_loc_cpu is not None
++                    non_spec_query_start_loc[num_decodes + 1 :].fill_(
++                        non_spec_query_start_loc_cpu[-1].item()
++                    )
+ 
+         attn_metadata = GDNAttentionMetadata(
+             num_prefills=num_prefills,

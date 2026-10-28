@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:09 +0800
+Subject: [PATCH] MUSA: bypass grouped DeepGEMM UE8M0 cast on MATE 0.2.6
+
+---
+ vllm/utils/deep_gemm.py | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/vllm/utils/deep_gemm.py b/vllm/utils/deep_gemm.py
+index f1be74891e..f3f1633901 100644
+--- a/vllm/utils/deep_gemm.py
++++ b/vllm/utils/deep_gemm.py
+@@ -588,6 +588,8 @@ def m_grouped_fp8_gemm_nt_contiguous(*args, **kwargs):
+     _lazy_init()
+     if _grouped_impl is None:
+         return _missing(*args, **kwargs)
++    if current_platform.is_musa():
++        return _grouped_impl(*args, **kwargs)
+     return _grouped_impl(
+         *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
+     )
+@@ -597,6 +599,8 @@ def m_grouped_fp8_fp4_gemm_nt_contiguous(*args, **kwargs):
+     _lazy_init()
+     if _grouped_fp4_impl is None:
+         return _missing(*args, **kwargs)
++    if current_platform.is_musa():
++        return _grouped_fp4_impl(*args, **kwargs)
+     return _grouped_fp4_impl(
+         *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
+     )
+@@ -606,6 +610,8 @@ def fp8_m_grouped_gemm_nt_masked(*args, **kwargs):
+     _lazy_init()
+     if _grouped_masked_impl is None:
+         return _missing(*args, **kwargs)
++    if current_platform.is_musa():
++        return _grouped_masked_impl(*args, **kwargs)
+     return _grouped_masked_impl(
+         *args, disable_ue8m0_cast=not is_deep_gemm_e8m0_used(), **kwargs
+     )

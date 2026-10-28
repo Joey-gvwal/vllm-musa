@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] perf: view Qwen identity logits hidden state
+
+---
+ vllm/v1/worker/gpu/model_runner.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 63d66f579f..cf15b90278 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1602,7 +1602,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             logits = all_to_all_logits(local_logits, shard_metadata)
+             logits = logits[:, : self.vocab_size]
+         else:
+-            sample_hidden_states = hidden_states[input_batch.logits_indices]
++            selector = getattr(self, "_musa_select_sample_hidden_states", None)
++            sample_hidden_states = (
++                None if selector is None else selector(hidden_states, input_batch)
++            )
++            if sample_hidden_states is None:
++                sample_hidden_states = hidden_states[input_batch.logits_indices]
+             logits = self.model.compute_logits(sample_hidden_states)
+ 
+         invalid_drafts = None

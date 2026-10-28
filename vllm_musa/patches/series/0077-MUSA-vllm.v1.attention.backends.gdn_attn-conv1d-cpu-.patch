@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] MUSA: vllm.v1.attention.backends.gdn_attn conv1d cpu seq_lens
+
+---
+ vllm/v1/attention/backends/gdn_attn.py | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/vllm/v1/attention/backends/gdn_attn.py b/vllm/v1/attention/backends/gdn_attn.py
+index 1bbba60d05..0ea954b64a 100644
+--- a/vllm/v1/attention/backends/gdn_attn.py
++++ b/vllm/v1/attention/backends/gdn_attn.py
+@@ -60,6 +60,9 @@ class GDNAttentionMetadata:
+     non_spec_query_start_loc: torch.Tensor | None = (
+         None  # shape: [batch - num_spec_decodes + 1,]
+     )
++    # MUSA: CPU copy of non_spec_query_start_loc so the tilelang conv1d wrapper
++    # derives seq_lens without a per-call device->host sync.
++    non_spec_query_start_loc_cpu: torch.Tensor | None = None
+ 
+     spec_state_indices_tensor: torch.Tensor | None = None  # shape: [batch, num_spec]
+     non_spec_state_indices_tensor: torch.Tensor | None = (
+@@ -620,6 +623,7 @@ class GDNAttentionMetadataBuilder(AttentionMetadataBuilder[GDNAttentionMetadata]
+             aiter_prefill_metadata=aiter_prefill_metadata,
+             spec_query_start_loc=spec_query_start_loc,
+             non_spec_query_start_loc=non_spec_query_start_loc,
++            non_spec_query_start_loc_cpu=non_spec_query_start_loc_cpu,
+             spec_state_indices_tensor=spec_state_indices_tensor,
+             non_spec_state_indices_tensor=non_spec_state_indices_tensor,
+             spec_sequence_masks=spec_sequence_masks,

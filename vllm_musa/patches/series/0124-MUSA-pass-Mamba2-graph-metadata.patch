@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:09 +0800
+Subject: [PATCH] MUSA: pass-Mamba2-graph-metadata
+
+---
+ vllm/v1/attention/backends/mamba_attn.py | 17 +++++++++++++----
+ vllm/v1/worker/gpu_model_runner.py       |  5 ++++-
+ 2 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/v1/attention/backends/mamba_attn.py b/vllm/v1/attention/backends/mamba_attn.py
+index 3e7ae905a3..50e045e40b 100644
+--- a/vllm/v1/attention/backends/mamba_attn.py
++++ b/vllm/v1/attention/backends/mamba_attn.py
+@@ -81,6 +81,7 @@ class BaseMambaAttentionMetadata:
+ 
+ 
+ class BaseMambaAttentionMetadataBuilder(AttentionMetadataBuilder[M], abc.ABC):
++    supports_dynamic_cudagraph_metadata = True
+     kv_cache_spec: MambaSpec
+     metadata_cls: type[M]
+     reorder_batch_threshold: int = 1
+@@ -191,7 +192,11 @@ class BaseMambaAttentionMetadataBuilder(AttentionMetadataBuilder[M], abc.ABC):
+             self.supports_update_block_table = False
+ 
+     def build_for_cudagraph_capture(
+-        self, common_attn_metadata: CommonAttentionMetadata
++        self,
++        common_attn_metadata: CommonAttentionMetadata,
++        *,
++        num_accepted_tokens: torch.Tensor | None = None,
++        num_decode_draft_tokens_cpu: torch.Tensor | None = None,
+     ) -> M:
+         """This method builds the metadata for full cudagraph capture.
+         Currently, only decode is supported for full cudagraphs with Mamba.
+@@ -208,11 +213,15 @@ class BaseMambaAttentionMetadataBuilder(AttentionMetadataBuilder[M], abc.ABC):
+ 
+         assert m.max_query_len == 1 + self.num_spec_tokens  # decode-only
+ 
+-        num_accepted_tokens = None
+-        if self.num_spec_tokens > 0:
++        if num_accepted_tokens is None and self.num_spec_tokens > 0:
+             num_accepted_tokens = torch.diff(m.query_start_loc)
+ 
+-        return self.build(0, m, num_accepted_tokens=num_accepted_tokens)
++        return self.build(
++            0,
++            m,
++            num_accepted_tokens=num_accepted_tokens,
++            num_decode_draft_tokens_cpu=num_decode_draft_tokens_cpu,
++        )
+ 
+     def build(
+         self,
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 816a9a6b53..839bc9d97e 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -2564,8 +2564,11 @@ class GPUModelRunner(
+                 )
+ 
+             if for_cudagraph_capture:
++                capture_kwargs = {}
++                if getattr(builder, "supports_dynamic_cudagraph_metadata", False):
++                    capture_kwargs = extra_attn_metadata_args
+                 attn_metadata_i = attn_group.build_metadata_for_cudagraph_capture(
+-                    common_attn_metadata, ubid or 0
++                    common_attn_metadata, ubid or 0, **capture_kwargs
+                 )
+             elif (
+                 cache_key in cached_attn_metadata

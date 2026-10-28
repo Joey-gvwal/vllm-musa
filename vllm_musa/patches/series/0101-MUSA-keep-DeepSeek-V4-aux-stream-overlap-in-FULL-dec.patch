@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:08 +0800
+Subject: [PATCH] MUSA: keep DeepSeek-V4 aux-stream overlap in FULL decode
+ graphs
+
+---
+ vllm/models/deepseek_v4/attention.py | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 6f9193c913..7b9e2c8511 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -791,8 +791,14 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             self.ln_events[0],
+             self.ln_events[1:4],
+             aux_streams,
+-            enable=hidden_states.shape[0]
+-            <= envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD,
++            enable=(
++                hidden_states.shape[0]
++                <= envs.VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD
++                and not _musa_deepseek_v4_serialize_long_prefill(
++                    hidden_states.shape[0]
++                )
++            ),
++            use_stream_waits=current_platform.is_musa(),
+         )
+ 
+         return qr_kv, kv_score, indexer_kv_score, indexer_weights

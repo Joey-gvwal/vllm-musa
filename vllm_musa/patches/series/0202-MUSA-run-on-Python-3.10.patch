@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:13 +0800
+Subject: [PATCH] MUSA: run on Python 3.10
+
+---
+ pyproject.toml        |  2 +-
+ vllm/__init__.py      |  5 +++++
+ vllm/_py310_compat.py | 32 ++++++++++++++++++++++++++++++++
+ 3 files changed, 38 insertions(+), 1 deletion(-)
+ create mode 100644 vllm/_py310_compat.py
+
+diff --git a/pyproject.toml b/pyproject.toml
+index bc924440fa..6855b6aa21 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -31,7 +31,7 @@ classifiers = [
+     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+     "Topic :: Scientific/Engineering :: Information Analysis",
+ ]
+-requires-python = ">=3.11,<3.15"
++requires-python = ">=3.10,<3.15"
+ dynamic = [ "version", "dependencies", "optional-dependencies"]
+ 
+ [project.urls]
+diff --git a/vllm/__init__.py b/vllm/__init__.py
+index 16101ca245..8944d7d69a 100644
+--- a/vllm/__init__.py
++++ b/vllm/__init__.py
+@@ -6,6 +6,11 @@
+ # version library first.  Such assumption is critical for some customization.
+ from .version import __version__, __version_tuple__  # isort:skip
+ 
++# MUSA: the MUSA image runs Python 3.10.
++from ._py310_compat import install as _install_py310_compat  # isort:skip
++
++_install_py310_compat()
++
+ import typing
+ 
+ # The environment variables override should be imported before any other
+diff --git a/vllm/_py310_compat.py b/vllm/_py310_compat.py
+new file mode 100644
+index 0000000000..f54bf44fc3
+--- /dev/null
++++ b/vllm/_py310_compat.py
+@@ -0,0 +1,32 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""MUSA: Python 3.10 backfills for the Python 3.11 names vLLM imports."""
++
++import datetime
++import sys
++import typing
++
++import typing_extensions
++
++_TYPING_NAMES = (
++    "LiteralString",
++    "Never",
++    "NotRequired",
++    "Required",
++    "Self",
++    "TypeVarTuple",
++    "Unpack",
++    "assert_never",
++    "dataclass_transform",
++    "reveal_type",
++)
++
++
++def install() -> None:
++    if sys.version_info >= (3, 11):
++        return
++    for name in _TYPING_NAMES:
++        if not hasattr(typing, name):
++            setattr(typing, name, getattr(typing_extensions, name))
++    if not hasattr(datetime, "UTC"):
++        datetime.UTC = datetime.timezone.utc  # type: ignore[attr-defined]

@@ -70,7 +70,7 @@ def test_glm52_indexer_dispatch_has_shortcut_and_safe_fallback_boundary():
 def test_musa_decode_schedule_metadata_is_precomputed_for_graph_capture():
     series = _read(
         "vllm_musa/patches/series/"
-        "0085-MUSA-vllm.v1.attention.backends.mla.indexer.patch"
+        "0080-MUSA-MUSA-vllm.v1.attention.backends.mla.indexer.patch"
     )
 
     assert "current_platform.is_musa()" in series

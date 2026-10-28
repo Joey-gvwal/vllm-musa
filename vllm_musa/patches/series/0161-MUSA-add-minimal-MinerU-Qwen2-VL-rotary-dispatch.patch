@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:11 +0800
+Subject: [PATCH] MUSA: add minimal MinerU Qwen2-VL rotary dispatch
+
+---
+ vllm/model_executor/models/qwen2_vl.py | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/vllm/model_executor/models/qwen2_vl.py b/vllm/model_executor/models/qwen2_vl.py
+index 7f0ed0e6a7..2d4db9532c 100644
+--- a/vllm/model_executor/models/qwen2_vl.py
++++ b/vllm/model_executor/models/qwen2_vl.py
+@@ -1425,6 +1425,11 @@ class Qwen2VLForConditionalGeneration(
+                 architectures=["Qwen2ForCausalLM"],
+             )
+ 
++        if getattr(torch.version, "musa", None) is not None:
++            from vllm_musa.optimization_contract.rotary import install_model_rotary
++
++            install_model_rotary(self, vllm_config)
++
+         self.make_empty_intermediate_tensors = (
+             self.language_model.make_empty_intermediate_tensors
+         )

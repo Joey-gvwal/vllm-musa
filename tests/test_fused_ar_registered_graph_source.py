@@ -95,7 +95,7 @@ def _isolated_fusion_helpers(torch_namespace: object, fx_namespace: object) -> t
     helper_class.end_lineno = fusion_class.end_lineno
     helper_class.end_col_offset = fusion_class.end_col_offset
     module = ast.fix_missing_locations(ast.Module(body=[helper_class], type_ignores=[]))
-    namespace = {"torch": torch_namespace, "fx": fx_namespace}
+    namespace = {"torch": torch_namespace, "fx": fx_namespace, "FakeTensor": _FakeTensor}
     exec(compile(module, str(FUSION_PASS), "exec"), namespace)
     return namespace["_IsolatedFusionHelpers"]
 

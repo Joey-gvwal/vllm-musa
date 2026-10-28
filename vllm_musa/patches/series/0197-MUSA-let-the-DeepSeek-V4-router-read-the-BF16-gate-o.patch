@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:12 +0800
+Subject: [PATCH] MUSA: let the DeepSeek-V4 router read the BF16 gate output
+
+---
+ vllm/models/deepseek_v4/nvidia/model.py | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index d7ab514297..874cb223cc 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -786,6 +786,16 @@ class DeepseekV4MoE(nn.Module):
+                 requires_grad=False,
+             )
+ 
++        if (
++            current_platform.is_musa()
++            and not self.use_native_mega_moe
++            and self.gate.tid2eid is None
++            and self.gate.e_score_correction_bias is not None
++        ):
++            # MUSA: the biased router widens the BF16 gate output itself, which
++            # saves an FP32 cast kernel per layer.
++            self.gate.out_dtype = None
++
+         if config.n_shared_experts is None:
+             self.shared_experts = None
+         else:

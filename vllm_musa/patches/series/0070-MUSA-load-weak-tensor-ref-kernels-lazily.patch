@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:06 +0800
+Subject: [PATCH] MUSA: load weak tensor ref kernels lazily
+
+---
+ vllm/utils/torch_utils.py | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/vllm/utils/torch_utils.py b/vllm/utils/torch_utils.py
+index 4bf2e3397c..6d80de8194 100644
+--- a/vllm/utils/torch_utils.py
++++ b/vllm/utils/torch_utils.py
+@@ -885,6 +885,12 @@ def weak_ref_tensor(tensor: Any) -> Any:
+     This ignores 0-size tensors as those don't allocate any memory.
+     """
+     if isinstance(tensor, torch.Tensor) and tensor.numel() > 0:
++        if not hasattr(torch.ops._C, "weak_ref_tensor"):
++            from vllm.platforms import current_platform
++
++            if current_platform.is_musa():
++                current_platform.import_kernels()
++
+         return torch.ops._C.weak_ref_tensor(tensor)
+     else:
+         return tensor

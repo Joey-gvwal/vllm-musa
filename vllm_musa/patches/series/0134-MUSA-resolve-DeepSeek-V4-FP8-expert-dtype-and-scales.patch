@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:09 +0800
+Subject: [PATCH] MUSA: resolve DeepSeek-V4 FP8 expert dtype and scales
+ consistently
+
+---
+ vllm/models/deepseek_v4/nvidia/dspark.py | 11 ++++++++---
+ vllm/models/deepseek_v4/nvidia/model.py  | 11 ++++++++++-
+ vllm/models/deepseek_v4/nvidia/mtp.py    | 11 ++++++++---
+ 3 files changed, 26 insertions(+), 7 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/dspark.py b/vllm/models/deepseek_v4/nvidia/dspark.py
+index fcd1d6f2e1..07806df9c0 100644
+--- a/vllm/models/deepseek_v4/nvidia/dspark.py
++++ b/vllm/models/deepseek_v4/nvidia/dspark.py
+@@ -484,10 +484,15 @@ class DSparkDeepseekV4ForCausalLM(nn.Module, DeepseekV4MixtureOfExperts):
+                 num_experts=self.config.n_routed_experts,
+                 num_redundant_experts=first_layer.ffn.n_redundant_experts,
+             )
++        expert_dtype = getattr(self.config, "expert_dtype", None)
++        resolved_quant_dtype = getattr(self.quant_config, "expert_dtype", None)
++        if resolved_quant_dtype in ("fp4", "fp8") and (
++            expert_dtype is None
++            or (expert_dtype == "fp4" and resolved_quant_dtype == "fp8")
++        ):
++            expert_dtype = resolved_quant_dtype
+         expert_scale_suffix = (
+-            ".weight_scale"
+-            if getattr(self.config, "expert_dtype", "fp4") == "fp4"
+-            else ".weight_scale_inv"
++            ".weight_scale" if expert_dtype == "fp4" else ".weight_scale_inv"
+         )
+ 
+         # (param_name, ckpt_shard_name, shard_id) for non-expert stacked params.
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index 9ae597f8f8..c9aa398c30 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -1837,7 +1837,16 @@ class DeepseekV4ForCausalLM(
+ 
+         config = vllm_config.model_config.hf_config
+         self.config = config
+-        expert_dtype = getattr(config, "expert_dtype", "fp4")
++        # Some converted FP8 checkpoints omit expert_dtype from hf_config.
++        # The DeepSeek quant config resolves it from hf_overrides, so reuse that
++        # authoritative value instead of silently selecting the FP4 mapper.
++        expert_dtype = getattr(config, "expert_dtype", None)
++        resolved_quant_dtype = getattr(vllm_config.quant_config, "expert_dtype", None)
++        if resolved_quant_dtype in ("fp4", "fp8") and (
++            expert_dtype is None
++            or (expert_dtype == "fp4" and resolved_quant_dtype == "fp8")
++        ):
++            expert_dtype = resolved_quant_dtype
+         if expert_dtype != "fp4":
+             self.hf_to_vllm_mapper = _make_deepseek_v4_weights_mapper(expert_dtype)
+ 
+diff --git a/vllm/models/deepseek_v4/nvidia/mtp.py b/vllm/models/deepseek_v4/nvidia/mtp.py
+index c0f3471dd5..e2f4965ed9 100644
+--- a/vllm/models/deepseek_v4/nvidia/mtp.py
++++ b/vllm/models/deepseek_v4/nvidia/mtp.py
+@@ -412,10 +412,15 @@ class DeepSeekV4MTP(nn.Module):
+         # FP8 experts register ``..._weight_scale_inv`` (block_quant) while
+         # FP4/MXFP4 experts register ``..._weight_scale``. Choose the suffix
+         # for the rename below based on the model's expert dtype.
++        expert_dtype = getattr(self.config, "expert_dtype", None)
++        resolved_quant_dtype = getattr(self.quant_config, "expert_dtype", None)
++        if resolved_quant_dtype in ("fp4", "fp8") and (
++            expert_dtype is None
++            or (expert_dtype == "fp4" and resolved_quant_dtype == "fp8")
++        ):
++            expert_dtype = resolved_quant_dtype
+         expert_scale_suffix = (
+-            ".weight_scale"
+-            if getattr(self.config, "expert_dtype", "fp4") == "fp4"
+-            else ".weight_scale_inv"
++            ".weight_scale" if expert_dtype == "fp4" else ".weight_scale_inv"
+         )
+ 
+         for name, loaded_weight in weights:

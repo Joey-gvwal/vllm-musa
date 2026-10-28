@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:03 +0800
+Subject: [PATCH] MUSA: vllm.compilation.backends
+
+---
+ vllm/compilation/backends.py | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/vllm/compilation/backends.py b/vllm/compilation/backends.py
+index 434c1af47e..b12bec2738 100644
+--- a/vllm/compilation/backends.py
++++ b/vllm/compilation/backends.py
+@@ -11,7 +11,7 @@ import pprint
+ import time
+ from collections import defaultdict
+ from collections.abc import Callable, Generator, Sequence
+-from contextlib import contextmanager
++from contextlib import contextmanager, nullcontext
+ from copy import deepcopy
+ from functools import partial
+ from typing import Any
+@@ -344,10 +344,17 @@ class CompilerManager:
+ 
+             from unittest.mock import patch
+ 
++            functorch_cache_key_ctx = (
++                torch._functorch.config.patch(autograd_cache_normalize_inputs=True)
++                if hasattr(
++                    torch._functorch.config, "autograd_cache_normalize_inputs"
++                )
++                else nullcontext()
++            )
+             with (
+                 # Graphs that are isometric (different node names but same
+                 # structure) should be treated as the same.
+-                torch._functorch.config.patch(autograd_cache_normalize_inputs=True),
++                functorch_cache_key_ctx,
+                 patch(
+                     "torch._functorch._aot_autograd.autograd_cache.autograd_cache_key",
+                     autograd_cache_key,
+@@ -1024,7 +1031,7 @@ class VllmBackend:
+         )
+ 
+     @dynamo_timed("vllm_backend")
+-    def __call__(self, graph: fx.GraphModule, example_inputs: Sequence[Any]) -> Any:
++    def __call__(self, graph: fx.GraphModule, example_inputs: Sequence[Any], **kwargs: Any) -> Any:
+         from .caching import (
+             VllmSerializableFunction,
+         )

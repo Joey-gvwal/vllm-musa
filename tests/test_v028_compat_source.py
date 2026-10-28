@@ -176,11 +176,11 @@ def test_cuda_only_fa4_warmup_is_skipped_on_musa() -> None:
         / "vllm"
         / "model_executor"
         / "warmup"
-        / "kernel_warmup.py"
+        / "cutedsl_warmup.py"
     ).read_text()
 
-    assert "if not current_platform.is_musa():" in source
-    assert 'Skipping CUDA-only FA4 CuTeDSL warmup on MUSA.' in source
+    assert "if not current_platform.is_cuda():" in source
+    assert 'Skipping CuTeDSL warmup on non-CUDA platform.' in source
 
 
 def test_musa_mamba_pools_accept_v028_graph_profiling_override() -> None:

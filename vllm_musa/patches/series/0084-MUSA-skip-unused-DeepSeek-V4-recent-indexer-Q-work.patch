@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] MUSA: skip unused DeepSeek-V4 recent indexer Q work
+
+---
+ vllm/models/deepseek_v4/attention.py | 48 ++++------------------------
+ 1 file changed, 6 insertions(+), 42 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index df3a60a758..94d82059ba 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -621,35 +621,15 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             device=hidden_states.device,
+         )
+ 
+-    def _split_qkv_and_norm(
+-        self, qr_kv: torch.Tensor
+-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
+-        """Split the fused q-lora / kv projection and RMSNorm both halves.
+-
+-        ``qr_scale`` is None on the shared path. The ROCm subclass returns
+-        a pre-quantized fp8 ``qr`` together with its per-1x128 fp32 scales,
+-        which the downstream wq_b projections consume directly.
+-        """
+-        qr, kv = qr_kv.split([self.q_lora_rank, self.head_dim], dim=-1)
+-        qr, kv = fused_q_kv_rmsnorm(
+-            qr,
+-            kv,
+-            self.q_norm.weight.data,
+-            self.kv_norm.weight.data,
+-            self.eps,
+-        )
+-        return qr, None, kv
+-
+     @eager_break_during_capture
+     def _prepare_and_attn_eager(
+         self,
+         hidden_states: torch.Tensor,
+         qr: torch.Tensor,
+         kv: torch.Tensor,
+-        qr_scale: torch.Tensor | None,
+         kv_score: torch.Tensor,
+         indexer_kv_score: torch.Tensor,
+-        indexer_weights: torch.Tensor,
++        indexer_weights: torch.Tensor | None,
+         positions: torch.Tensor,
+         o_padded: "torch.Tensor | QuantizedActivation",
+     ) -> None:
+@@ -674,10 +654,9 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         hidden_states: torch.Tensor,
+         qr: torch.Tensor,
+         kv: torch.Tensor,
+-        qr_scale: torch.Tensor | None,
+         kv_score: torch.Tensor,
+         indexer_kv_score: torch.Tensor,
+-        indexer_weights: torch.Tensor,
++        indexer_weights: torch.Tensor | None,
+         positions: torch.Tensor,
+         o_padded: "torch.Tensor | QuantizedActivation",
+     ) -> None:
+@@ -702,9 +681,11 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+ 
+         # Keep Q projection and KV insertion on the default stream. The indexer
+         # and MLA compressor use aux streams 0 and 1; aux 2 is internal to the
+-        # indexer.
++        # indexer. ROCm runs the same work sequentially without aux streams.
+         if indexer is not None:
+             assert compressor is not None
++            assert indexer_kv_score is not None
++            assert indexer_weights is not None
+             q, (indexer_inputs, _) = execute_in_parallel(
+                 project_query_and_cache_kv,
+                 [
+@@ -1150,31 +1131,14 @@ class DeepseekV4Indexer(nn.Module):
+             torch.cuda.Event(),
+         ]
+ 
+-        if vllm_config.kernel_config.enable_jit_warmup:
+-            from vllm.utils.import_utils import has_cutedsl
+-
+-            if not has_cutedsl() and not current_platform.is_xpu():
+-                from vllm.models.deepseek_v4.common.ops.fused_indexer_q import (
+-                    _FUSED_INDEXER_Q_ROPE_MXFP4_TRITON_KERNEL,
+-                    _FUSED_INDEXER_Q_ROPE_QUANT_TRITON_KERNEL,
+-                )
+-
+-                (
+-                    _FUSED_INDEXER_Q_ROPE_MXFP4_TRITON_KERNEL
+-                    if self.use_fp4_kv
+-                    else _FUSED_INDEXER_Q_ROPE_QUANT_TRITON_KERNEL
+-                ).register_warmup()
+-
+     def forward(
+         self,
+         hidden_states: torch.Tensor,
+         qr: torch.Tensor,
+-        compressed_kv_score: torch.Tensor | None,
++        compressed_kv_score: torch.Tensor,
+         indexer_weights: torch.Tensor,
+         positions: torch.Tensor,
+         rotary_emb: nn.Module,
+-        qr_scale: torch.Tensor | None = None,
+-        skip_compressor: bool = False,
+     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+         compressor = self.compressor
+ 

@@ -1,0 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:08 +0800
+Subject: [PATCH] MUSA: bind Qwen3.5 folded shared gate to router
+
+---
+ vllm/model_executor/models/qwen3_next.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
+index 66727a94c6..d0e039245e 100644
+--- a/vllm/model_executor/models/qwen3_next.py
++++ b/vllm/model_executor/models/qwen3_next.py
+@@ -303,6 +303,7 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+         if self._musa_shared_fold:
+             routed = getattr(self.experts, "routed_experts", self.experts)
+             routed._musa_shared_mlp = self.shared_expert
++            routed._musa_shared_router = self.experts.router
+             routed._musa_shared_gate = self.shared_expert_gate
+             self.experts.router._musa_num_fused_shared_experts = 1
+ 

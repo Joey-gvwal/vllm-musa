@@ -12,6 +12,17 @@ REJECTION_PATCH = (
 MODEL_RUNNER_PATCH = (
     SERIES / "0035-MUSA-vllm.v1.worker.gpu_model_runner-v0.28-reanchor.patch"
 )
+FINAL_REJECTION = (
+    ROOT
+    / "third_party"
+    / "vllm"
+    / "vllm"
+    / "v1"
+    / "worker"
+    / "gpu"
+    / "spec_decode"
+    / "rejection_sampler_utils.py"
+)
 
 
 def _series_patch(number: int) -> str:
@@ -53,24 +64,47 @@ def test_model_runner_does_not_skip_non_greedy_drafter() -> None:
     assert "input_fits_in_drafter = False" not in source
 
 
-def test_mrv2_rejection_predicates_keep_musa_triton_rank_stable() -> None:
-    greedy = _series_patch(125)
-    block_verification = _series_patch(128)
-    stochastic = _series_patch(129)
 
-    for source in (greedy, block_verification, stochastic):
-        assert "accepted |= tl.zeros((1,), tl.int1)" in source
-        assert "accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0" in source
+
+def test_final_rejection_kernel_scalarizes_each_predicate() -> None:
+    source = FINAL_REJECTION.read_text()
+    start = source.index("def _rejection_kernel(")
+    end = source.index("@triton.jit", start + 1)
+    kernel = source[start:end]
+
+    scalarize = (
+        "                accepted |= tl.zeros((1,), tl.int1)\n"
+        "                accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0"
+    )
+    assert kernel.count(scalarize) == 3
+    assert "                accepted &= is_valid_draft\n" + scalarize in kernel
+    assert "                accepted = u <= h\n" + scalarize in kernel
+    assert (
+        "                accepted = target_logprob > tl.log(u) + draft_logprob\n"
+        + scalarize
+    ) in kernel
+    assert (
+        "if USE_BLOCK_VERIFICATION and ((not is_greedy) & "
+        "(accepted_length < num_draft_tokens)):"
+    ) in kernel
+
+    greedy = _series_patch(111)
+    block_verification = _series_patch(111)
+
+    for source, count in ((greedy, 3), (block_verification, 3)):
+        assert source.count("+                accepted |= tl.zeros((1,), tl.int1)") == count
+        assert source.count(
+            "+                accepted = tl.sum(accepted.to(tl.int32), axis=0) != 0"
+        ) == count
 
 
 def test_mrv2_rejection_avoids_chained_runtime_predicates() -> None:
-    source = _series_patch(126)
+    source = _series_patch(111)
 
-    assert "if USE_BLOCK_VERIFICATION and (" in source
-    assert "(not is_greedy) & (accepted_length < num_draft_tokens)" in source
+    assert "+    if USE_BLOCK_VERIFICATION and ((not is_greedy) & (accepted_length < num_draft_tokens)):" in source
 
 
 def test_mrv2_rejection_resampler_uses_v028_gumbel_signature() -> None:
-    source = _series_patch(127)
+    source = _series_patch(111)
 
     assert "residual_logits,\n         block,\n+        block," in source

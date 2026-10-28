@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:12 +0800
+Subject: [PATCH] MUSA: claim DeepSeek-V4.1 checkpoints for the DeepSeek-V4 FP8
+ config
+
+---
+ vllm/models/deepseek_v4/quant_config.py | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/models/deepseek_v4/quant_config.py b/vllm/models/deepseek_v4/quant_config.py
+index 349a6c2c34..4f6abeec1e 100644
+--- a/vllm/models/deepseek_v4/quant_config.py
++++ b/vllm/models/deepseek_v4/quant_config.py
+@@ -161,7 +161,16 @@ class DeepseekV4FP8Config(Fp8Config):
+         ):
+             return None
+         model_type = getattr(hf_config, "model_type", None)
+-        if model_type == "deepseek_v4" or user_quant == "deepseek_v4_fp8":
++        if (
++            model_type
++            in (
++                "deepseek_v4",
++                "deepseek_v4_text",
++                "deepseek_v41",
++                "deepseek_v41_text",
++            )
++            or user_quant == "deepseek_v4_fp8"
++        ):
+             return "deepseek_v4_fp8"
+         return None
+ 

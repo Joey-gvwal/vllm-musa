@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:12 +0800
+Subject: [PATCH] MUSA: select indexer top-k with the staged radix kernel
+
+---
+ .../layers/sparse_attn_indexer.py             | 59 +++++++++++++++++--
+ 1 file changed, 54 insertions(+), 5 deletions(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 0ee2d03f44..85e9b9a61c 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -253,6 +253,48 @@ def _musa_paged_mqa_logits_kernel(
+     tl.store(logits_ptr + row * logits_stride0 + offs_n, logits, mask=in_row)
+ 
+ 
++def _musa_select_indexer_topk(
++    logits: torch.Tensor,
++    row_lens: torch.Tensor,
++    topk_indices: torch.Tensor,
++    topk: int,
++) -> None:
++    """Fill each row's top-k index set over its first row_lens logits."""
++    if topk <= 512:
++        # MUSA: the staged radix select returns the same set and order.
++        _musa_custom_ops.deepseek_v4_sparse_indexer_topk_decode(
++            logits, row_lens, topk_indices, topk
++        )
++        return
++    _musa_custom_ops.sparse_indexer_topk_decode(logits, row_lens, topk_indices, topk)
++
++
++def _musa_indexer_windows_start_at_zero(row_starts: torch.Tensor, topk: int) -> bool:
++    """Whether eager windowed top-k rows can use the row-length select."""
++    return (
++        topk <= 512
++        and not _musa_sparse_indexer_is_current_stream_capturing()
++        and not bool(row_starts.any())
++    )
++
++
++def _musa_select_indexer_topk_windows(
++    logits: torch.Tensor,
++    row_starts: torch.Tensor,
++    row_ends: torch.Tensor,
++    topk_indices: torch.Tensor,
++    topk: int,
++    starts_at_zero: bool,
++) -> None:
++    """Fill window-local top-k index sets over [row_starts, row_ends)."""
++    if starts_at_zero:
++        _musa_select_indexer_topk(logits, row_ends, topk_indices, topk)
++        return
++    _musa_custom_ops.sparse_indexer_topk(
++        logits, row_starts, row_ends, topk_indices, topk
++    )
++
++
+ def _musa_try_fill_decode_topk_from_paged_logits(
+     q_quant: torch.Tensor,
+     kv_cache: torch.Tensor,
+@@ -316,7 +358,7 @@ def _musa_try_fill_decode_topk_from_paged_logits(
+         HEAD_DIM=head_dim,
+         BLOCK_N=block_n,
+     )
+-    _musa_custom_ops.sparse_indexer_topk_decode(
++    _musa_select_indexer_topk(
+         logits,
+         seq_lens[:rows],
+         topk_indices_buffer[:rows, :topk],
+@@ -456,7 +498,7 @@ def _musa_try_fill_decode_topk_from_materialized_logits(
+     def _select(logits: torch.Tensor) -> bool:
+         if logits.shape[0] < rows or logits.shape[1] < materialized_width:
+             return False
+-        _musa_custom_ops.sparse_indexer_topk_decode(
++        _musa_select_indexer_topk(
+             logits[:rows, :materialized_width],
+             seq_lens,
+             topk_indices[:rows, :topk],
+@@ -808,6 +850,9 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+     materialized_direct_topk = (
+         _musa_sparse_indexer_materialized_prefill_direct_topk_enabled()
+     )
++    windows_start_at_zero = (
++        is_glm52 or use_bounded_long_prefill
++    ) and _musa_indexer_windows_start_at_zero(work_starts, topk)
+ 
+     def _musa_fill_chunk_from_logits(
+         logits: torch.Tensor,
+@@ -822,22 +867,24 @@ def _musa_try_fill_prefill_topk_from_materialized_logits(
+         starts = work_starts[row_start:row_end]
+         ends = work_ends[row_start:row_end]
+         if is_glm52:
+-            _musa_custom_ops.sparse_indexer_topk(
++            _musa_select_indexer_topk_windows(
+                 logits,
+                 starts,
+                 ends,
+                 work_output[row_start:row_end, :topk],
+                 topk,
++                windows_start_at_zero,
+             )
+             return True
+ 
+         if use_bounded_long_prefill:
+-            _musa_custom_ops.sparse_indexer_topk(
++            _musa_select_indexer_topk_windows(
+                 logits,
+                 starts.to(torch.int32).contiguous(),
+                 ends.to(torch.int32).contiguous(),
+                 work_output[row_start:row_end, :topk],
+                 topk,
++                windows_start_at_zero,
+             )
+             return True
+ 
+@@ -1344,6 +1391,7 @@ def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
+     starts = chunk.cu_seqlen_ks[:rows].to(torch.int32).clamp(0, num_keys)
+     ends = chunk.cu_seqlen_ke[:rows].to(torch.int32).clamp(0, num_keys)
+     tile_rows = max(1, _MUSA_INDEXER_MQA_LOGITS_TILE_BYTES // (num_keys * 4))
++    starts_at_zero = _musa_indexer_windows_start_at_zero(starts, topk)
+     for row_start in range(0, rows, tile_rows):
+         row_end = min(rows, row_start + tile_rows)
+         tile_starts = starts[row_start:row_end].contiguous()
+@@ -1355,12 +1403,13 @@ def _musa_try_fill_prefill_topk_from_fp8_mqa_logits(
+             tile_starts,
+             tile_ends,
+         )
+-        _musa_custom_ops.sparse_indexer_topk(
++        _musa_select_indexer_topk_windows(
+             logits,
+             tile_starts,
+             tile_ends,
+             topk_indices[row_start:row_end, :topk],
+             topk,
++            starts_at_zero,
+         )
+     return True
+ 

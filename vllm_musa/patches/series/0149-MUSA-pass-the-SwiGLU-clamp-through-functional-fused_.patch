@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:10 +0800
+Subject: [PATCH] MUSA: pass the SwiGLU clamp through functional fused_experts
+
+---
+ .../model_executor/layers/fused_moe/fused_moe.py | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index 8b57c63465..e0aef0ad89 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -14,6 +14,7 @@ import vllm.model_executor.layers.fused_moe.modular_kernel as mk
+ from vllm import _custom_ops as ops
+ from vllm.logger import init_logger
+ from vllm.model_executor.layers.fused_moe.activation import (
++    ApplyMoEActivationConfig,
+     MoEActivation,
+     apply_moe_activation,
+ )
+@@ -1535,6 +1536,7 @@ def fused_experts_op(
+     block_shape: list[int] | None = None,
+     w1_bias: torch.Tensor | None = None,
+     w2_bias: torch.Tensor | None = None,
++    gemm1_clamp_limit: float | None = None,
+ ) -> torch.Tensor:
+     return fused_experts_impl(
+         hidden_states,
+@@ -1561,6 +1563,7 @@ def fused_experts_op(
+         block_shape,
+         w1_bias,
+         w2_bias,
++        gemm1_clamp_limit=gemm1_clamp_limit,
+     )
+ 
+ 
+@@ -1589,6 +1592,7 @@ def fused_experts_op_fake(
+     block_shape: list[int] | None = None,
+     w1_bias: torch.Tensor | None = None,
+     w2_bias: torch.Tensor | None = None,
++    gemm1_clamp_limit: float | None = None,
+ ) -> torch.Tensor:
+     return torch.empty_like(hidden_states)
+ 
+@@ -1691,6 +1695,7 @@ def fused_experts(
+         block_shape=quant_config.block_shape,
+         w1_bias=quant_config.w1_bias,
+         w2_bias=quant_config.w2_bias,
++        gemm1_clamp_limit=quant_config.gemm1_clamp_limit,
+     )
+ 
+ 
+@@ -1737,6 +1742,7 @@ def fused_experts_impl(
+     block_shape: list[int] | None = None,
+     w1_bias: torch.Tensor | None = None,
+     w2_bias: torch.Tensor | None = None,
++    gemm1_clamp_limit: float | None = None,
+ ) -> torch.Tensor:
+     if ocp_mx_scheme is not None:
+         raise NotImplementedError(
+@@ -1907,7 +1913,15 @@ def fused_experts_impl(
+     )
+ 
+     apply_moe_activation(
+-        activation_enum, intermediate_cache2, intermediate_cache1.view(-1, N)
++        activation_enum,
++        intermediate_cache2,
++        intermediate_cache1.view(-1, N),
++        activation_config=(
++            ApplyMoEActivationConfig(clamp_limit=gemm1_clamp_limit)
++            if gemm1_clamp_limit is not None
++            and activation_enum == MoEActivation.SILU
++            else None
++        ),
+     )
+ 
+     qintermediate_cache2, a2q_scale = moe_kernel_quantize_input(

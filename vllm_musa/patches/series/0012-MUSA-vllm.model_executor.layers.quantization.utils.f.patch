@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:04 +0800
+Subject: [PATCH] MUSA: vllm.model_executor.layers.quantization.utils.fp8_utils
+
+---
+ vllm/model_executor/layers/quantization/utils/fp8_utils.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/quantization/utils/fp8_utils.py b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
+index 00f9e5b92e..a935f780a3 100644
+--- a/vllm/model_executor/layers/quantization/utils/fp8_utils.py
++++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
+@@ -703,7 +703,9 @@ def per_token_group_quant_fp8(
+     # prefer CUDA/XPU kernel if available
+     # TODO(bnell): this causes some fp8 moe test to fail.
+     if (
+-        current_platform.is_cuda_alike() or current_platform.is_xpu()
++        current_platform.is_cuda_alike()
++        or current_platform.is_xpu()
++        or current_platform.is_musa()
+     ) and x.is_contiguous():
+         torch.ops._C.per_token_group_fp8_quant(
+             x,

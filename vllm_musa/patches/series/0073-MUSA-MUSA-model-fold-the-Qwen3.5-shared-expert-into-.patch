@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:06 +0800
+Subject: [PATCH] MUSA: MUSA(model): fold the Qwen3.5 shared expert into
+ fused_moe
+
+---
+ vllm/model_executor/models/qwen3_next.py | 72 ++++++++++++++++++++++--
+ 1 file changed, 66 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
+index ee5c05d0a4..f5cc6728f1 100644
+--- a/vllm/model_executor/models/qwen3_next.py
++++ b/vllm/model_executor/models/qwen3_next.py
+@@ -105,20 +105,16 @@ def _should_replicate_misaligned_shared_expert(
+ ) -> bool:
+     if intermediate_size <= 0 or group_size is None:
+         return False
+-
+     partition_size, remainder = divmod(intermediate_size, tp_size)
+     if remainder == 0 and partition_size % group_size == 0:
+         return False
+-
+     if enable_expert_parallel or is_sequence_parallel:
+         return True
+-
+     if remainder != 0:
+         raise ValueError(
+             f"Shared-expert intermediate size {intermediate_size} must be "
+             f"divisible by tensor-parallel size {tp_size}."
+         )
+-
+     raise ValueError(
+         "The Quark OCP MX shared expert cannot be tensor-parallelized: "
+         f"intermediate size {intermediate_size} with TP size {tp_size} "
+@@ -128,6 +124,39 @@ def _should_replicate_misaligned_shared_expert(
+     )
+ 
+ 
++def _musa_linear_is_block_fp8(linear: nn.Module) -> bool:
++    method = getattr(linear, "quant_method", None)
++    if method is None or not getattr(method, "block_quant", False):
++        return False
++    block_size = getattr(method, "weight_block_size", None)
++    if block_size is None:
++        block_size = getattr(
++            getattr(method, "quant_config", None), "weight_block_size", None
++        )
++    return list(block_size or []) == [128, 128]
++
++
++def _musa_shared_expert_foldable(shared_expert: nn.Module | None) -> bool:
++    """Whether the shared expert's weights can join the routed expert stack.
++
++    Foldable when the shared MLP's projections carry the same weight format as
++    the routed experts: unquantized, or FP8 with the [128, 128] block scales the
++    grouped GEMM expects.
++    """
++    if shared_expert is None:
++        return False
++    gate_up = getattr(shared_expert, "gate_up_proj", None)
++    down = getattr(shared_expert, "down_proj", None)
++    if gate_up is None or down is None:
++        return False
++    unquantized = [
++        type(getattr(proj, "quant_method", None)).__name__ for proj in (gate_up, down)
++    ] == ["UnquantizedLinearMethod"] * 2
++    return unquantized or (
++        _musa_linear_is_block_fp8(gate_up) and _musa_linear_is_block_fp8(down)
++    )
++
++
+ class Qwen3NextSparseMoeBlock(nn.Module):
+     def __init__(
+         self,
+@@ -220,9 +249,34 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+                 prefix=f"{prefix}.shared_expert",
+             )
+ 
++        # MUSA: fold the shared expert into the routed grouped GEMM as one extra
++        # always-selected slot instead of running it as a separate serial MLP.
++        # Needs matching shared/routed intermediate sizes and a shared expert whose
++        # weight format the routed expert stack can absorb. The fold appends one
++        # expert to the routed stack, which an expert-parallel expert_map built for
++        # the unfolded count would not know about.
++        from vllm_musa.optimization_contract import (
++            OptimizationFeature,
++            resolve_optimization_contract,
++        )
++
++        optimization_contract = resolve_optimization_contract(vllm_config)
++        self._musa_shared_fold = (
++            getattr(torch.version, "musa", None) is not None
++            and optimization_contract.prefers(
++                OptimizationFeature.QWEN35_SHARED_EXPERT_FOLD
++            )
++            and self.ep_size <= 1
++            and not self.enable_eplb
++            and config.shared_expert_intermediate_size == config.moe_intermediate_size
++            and _musa_shared_expert_foldable(self.shared_expert)
++        )
++
+         self.experts = FusedMoEFactory(
+             shared_experts=(
+-                None if self.replicate_shared_expert else self.shared_expert
++                None
++                if self.replicate_shared_expert or self._musa_shared_fold
++                else self.shared_expert
+             ),
+             gate=self.gate,
+             num_experts=self.n_routed_experts,
+@@ -240,10 +294,16 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+             fuse_shared_experts=self.is_fused_shared_expert_enabled,
+             shared_expert_prefix=f"{prefix}.shared_expert",
+             shared_expert_gate=self.shared_expert_gate
+-            if self.shared_expert is None
++            if self.shared_expert is None or self._musa_shared_fold
+             else None,
+         )
+ 
++        if self._musa_shared_fold:
++            routed = getattr(self.experts, "routed_experts", self.experts)
++            routed._musa_shared_mlp = self.shared_expert
++            routed._musa_shared_gate = self.shared_expert_gate
++            self.experts.router._musa_num_fused_shared_experts = 1
++
+     def forward(
+         self,
+         hidden_states: torch.Tensor,

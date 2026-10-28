@@ -9,9 +9,10 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0090-perf-musa-unify-Qwen-runtime-fast-paths.patch"
+    / "0083-MUSA-perf-musa-unify-Qwen-runtime-fast-paths.patch"
 )
 CONTRACT = ROOT / "vllm_musa" / "optimization_contract" / "qwen.py"
+RUNNER = ROOT / "third_party" / "vllm" / "vllm" / "v1" / "worker" / "gpu_model_runner.py"
 
 
 def test_uniform_decode_patch_reuses_uploaded_request_indices() -> None:
@@ -37,7 +38,8 @@ def test_uniform_decode_patch_reuses_uploaded_request_indices() -> None:
     assert source.count("self._musa_qwen_uniform_decode_logits_indices[") == 1
     assert "use_cached_decode_logits_indices: bool = False" in source
     assert "+                logits_indices = query_start_loc[1:] - 1" in source
-    assert "query_start_loc path" in source
+    assert "+            if use_cached_decode_logits_indices:" in source
+    assert "+                logits_indices = self._musa_qwen_uniform_decode_logits_indices[" in source
 
 
 def test_uniform_decode_gate_is_exact_for_positive_query_lengths() -> None:
@@ -75,18 +77,37 @@ def test_uniform_decode_gate_is_exact_for_positive_query_lengths() -> None:
 
 
 def test_uniform_decode_hidden_view_patch_preserves_fallbacks() -> None:
-    source = PATCH.read_text()
+    source = next(
+        (ROOT / "vllm_musa/patches/series").glob("0093-*.patch")
+    ).read_text()
 
     assert source.count("+                if use_cached_decode_logits_indices:") == 2
-    assert source.count("sample_hidden_states = hidden_states\n") == 2
-    assert source.count("sample_hidden_states = hidden_states[:num_reqs]") == 2
-    assert (
-        source.count(
-            "+                    sample_hidden_states = hidden_states[logits_indices]"
-        )
-        == 2
-    )
-    assert source.count("hidden_states.shape[0] != num_reqs") == 2
+    assert source.count("+                    sample_hidden_states = hidden_states[:num_reqs]") == 2
+    assert source.count(
+        "+                    sample_hidden_states = hidden_states[logits_indices]"
+    ) == 2
+
+
+
+
+def test_final_runner_selects_cached_and_fallback_hidden_rows() -> None:
+    source = RUNNER.read_text()
+
+    prepare_start = source.index("    def _prepare_inputs(")
+    prepare_end = source.index("    def ", prepare_start + 1)
+    prepare = source[prepare_start:prepare_end]
+    assert "use_cached_decode_logits_indices: bool = False" in prepare
+    assert "logits_indices = query_start_loc[1:] - 1" in prepare
+    assert "self._musa_qwen_uniform_decode_logits_indices[" in prepare
+    assert prepare.count("if use_cached_decode_logits_indices:") == 1
+
+    forward_start = source.index("    def execute_model(")
+    forward = source[forward_start:]
+    assert forward.count("if use_cached_decode_logits_indices:") == 2
+    assert forward.count("sample_hidden_states = hidden_states[:num_reqs]") == 2
+    assert forward.count("sample_hidden_states = hidden_states[logits_indices]") == 2
+    assert "max_num_scheduled_tokens == 1" in forward
+    assert "num_tokens_unpadded == num_reqs" in forward
 
 
 def test_identity_hidden_selection_preserves_padding_and_fallback_semantics() -> None:

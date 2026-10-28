@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH = ROOT / "vllm_musa/patches/series/0100-perf-musa-sharded-qwen-gumbel.patch"
+PATCH = ROOT / "vllm_musa/patches/series/0093-perf-add-gated-sharded-Qwen-Gumbel-logits-path.patch"
 SAMPLER = ROOT / "vllm_musa/v1/sample/topk_topp_sampler.py"
 
 
@@ -9,7 +9,10 @@ def test_sharded_gumbel_patch_keeps_the_upstream_default_contract() -> None:
     source = PATCH.read_text()
     assert "vocab_start_index: int = 0" in source
     assert "return_values: bool = False" in source
-    assert 'getattr(self, "_musa_skip_tp_gather", False)' in source
+    tp_gather_patch = next(
+        (ROOT / "vllm_musa/patches/series").glob("0069-*.patch")
+    ).read_text()
+    assert 'getattr(self, "_musa_skip_tp_gather", False)' in tp_gather_patch
     assert source.count("musa_compute_logits_if_eligible(") == 2
 
 

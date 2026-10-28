@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:11 +0800
+Subject: [PATCH] MUSA: accept MUSA online quantization capability
+
+---
+ vllm/model_executor/layers/quantization/online/base.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/quantization/online/base.py b/vllm/model_executor/layers/quantization/online/base.py
+index 511714837f..7337c3c444 100644
+--- a/vllm/model_executor/layers/quantization/online/base.py
++++ b/vllm/model_executor/layers/quantization/online/base.py
+@@ -209,7 +209,8 @@ class OnlineQuantizationConfig(QuantizationConfig):
+     def get_min_capability(cls) -> int:
+         # Note: as more online quant schemes will be added, this
+         # value will become the minimum across all supported schemes.
+-        return 75
++        # MUSA: S5000 reports device capability 31.
++        return 31
+ 
+     @classmethod
+     def get_config_filenames(cls) -> list[str]:

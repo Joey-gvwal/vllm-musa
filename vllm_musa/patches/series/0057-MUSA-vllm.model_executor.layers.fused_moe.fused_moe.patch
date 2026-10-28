@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:06 +0800
+Subject: [PATCH] MUSA: vllm.model_executor.layers.fused_moe.fused_moe
+
+---
+ vllm/model_executor/layers/fused_moe/fused_moe.py | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index e0610c878d..0f0e6af310 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
+@@ -1847,9 +1847,9 @@ def fused_experts_impl(
+         B_bias=w2_bias,
+     )
+ 
+-    ops.moe_sum(
+-        intermediate_cache3.view(*intermediate_cache3.size()),
+-        out_hidden_states,
+-    )
++    _ic3 = intermediate_cache3.view(*intermediate_cache3.size())
++    from vllm_musa.jit_kernel.csrc.moe import maybe_fast_moe_sum
++    if not maybe_fast_moe_sum(_ic3, out_hidden_states):
++        ops.moe_sum(_ic3, out_hidden_states)
+ 
+     return out_hidden_states

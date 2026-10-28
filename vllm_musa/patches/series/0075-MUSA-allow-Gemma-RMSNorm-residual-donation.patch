@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] MUSA: allow Gemma RMSNorm residual donation
+
+---
+ vllm/model_executor/layers/layernorm.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/layernorm.py b/vllm/model_executor/layers/layernorm.py
+index 266a346a64..ec17fb337b 100644
+--- a/vllm/model_executor/layers/layernorm.py
++++ b/vllm/model_executor/layers/layernorm.py
+@@ -165,7 +165,9 @@ class GemmaRMSNorm(CustomOp):
+         weight = self.weight.float() + 1.0
+         if residual is None:
+             return ir.ops.rms_norm(x, weight, self.variance_epsilon)
+-        return ir.ops.fused_add_rms_norm(x, residual, weight, self.variance_epsilon)
++        return ir.ops.fused_add_rms_norm.maybe_inplace(
++            x, residual, weight, self.variance_epsilon
++        )
+ 
+     def forward_cuda(
+         self,

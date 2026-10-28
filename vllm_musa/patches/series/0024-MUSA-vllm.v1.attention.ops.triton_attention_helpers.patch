@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:04 +0800
+Subject: [PATCH] MUSA: vllm.v1.attention.ops.triton_attention_helpers
+
+---
+ vllm/v1/attention/ops/triton_attention_helpers.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
+index 7804b01317..dcfce10dc8 100644
+--- a/vllm/v1/attention/ops/triton_attention_helpers.py
++++ b/vllm/v1/attention/ops/triton_attention_helpers.py
+@@ -95,7 +95,7 @@ def find_seq_idx(
+     we search the plain cumulative-length prefix (used by
+     ``reduce_segments`` which iterates over raw query tokens).
+     """
+-    left: tl.int32 = 0
++    left = 0
+     right = num_seqs
+     while left < right:
+         mid = (left + right) // 2

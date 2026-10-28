@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:11 +0800
+Subject: [PATCH] MUSA: zero padded heads in the BF16 sparse MLA prefill
+
+---
+ vllm/v1/attention/backends/mla/flashmla_sparse.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/v1/attention/backends/mla/flashmla_sparse.py b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+index dc9bb41ff7..7aa3d19e9a 100644
+--- a/vllm/v1/attention/backends/mla/flashmla_sparse.py
++++ b/vllm/v1/attention/backends/mla/flashmla_sparse.py
+@@ -1373,7 +1373,7 @@ class FlashMLASparseImpl(SparseMLACommonImpl[FlashMLASparseMetadata]):
+                 f"{padded_num_heads} for BF16 sparse prefill kernel"
+             )
+             if out is None:
+-                q_padded = q.new_empty((q.shape[0], padded_num_heads, q.shape[2]))
++                q_padded = q.new_zeros((q.shape[0], padded_num_heads, q.shape[2]))
+             else:
+                 *_, q_padded, _, _ = current_workspace_manager().get_simultaneous(
+                     *self.workspace_specs

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:06 +0800
+Subject: [PATCH] MUSA: vllm.distributed.device_communicators.all2all
+
+---
+ vllm/distributed/device_communicators/all2all.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/vllm/distributed/device_communicators/all2all.py b/vllm/distributed/device_communicators/all2all.py
+index 3466700c33..2016de3c9d 100644
+--- a/vllm/distributed/device_communicators/all2all.py
++++ b/vllm/distributed/device_communicators/all2all.py
+@@ -293,7 +293,6 @@ class DeepEPHTAll2AllManager(DeepEPAll2AllManagerBase):
+             num_rdma_bytes=num_rdma_bytes,
+             low_latency_mode=False,
+             num_qps_per_rank=num_qps_per_rank,
+-            explicitly_destroy=True,
+         )
+         return kwargs
+ 
+@@ -374,7 +373,6 @@ class DeepEPLLAll2AllManager(DeepEPAll2AllManagerBase):
+             num_qps_per_rank=num_qps_per_rank,
+             allow_nvlink_for_low_latency_mode=True,
+             allow_mnnvl=envs.VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL,
+-            explicitly_destroy=True,
+             enable_shrink=self.support_fault_tolerance,
+         )
+         return kwargs

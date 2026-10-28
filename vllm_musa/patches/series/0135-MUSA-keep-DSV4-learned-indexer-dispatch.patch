@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:09 +0800
+Subject: [PATCH] MUSA: keep DSV4 learned indexer dispatch
+
+---
+ vllm/models/deepseek_v4/attention.py | 57 ++++++++++------------------
+ 1 file changed, 21 insertions(+), 36 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 1d0abe8399..96636e00ee 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -668,11 +668,11 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         indexer = self.indexer
+         compressor = self.compressor
+         aux_streams = self.aux_stream_list
++        if _musa_deepseek_v4_serialize_long_prefill(hidden_states.size(0)):
++            aux_streams = None
+ 
+         def project_query_and_cache_kv() -> torch.Tensor:
+-            q = self._wq_b_proj(qr, qr_scale).view(
+-                -1, self.n_local_heads, self.head_dim
+-            )
++            q = self.wq_b(qr).view(-1, self.n_local_heads, self.head_dim)
+             return self._fused_qnorm_rope_kv_insert(q, kv, positions, attn_metadata)
+ 
+         index_q: torch.Tensor | None = None
+@@ -696,14 +696,16 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                         indexer_weights,
+                         positions,
+                         self.indexer_rotary_emb,
+-                        qr_scale,
+                     ),
+                     lambda: compressor(kv_score, positions, self.rotary_emb),
+                 ],
+                 self.ln_events[0],
+                 [self.ln_events[1], self.ln_events[2]],
+-                [aux_streams[0], aux_streams[1]] if aux_streams is not None else None,
++                [aux_streams[0], aux_streams[1]]
++                if aux_streams is not None
++                else None,
+                 enable=aux_streams is not None,
++                use_stream_waits=current_platform.is_musa(),
+             )
+             index_q, index_q_scale, index_weights_out = indexer_inputs
+         elif compressor is not None:
+@@ -1205,41 +1207,24 @@ class DeepseekV4Indexer(nn.Module):
+                 self.softmax_scale,
+                 self.n_head**-0.5,
+                 use_fp4=self.use_fp4_kv,
++                output_buffers=outputs,
+             )
+ 
+-        if not skip_compressor:
+-            # compressor returns None and writes K to the indexer KV cache; the
+-            # join orders that write before indexer_op (skip_k_cache_insert=True).
+-            (q_quant, weights), _ = maybe_execute_in_parallel(
+-                wq_b_and_q_quant,
+-                lambda: compressor(compressed_kv_score, positions, rotary_emb),
+-                self.ln_events[0],
+-                self.ln_events[1],
+-                self.aux_stream,
+-            )
+-        else:
+-            q_quant, weights = wq_b_and_q_quant()
++        # compressor returns None and writes K to the indexer KV cache; the
++        # join orders that write before indexer_op (skip_k_cache_insert=True).
++        aux_stream = self.aux_stream
++        if _musa_deepseek_v4_serialize_long_prefill(hidden_states.size(0)):
++            aux_stream = None
++        (q_quant, weights), _ = maybe_execute_in_parallel(
++            wq_b_and_q_quant,
++            lambda: compressor(compressed_kv_score, positions, rotary_emb),
++            self.ln_events[0],
++            self.ln_events[1],
++            aux_stream,
++            use_stream_waits=current_platform.is_musa(),
++        )
+         if isinstance(q_quant, tuple):
+             q, q_scale = q_quant
+         else:
+             q, q_scale = q_quant, None
+         return q, q_scale, weights
+-
+-    def _wq_b_proj(
+-        self, qr: torch.Tensor, qr_scale: torch.Tensor | None = None
+-    ) -> torch.Tensor:
+-        """Project the q-lora input to the indexer query heads.
+-
+-        Same bypass as ``DeepseekV4Attention._wq_b_proj``: on ROCm the fused
+-        norm path hands over pre-quantized fp8 ``qr`` with per-1x128 scales,
+-        so the linear's internal re-quantization must be skipped.
+-        """
+-        if qr_scale is None:
+-            # ReplicatedLinear returns (output, bias); bias is None.
+-            q, _ = self.wq_b(qr)
+-            return q
+-        from vllm.models.deepseek_v4.amd.rocm import (
+-            apply_pre_quantized_block_scaled_mm,
+-        )
+-
+-        return apply_pre_quantized_block_scaled_mm(self.wq_b, qr, qr_scale)

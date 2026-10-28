@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:04 +0800
+Subject: [PATCH] MUSA: vllm.model_executor.layers.quantization.fp8
+
+---
+ vllm/model_executor/layers/quantization/fp8.py | 12 +++++-------
+ 1 file changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/vllm/model_executor/layers/quantization/fp8.py b/vllm/model_executor/layers/quantization/fp8.py
+index b18ec0a0aa..784cdb52fc 100644
+--- a/vllm/model_executor/layers/quantization/fp8.py
++++ b/vllm/model_executor/layers/quantization/fp8.py
+@@ -7,7 +7,6 @@ import torch
+ 
+ import vllm.envs as envs
+ from vllm.config import get_current_vllm_config
+-from vllm.distributed import get_tensor_model_parallel_world_size
+ from vllm.model_executor.kernels.linear import (
+     fp8_scaled_mm_is_batch_invariant,
+     init_fp8_linear_kernel,
+@@ -144,7 +143,7 @@ class Fp8Config(QuantizationConfig):
+ 
+     @classmethod
+     def get_min_capability(cls) -> int:
+-        return 75
++        return 31
+ 
+     @classmethod
+     def get_config_filenames(cls) -> list[str]:
+@@ -554,11 +553,10 @@ class Fp8MoEMethod(FusedMoEMethodBase):
+             else:
+                 # Use the refined block grid for the scale parameters; the
+                 # loader upsamples the checkpoint scales accordingly.
+-                tp_size = get_tensor_model_parallel_world_size()
+-                if intermediate_size_per_partition % block_n != 0:
+-                    block_n, block_k = moe_block_shape
+-                if tp_size > 1 and intermediate_size_per_partition % block_k != 0:
+-                    block_n, block_k = moe_block_shape
++                # Both axes are refined by weight_loader. Keep the parameter
++                # grid aligned with that full refinement even when only one
++                # axis caused the TP-shard incompatibility.
++                block_n, block_k = moe_block_shape
+ 
+         # WEIGHTS
+         w13_weight = torch.nn.Parameter(

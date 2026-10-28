@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:04 +0800
+Subject: [PATCH] MUSA: vllm.models.deepseek_v4.nvidia.model
+
+---
+ vllm/models/deepseek_v4/nvidia/model.py | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index ec7c06de3d..0f1ea4e7c7 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -1318,8 +1318,12 @@ class DeepseekV4Model(nn.Module, EagleModelMixin):
+         # DeepseekV4Attention._run_parallel_input_projections
+         # (compressor kv_score, indexer.weights_proj, indexer.compressor
+         # kv_score). fused_wqa_wkv stays on the default stream.
+-        aux_stream_list = [torch.cuda.Stream() for _ in range(3)]
+-
++        # Disable them on ROCm/XPU because of backend hang issues/no overlap.
++        aux_stream_list = (
++            None
++            if current_platform.is_rocm() or current_platform.is_xpu()
++            else [torch.cuda.Stream() for _ in range(3)]
++        )
+         # Reserved topk indices buffer for all Indexer layers to reuse.
+         self.topk_indices_buffer = torch.empty(
+             vllm_config.scheduler_config.max_num_batched_tokens,

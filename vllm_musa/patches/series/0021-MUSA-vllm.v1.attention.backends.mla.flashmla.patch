@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:04 +0800
+Subject: [PATCH] MUSA: vllm.v1.attention.backends.mla.flashmla
+
+---
+ vllm/v1/attention/backends/mla/flashmla.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/v1/attention/backends/mla/flashmla.py b/vllm/v1/attention/backends/mla/flashmla.py
+index c8cd31d564..0c2e57056e 100644
+--- a/vllm/v1/attention/backends/mla/flashmla.py
++++ b/vllm/v1/attention/backends/mla/flashmla.py
+@@ -72,7 +72,7 @@ class FlashMLABackend(MLACommonBackend):
+ 
+     @classmethod
+     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
+-        return capability.major in [9, 10]
++        return capability.major in [3]
+ 
+     @classmethod
+     def supports_combination(

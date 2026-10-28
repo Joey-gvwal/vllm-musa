@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:08 +0800
+Subject: [PATCH] MUSA: bind DeepSeek-V4 optimization contract
+
+---
+ .../layers/sparse_attn_indexer.py             |  2 ++
+ vllm/models/deepseek_v4/attention.py          | 20 ++++++++++++++++++-
+ vllm/models/deepseek_v4/nvidia/model.py       |  6 ++++++
+ 3 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 96264c05bb..fb80c84f7d 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -2463,6 +2463,8 @@ class SparseAttnIndexer(CustomOp):
+         candidate_blocks: torch.Tensor | None = None,
+         candidate_block_size: int = 0,
+         candidate_write: bool = False,
++        use_musa_native_indexer: bool = False,
++        use_musa_materialized_prefill: bool = False,
+     ):
+         super().__init__()
+         self.k_cache = k_cache
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 94d82059ba..6f9193c913 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -1108,8 +1108,25 @@ class DeepseekV4Indexer(nn.Module):
+             prefix=f"{prefix}.compressor",
+             k_cache_prefix=self.k_cache.prefix,
+             use_fp4_cache=self.use_fp4_kv,
++            eager_scratch_pool=eager_scratch_pool,
+         )
+ 
++        use_musa_native_indexer = False
++        use_musa_materialized_prefill = False
++        if current_platform.is_musa():
++            from vllm_musa.optimization_contract import (
++                OptimizationFeature,
++                resolve_optimization_contract,
++            )
++
++            optimization_contract = resolve_optimization_contract(vllm_config)
++            use_musa_native_indexer = optimization_contract.prefers(
++                OptimizationFeature.DEEPSEEK_V4_NATIVE_SPARSE_INDEXER
++            )
++            use_musa_materialized_prefill = optimization_contract.prefers(
++                OptimizationFeature.DEEPSEEK_V4_MATERIALIZED_PREFILL_INDEXER
++            )
++
+         self.indexer_op = SparseAttnIndexer(
+             self.k_cache,
+             self.quant_block_size,
+@@ -1121,7 +1138,8 @@ class DeepseekV4Indexer(nn.Module):
+             self.topk_indices_buffer,
+             skip_k_cache_insert=True,
+             use_fp4_cache=self.use_fp4_kv,
+-            compress_ratio=self.compress_ratio,
++            use_musa_native_indexer=use_musa_native_indexer,
++            use_musa_materialized_prefill=use_musa_materialized_prefill,
+         )
+ 
+         # None on ROCm — maybe_execute_in_parallel falls back to sequential.
+diff --git a/vllm/models/deepseek_v4/nvidia/model.py b/vllm/models/deepseek_v4/nvidia/model.py
+index 4cab5af9ef..9ae597f8f8 100644
+--- a/vllm/models/deepseek_v4/nvidia/model.py
++++ b/vllm/models/deepseek_v4/nvidia/model.py
+@@ -174,6 +174,12 @@ class DeepseekV4MLP(nn.Module):
+             disable_tp=is_sequence_parallel,
+             prefix=f"{prefix}.down_proj",
+         )
++        if current_platform.is_musa():
++            from vllm.config import get_current_vllm_config_or_none
++
++            from vllm_musa.optimization_contract import bind_optimization_contract
++
++            bind_optimization_contract(self.down_proj, get_current_vllm_config_or_none())
+         if hidden_act != "silu":
+             raise ValueError(
+                 f"Unsupported activation: {hidden_act}. Only silu is supported for now."

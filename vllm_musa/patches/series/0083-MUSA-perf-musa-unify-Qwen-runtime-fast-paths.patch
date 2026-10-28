@@ -1,0 +1,194 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] MUSA: perf(musa): unify Qwen runtime fast paths
+
+---
+ vllm/v1/sample/metadata.py         |  3 ++
+ vllm/v1/worker/gpu/model_runner.py | 29 ++++++-----------
+ vllm/v1/worker/gpu_input_batch.py  | 15 +++++++++
+ vllm/v1/worker/gpu_model_runner.py | 50 ++++++++++++++++++++++++++++--
+ 4 files changed, 76 insertions(+), 21 deletions(-)
+
+diff --git a/vllm/v1/sample/metadata.py b/vllm/v1/sample/metadata.py
+index fa4ceac8e7..98fc48d095 100644
+--- a/vllm/v1/sample/metadata.py
++++ b/vllm/v1/sample/metadata.py
+@@ -53,3 +53,6 @@ class SamplingMetadata:
+     # When non-None, use ``holder.has_tracked_requests()`` to see if this batch applies
+     # thinking-token-budget logits (holder may exist with an empty tracking set).
+     thinking_budget_state_holder: ThinkingBudgetStateHolder | None = None
++    # CPU-side hints for exact-gated platform sampler specializations.
++    uniform_top_k: int | None = None
++    uniform_temperature: float | None = None
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index 57cef586f8..63d66f579f 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -437,21 +437,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             + self.model_state.num_new_sampled_tokens_per_step
+         )
+ 
+-        if self.parallel_config.enable_batch_sharded_sampling:
+-            if hasattr(self.model, "compute_logits_local"):
+-                self.batch_sharder = BatchSharder(
+-                    max_num_reqs=self.max_num_reqs,
+-                    max_num_logits_per_req=self.decode_query_len,
+-                    device=self.device,
+-                )
+-                logger.info("Batch-sharded sampling enabled.")
+-            else:
+-                logger.warning_once(
+-                    "Disabling batch-sharded sampling: %s does not implement "
+-                    "compute_logits_local",
+-                    type(self.model).__name__,
+-                )
+-
+         # Initialize samplers. Model states may override via custom_sampler().
+         config_processors = self.model_config.logits_processors or ()
+         custom_logits_processors = build_custom_logits_processors(
+@@ -506,10 +491,16 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                     self.sampler,
+                     self.speculative_config,
+                     self.device,
+-                    watermark_key=speculative_target_watermark_key(
+-                        self.vllm_config.watermark_config
+-                    ),
+                 )
++            from vllm_musa.optimization_contract import resolve_optimization_contract
++
++            optimization_contract = resolve_optimization_contract(
++                model_config=self.model_config
++            )
++            self.sampler._musa_optimization_contract = optimization_contract
++            topk_topp_sampler = getattr(self.sampler, "topk_topp_sampler", None)
++            if topk_topp_sampler is not None:
++                topk_topp_sampler._musa_optimization_contract = optimization_contract
+             self.prompt_logprobs_worker = PromptLogprobsWorker(
+                 self.max_num_reqs,
+                 self.device,
+@@ -1525,7 +1516,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             query_start_loc_np=query_start_loc_np,
+             seq_lens=seq_lens,
+             seq_lens_cpu_upper_bound=seq_lens_cpu_upper_bound,
+-            dcp_local_seq_lens=None,
++            dcp_local_seq_lens=dcp_local_seq_lens,
+             num_computed_tokens_np=num_computed_tokens_np,
+             prefill_len_np=batch_req_state.prefill_len_np,
+             num_computed_prefill_tokens_np=batch_req_state.num_computed_prefill_tokens_np,
+diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
+index f89e5251c4..9a9beb4069 100644
+--- a/vllm/v1/worker/gpu_input_batch.py
++++ b/vllm/v1/worker/gpu_input_batch.py
+@@ -937,6 +937,19 @@ class InputBatch:
+                     req_index = self.req_id_to_index[req_id]
+                     logprob_token_ids_by_index[req_index] = token_ids
+ 
++        uniform_top_k = None
++        if self.vocab_size in (151936, 248320) and not self.no_top_k and num_reqs > 0:
++            top_k_cpu = self.top_k_cpu[:num_reqs]
++            candidate_top_k = int(top_k_cpu[0])
++            if candidate_top_k == 50 and np.all(top_k_cpu == candidate_top_k):
++                uniform_top_k = candidate_top_k
++
++        uniform_temperature = None
++        if self.vocab_size in (151936, 248320) and self.all_random and num_reqs > 0:
++            temperature_cpu = self.temperature_cpu[:num_reqs]
++            if np.all(temperature_cpu == np.float32(1.0)):
++                uniform_temperature = 1.0
++
+         return SamplingMetadata(
+             temperature=temperature,
+             all_greedy=self.all_greedy,
+@@ -957,6 +970,8 @@ class InputBatch:
+             bad_words_token_ids=self.bad_words_token_ids,
+             logitsprocs=self.logitsprocs,
+             thinking_budget_state_holder=self.thinking_budget_state_holder,
++            uniform_top_k=uniform_top_k,
++            uniform_temperature=uniform_temperature,
+         )
+ 
+     def get_pooling_params(self) -> list[PoolingParams]:
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 4b5df27026..b7fea5a89b 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -751,6 +751,32 @@ class GPUModelRunner(
+             use_replayssm=self.cache_config.use_replayssm,
+         )
+ 
++        from vllm_musa.optimization_contract import (
++            OptimizationFeature,
++            resolve_optimization_contract,
++        )
++
++        optimization_contract = resolve_optimization_contract(
++            self.vllm_config,
++            is_pooling_model=self.is_pooling_model,
++        )
++        is_musa_qwen_text_generation = (
++            current_platform.is_musa()
++            and optimization_contract.prefers(
++                OptimizationFeature.QWEN_LEGACY_SAMPLING
++            )
++        )
++        self.sampler._musa_qwen_legacy_sampling = is_musa_qwen_text_generation
++        self.sampler._musa_optimization_contract = optimization_contract
++        self.sampler.topk_topp_sampler._musa_optimization_contract = (
++            optimization_contract
++        )
++        self._musa_qwen_uniform_decode_logits_indices = (
++            torch.arange(self.max_num_reqs, dtype=torch.int32, device=self.device)
++            if is_musa_qwen_text_generation
++            else None
++        )
++
+         # Separate cuda stream for overlapping transfer of sampled token ids from
+         # GPU to CPU when async scheduling is enabled.
+         self.async_output_copy_stream: torch.cuda.Stream | None = None
+@@ -1951,6 +1977,8 @@ class GPUModelRunner(
+         self,
+         scheduler_output: "SchedulerOutput",
+         num_scheduled_tokens: np.ndarray,
++        *,
++        use_cached_decode_logits_indices: bool = False,
+     ) -> tuple[
+         torch.Tensor,
+         SpecDecodeMetadata | None,
+@@ -2218,7 +2246,13 @@ class GPUModelRunner(
+             # from these partial requests, we do so for simplicity.
+             # We will ignore the sampled tokens from the partial requests.
+             # TODO: Support prompt logprobs.
+-            logits_indices = query_start_loc[1:] - 1
++            if use_cached_decode_logits_indices:
++                assert self._musa_qwen_uniform_decode_logits_indices is not None
++                logits_indices = self._musa_qwen_uniform_decode_logits_indices[
++                    :num_reqs
++                ]
++            else:
++                logits_indices = query_start_loc[1:] - 1
+             spec_decode_metadata = None
+             num_sampled_tokens = np.ones(num_reqs, dtype=np.int32)
+         else:
+@@ -4079,8 +4113,20 @@ class GPUModelRunner(
+             max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
+             num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
+ 
++            use_cached_decode_logits_indices = (
++                self._musa_qwen_uniform_decode_logits_indices is not None
++                and max_num_scheduled_tokens == 1
++                and num_tokens_unpadded == num_reqs
++            )
++
+             logits_indices, spec_decode_metadata, max_num_sampled_tokens = (
+-                self._prepare_inputs(scheduler_output, num_scheduled_tokens_np)
++                self._prepare_inputs(
++                    scheduler_output,
++                    num_scheduled_tokens_np,
++                    use_cached_decode_logits_indices=(
++                        use_cached_decode_logits_indices
++                    ),
++                )
+             )
+ 
+             (

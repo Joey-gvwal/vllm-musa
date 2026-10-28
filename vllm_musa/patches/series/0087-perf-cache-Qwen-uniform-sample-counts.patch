@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:07 +0800
+Subject: [PATCH] perf: cache Qwen uniform sample counts
+
+---
+ vllm/v1/worker/gpu/sample/sampler.py | 20 +++++++++++---------
+ 1 file changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/vllm/v1/worker/gpu/sample/sampler.py b/vllm/v1/worker/gpu/sample/sampler.py
+index 7ffc5bf493..bc949918ff 100644
+--- a/vllm/v1/worker/gpu/sample/sampler.py
++++ b/vllm/v1/worker/gpu/sample/sampler.py
+@@ -190,17 +190,20 @@ class Sampler:
+         # 1 sampled token per request, except chunked-prefill requests
+         # (seq_len < prefill_len) which aren't done prefilling and produce no
+         # output token. num_rejected is always 0 here (one logit per request).
+-        num_sampled, num_rejected = get_num_sampled_and_rejected(
+-            input_batch.seq_lens.new_ones(input_batch.num_reqs),
+-            input_batch.seq_lens,
+-            input_batch.cu_num_logits,
+-            input_batch.idx_mapping,
+-            self.req_states.prefill_len.gpu,
+-        )
++        selector = getattr(self, "_musa_select_num_sampled_and_rejected", None)
++        counts = None if selector is None else selector(logits, input_batch)
++        if counts is None:
++            counts = get_num_sampled_and_rejected(
++                input_batch.seq_lens.new_ones(input_batch.num_reqs),
++                input_batch.seq_lens,
++                input_batch.cu_num_logits,
++                input_batch.idx_mapping,
++                self.req_states.prefill_len.gpu,
++            )
++        num_sampled, num_rejected = counts
+ 
+         sampling_mask_tensors = None
+         if self.return_sampling_mask:
+-            # Size by the validated top_k batch max; wider supports use the bitmask.
+             max_num_kept = int(np.max(self.sampling_states.top_k.np[idx_mapping_np]))
+             sampling_mask_tensors = SamplingMaskTensors.from_logits(
+                 processed_logits,
+@@ -208,7 +211,6 @@ class Sampler:
+                 num_sampled,
+                 max_num_kept,
+             )
+-
+         # These are GPU tensors.
+         sampler_output = SamplerOutput(
+             # The sampled tokens are expanded to 2D tensor with shape

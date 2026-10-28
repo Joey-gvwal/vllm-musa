@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
-MEMBER = "0163-MUSA-mamba2-ssd-nemotron-prefill-tile.patch"
+MEMBER = "0137-MUSA-mamba2-ssd-nemotron-prefill-tile.patch"
 
 
 def _member() -> str:

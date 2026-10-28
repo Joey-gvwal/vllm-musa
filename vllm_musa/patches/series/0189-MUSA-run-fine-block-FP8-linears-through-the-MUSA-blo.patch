@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:12 +0800
+Subject: [PATCH] MUSA: run fine-block FP8 linears through the MUSA block GEMV
+
+---
+ vllm/model_executor/kernels/linear/__init__.py | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/vllm/model_executor/kernels/linear/__init__.py b/vllm/model_executor/kernels/linear/__init__.py
+index 21d5419e10..712518087c 100644
+--- a/vllm/model_executor/kernels/linear/__init__.py
++++ b/vllm/model_executor/kernels/linear/__init__.py
+@@ -702,12 +702,16 @@ def choose_scaled_mm_linear_kernel(
+     platform_kernels = possible_kernels.get(current_platform._enum)
+     if platform_kernels is None and current_platform.is_musa():
+         if possible_kernels is _POSSIBLE_FP8_BLOCK_KERNELS:
++            from vllm_musa.model_executor.kernels.linear.scaled_mm.block_gemv import (
++                MUSAFp8BlockGemvScaledMMKernel,
++            )
+             from vllm_musa.model_executor.kernels.linear.scaled_mm.deep_gemm import (
+                 MUSADeepGemmFp8BlockScaledMMKernel,
+             )
+ 
+             platform_kernels = [
+                 MUSADeepGemmFp8BlockScaledMMKernel,
++                MUSAFp8BlockGemvScaledMMKernel,
+                 TritonFp8BlockScaledMMKernel,
+             ]
+         elif possible_kernels is _POSSIBLE_FP8_KERNELS:

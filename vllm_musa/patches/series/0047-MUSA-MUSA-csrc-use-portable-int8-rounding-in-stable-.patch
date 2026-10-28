@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:05 +0800
+Subject: [PATCH] MUSA: MUSA(csrc): use portable int8 rounding in stable quant
+ conversions
+
+---
+ csrc/quantization/fused_kernels/quant_conversions.cuh | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/csrc/quantization/fused_kernels/quant_conversions.cuh b/csrc/quantization/fused_kernels/quant_conversions.cuh
+index 1953e90f5d..2423d7055c 100644
+--- a/csrc/quantization/fused_kernels/quant_conversions.cuh
++++ b/csrc/quantization/fused_kernels/quant_conversions.cuh
+@@ -13,7 +13,9 @@ namespace vllm {
+ // TODO(luka/varun): combine into common utilities for int8
+ //  (with int8_quant_kernels.cu)
+ static __device__ __forceinline__ int8_t float_to_int8_rn(float const x) {
+-#ifdef USE_ROCM
++// MUSA: mcc cannot assemble the NVIDIA-only `cvt.rni.sat.s8.f32` PTX below
++// (it emits wrong int8s), so take the portable nearbyint+saturate path ROCm uses.
++#if defined(USE_ROCM) || defined(USE_MUSA)
+   static const float i8_min =
+       static_cast<float>(std::numeric_limits<int8_t>::min());
+   static const float i8_max =

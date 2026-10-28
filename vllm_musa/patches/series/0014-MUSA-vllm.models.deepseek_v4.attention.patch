@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:04 +0800
+Subject: [PATCH] MUSA: vllm.models.deepseek_v4.attention
+
+---
+ vllm/models/deepseek_v4/attention.py | 151 ++++++++++++++++++++++-----
+ 1 file changed, 125 insertions(+), 26 deletions(-)
+
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 4f756538fb..df3a60a758 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -90,6 +90,104 @@ def _fill_short_context_topk_indices(
+     )
+ 
+ 
++# MUSA: the DeepSeek-V4 attention helpers below branch on the active platform.
++_MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS = 16
++
++
++def _musa_deepseek_v4_serialize_long_prefill(num_tokens: int) -> bool:
++    return current_platform.device_type == "musa" and num_tokens > 8192
++
++
++def _musa_deepseek_v4_use_score_fp32_deepgemm(
++    a: torch.Tensor,
++    weight: torch.Tensor,
++    out_dtype: torch.dtype,
++) -> bool:
++    is_musa = (
++        current_platform.is_musa()
++        or getattr(torch.version, "musa", None) is not None
++        or getattr(a.device, "type", None) == "musa"
++        or getattr(weight.device, "type", None) == "musa"
++    )
++    return (
++        is_musa
++        and a.ndim == 2
++        and weight.ndim == 2
++        and a.dtype == torch.bfloat16
++        and weight.dtype == torch.bfloat16
++        and out_dtype == torch.float32
++        and a.shape[0] <= _MUSA_DEEPSEEK_V4_SCORE_FP32_DEEPGEMM_MAX_TOKENS
++    )
++
++
++def _musa_deepseek_v4_linear_out_dtype(
++    a: torch.Tensor,
++    weight: torch.Tensor,
++    out_dtype: torch.dtype,
++) -> torch.Tensor:
++    if _musa_deepseek_v4_use_score_fp32_deepgemm(a, weight, out_dtype):
++        try:
++            import deep_gemm
++        except ImportError:
++            from mate import deep_gemm
++
++        output = torch.empty(
++            (a.shape[0], weight.shape[0]),
++            dtype=out_dtype,
++            device=a.device,
++        )
++        deep_gemm.bf16_gemm_nt(a, weight, output)
++        return output
++    if (
++        current_platform.is_musa()
++        or getattr(torch.version, "musa", None) is not None
++        or a.device.type == "musa"
++        or weight.device.type == "musa"
++    ):
++        return F.linear(a.to(out_dtype), weight.to(out_dtype))
++    return torch.mm(a, weight.T, out_dtype=out_dtype)
++
++
++def _musa_deepseek_v4_is_musa_tensor(tensor: torch.Tensor) -> bool:
++    return (
++        current_platform.is_musa()
++        or getattr(torch.version, "musa", None) is not None
++        or getattr(tensor.device, "type", None) == "musa"
++    )
++
++
++def _musa_deepseek_v4_qnorm_rope_kv_insert(
++    q: torch.Tensor,
++    kv: torch.Tensor,
++    kv_cache: torch.Tensor,
++    slot_mapping: torch.Tensor,
++    positions: torch.Tensor,
++    cos_sin_cache: torch.Tensor,
++    padded_heads: int,
++    eps: float,
++    block_size: int,
++) -> torch.Tensor:
++    from vllm_musa import _custom_ops as _musa_custom_ops
++
++    active_slot_mapping = slot_mapping
++    if slot_mapping.shape[0] > q.shape[0]:
++        active_slot_mapping = slot_mapping[: q.shape[0]].contiguous()
++
++    _musa_custom_ops.deepseek_v4_qnorm_rope_kv_insert(
++        q,
++        kv,
++        kv_cache,
++        active_slot_mapping,
++        positions.contiguous(),
++        cos_sin_cache,
++        eps,
++        block_size,
++    )
++    if q.shape[1] < padded_heads:
++        return F.pad(q, (0, 0, 0, padded_heads - q.shape[1]), value=0.0)
++    return q
++
++
+ def _resolve_dsv4_kv_cache_dtype(
+     use_fp8_ds_mla_layout: bool,
+     kv_cache_dtype: str,
+@@ -483,7 +581,14 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         qr_kv, kv_score, indexer_kv_score, indexer_weights = (
+             self._run_parallel_input_projections(hidden_states)
+         )
+-        qr, qr_scale, kv = self._split_qkv_and_norm(qr_kv)
++        qr, kv = qr_kv.split([self.q_lora_rank, self.head_dim], dim=-1)
++        qr, kv = fused_q_kv_rmsnorm(
++            qr,
++            kv,
++            self.q_norm.weight.data,
++            self.kv_norm.weight.data,
++            self.eps,
++        )
+ 
+         self._prepare_and_attn_fn(
+             hidden_states,
+@@ -557,7 +662,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             hidden_states,
+             qr,
+             kv,
+-            qr_scale,
+             kv_score,
+             indexer_kv_score,
+             indexer_weights,
+@@ -651,24 +755,6 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         qr_kv, _ = self.fused_wqa_wkv(hidden_states)
+         return qr_kv
+ 
+-    def _wq_b_proj(
+-        self, qr: torch.Tensor, qr_scale: torch.Tensor | None = None
+-    ) -> torch.Tensor:
+-        """Project the q-lora input to the query heads.
+-
+-        ``qr_scale`` is only set by the ROCm fused path, where ``qr`` is
+-        already fp8-quantized with per-1x128 scales and must bypass the
+-        linear's internal re-quantization (apply_weights would quantize
+-        the fp8 input again).
+-        """
+-        if qr_scale is None:
+-            return self.wq_b(qr)
+-        from vllm.models.deepseek_v4.amd.rocm import (
+-            apply_pre_quantized_block_scaled_mm,
+-        )
+-
+-        return apply_pre_quantized_block_scaled_mm(self.wq_b, qr, qr_scale)
+-
+     def _run_parallel_input_projections(
+         self, hidden_states: torch.Tensor
+     ) -> tuple[
+@@ -692,10 +778,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+             compressor = self.compressor
+ 
+             def compressor_kv_score() -> torch.Tensor:
+-                return torch.mm(
++                return _musa_deepseek_v4_linear_out_dtype(
+                     hidden_states,
+-                    compressor.fused_wkv_wgate.weight.T,
+-                    out_dtype=torch.float32,
++                    compressor.fused_wkv_wgate.weight,
++                    torch.float32,
+                 )
+ 
+             aux_fns[0] = compressor_kv_score
+@@ -709,10 +795,10 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+                 return weights
+ 
+             def indexer_compressor_kv_score() -> torch.Tensor:
+-                return torch.mm(
++                return _musa_deepseek_v4_linear_out_dtype(
+                     hidden_states,
+-                    indexer.compressor.fused_wkv_wgate.weight.T,
+-                    out_dtype=torch.float32,
++                    indexer.compressor.fused_wkv_wgate.weight,
++                    torch.float32,
+                 )
+ 
+             aux_fns[1] = indexer_weights_proj
+@@ -789,6 +875,19 @@ class DeepseekV4Attention(nn.Module, AttentionLayerBase, ABC):
+         cos_sin_cache = self.rotary_emb.cos_sin_cache
+         cache_dtype = swa_kv_cache.dtype
+ 
++        if _musa_deepseek_v4_is_musa_tensor(q):
++            return _musa_deepseek_v4_qnorm_rope_kv_insert(
++                q,
++                kv,
++                swa_kv_cache,
++                swa_metadata.slot_mapping,
++                positions.to(torch.int64),
++                self.rotary_emb.cos_sin_cache,
++                self.padded_heads,
++                self.eps,
++                swa_metadata.block_size,
++            )
++
+         # kv is unchanged; attention reads kv solely via swa_kv_cache.
+         if cache_dtype == torch.uint8:
+             # fp8_ds_mla UE8M0 paged path. Horizontally fused:

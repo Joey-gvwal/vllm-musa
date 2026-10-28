@@ -77,9 +77,9 @@ def test_linear_kernel_takes_only_fine_k_blocks_and_small_m() -> None:
 
 
 def test_series_lists_block_gemv_between_deepgemm_and_triton() -> None:
-    added = _added(_patch("0029"))
+    added = _added(_patch("0189"))
     assert "MUSAFp8BlockGemvScaledMMKernel," in added
-    text = _patch("0029")
+    text = _patch("0189")
     order = [
         text.index(
             "MUSADeepGemmFp8BlockScaledMMKernel,\n+                MUSAFp8BlockGemvScaledMMKernel,"
@@ -90,7 +90,7 @@ def test_series_lists_block_gemv_between_deepgemm_and_triton() -> None:
 
 
 def test_prefill_indexer_rows_are_scored_without_host_syncs() -> None:
-    text = _patch("0028")
+    text = _patch("0188")
     added = _added(text)
     removed = "\n".join(
         line[1:]
@@ -223,7 +223,7 @@ def test_block32_moe_policy_is_triton_only_and_leaves_other_shapes() -> None:
 
 
 def test_prefill_indexer_scores_fp8_keys_before_the_fp32_fallback() -> None:
-    text = _patch("0030")
+    text = _patch("0190")
     added = _added(text)
     assert "def _musa_gather_indexer_fp8_cache_quantized(" in added
     assert "fp8_mqa_logits(" in added
@@ -237,7 +237,7 @@ def test_prefill_indexer_scores_fp8_keys_before_the_fp32_fallback() -> None:
 
 
 def test_decode_indexer_scores_fp8_tiles_with_one_dot() -> None:
-    text = _patch("0031")
+    text = _patch("0191")
     added = _added(text)
     removed = "\n".join(
         line[1:]
@@ -251,7 +251,7 @@ def test_decode_indexer_scores_fp8_tiles_with_one_dot() -> None:
 
 
 def test_indexer_topk_up_to_512_uses_the_staged_radix_select() -> None:
-    text = _patch("0032")
+    text = _patch("0192")
     added = _added(text)
     removed = "\n".join(
         line[1:]
@@ -266,7 +266,8 @@ def test_indexer_topk_up_to_512_uses_the_staged_radix_select() -> None:
     assert "not bool(row_starts.any())" in windows
     assert added.count("_musa_select_indexer_topk_windows(") == 4
     assert added.count("_musa_select_indexer_topk(") == 4
-    assert "select_topk = (" in removed
+    assert "_musa_custom_ops.sparse_indexer_topk_decode(logits, row_lens" in select
+    assert "_musa_custom_ops.sparse_indexer_topk_decode(" in removed
 
 
 def test_decode_mhc_prenorm_uses_fp32_fma_partials_for_measured_shapes() -> None:

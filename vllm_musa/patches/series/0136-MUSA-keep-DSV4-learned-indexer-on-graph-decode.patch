@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:10 +0800
+Subject: [PATCH] MUSA: keep DSV4 learned indexer on graph decode
+
+---
+ .../layers/sparse_attn_indexer.py             | 50 +++++++++++++++++++
+ 1 file changed, 50 insertions(+)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index 5ee2364586..a8894e9387 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -2571,6 +2571,56 @@ class SparseAttnIndexer(CustomOp):
+                 "CUDA, ROCm, XPU and CPU platforms."
+             )
+ 
++    def uses_musa_recent_indices(self) -> bool:
++        """Whether this capture uses the MUSA recent-window approximation."""
++        # The recent table is metadata-only: it does not consume the learned
++        # indexer query or per-head weights and therefore is not semantically
++        # equivalent to the DSV4 learned indexer. The DSV4 optimization
++        # contract is currently the only caller that sets
++        # ``use_musa_native_indexer``.
++        if self.use_musa_native_indexer:
++            return False
++        return (
++            current_platform.is_musa()
++            and self.use_musa_native_indexer
++            and _musa_sparse_indexer_is_current_stream_capturing()
++            and not _musa_sparse_indexer_graph_exact_decode_enabled()
++        )
++
++    def forward_musa_recent(self, hidden_states: torch.Tensor) -> torch.Tensor:
++        """Reuse metadata-built recent indices for every C4 layer."""
++        attn_metadata = get_forward_context().attn_metadata
++        metadata = None
++        if isinstance(attn_metadata, dict):
++            metadata = attn_metadata.get(_resolve_layer_name(self.k_cache.prefix))
++        if (
++            isinstance(metadata, DeepseekV32IndexerMetadata)
++            and metadata.recent_indices is not None
++        ):
++            if not metadata.recent_indices_ready:
++                rows = min(
++                    hidden_states.shape[0],
++                    self.topk_indices_buffer.shape[0],
++                    metadata.recent_indices.shape[0],
++                )
++                topk = min(
++                    self.topk_tokens,
++                    self.topk_indices_buffer.shape[1],
++                    metadata.recent_indices.shape[1],
++                )
++                self.topk_indices_buffer[:rows, :topk].copy_(
++                    metadata.recent_indices[:rows, :topk]
++                )
++                metadata.recent_indices_ready = True
++            return self.topk_indices_buffer
++
++        return _musa_fill_recent_sparse_indexer_indices(
++            hidden_states,
++            self.k_cache.prefix,
++            self.topk_tokens,
++            self.topk_indices_buffer,
++        )
++
+     def forward_cuda(
+         self,
+         hidden_states: torch.Tensor,

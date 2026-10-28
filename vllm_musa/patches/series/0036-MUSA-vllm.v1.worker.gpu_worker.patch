@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:05 +0800
+Subject: [PATCH] MUSA: vllm.v1.worker.gpu_worker
+
+---
+ vllm/v1/worker/gpu_worker.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index 04feb5da02..6d873bbacf 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -434,7 +434,7 @@ class Worker(WorkerBase):
+ 
+     @instrument(span_name="Init device")
+     def init_device(self):
+-        if self.device_config.device_type == "cuda":
++        if self.device_config.device_type in ("cuda", "musa"):
+             # This env var set by Ray causes exceptions with graph building.
+             os.environ.pop("NCCL_ASYNC_ERROR_HANDLING", None)
+             parallel_config = self.parallel_config

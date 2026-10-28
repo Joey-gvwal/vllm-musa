@@ -19,8 +19,8 @@ def _read_entry(prefix: str) -> str:
 
 
 def test_separate_pool_keeps_attention_and_mamba_page_sizes_independent():
-    source = _read("0001-MUSA-base-platform-port.patch")
-    fastpath = _read_entry("0057")
+    source = "\n".join(p.read_text() for p in sorted(SERIES.glob("*.patch")))
+    fastpath = _read_entry("0207")
     platform = (ROOT / "vllm_musa" / "platform.py").read_text()
     kernel = (ROOT / "vllm_musa" / "jit_kernel" / "mamba_metadata.py").read_text()
 
@@ -43,8 +43,8 @@ def test_separate_pool_keeps_attention_and_mamba_page_sizes_independent():
 
 
 def test_mixed_page_memory_check_accounts_for_each_cache_family():
-    plan = _read("0001-MUSA-base-platform-port.patch")
-    accounting = _read_entry("0056")
+    plan = "\n".join(p.read_text() for p in sorted(SERIES.glob("*.patch")))
+    accounting = _read_entry("0206")
 
     assert "_musa_mamba_pool_blocks_per_request" in accounting
     assert "max_num_blocks_per_req" in accounting
@@ -71,7 +71,7 @@ def test_mixed_page_memory_check_accounts_for_each_cache_family():
 
 
 def test_group_builder_keeps_attention_page_independent():
-    bypass = _read_entry("0056")
+    bypass = _read_entry("0206")
     assert "musa_mamba_separate_pool_enabled()" in bypass
     assert "and vllm_config.kv_transfer_config is None" in bypass
     assert "mamba_specs = {" in bypass

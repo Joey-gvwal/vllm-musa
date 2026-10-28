@@ -26,20 +26,20 @@ def test_qwen_model_specific_env_gates_are_removed() -> None:
 def test_qwen_patch_consumers_bind_contract_features() -> None:
     shared_expert = _source(
         "vllm_musa/patches/series/"
-        "0076-MUSA-model-fold-the-Qwen3.5-shared-expert-into-fused.patch"
+        "0073-MUSA-MUSA-model-fold-the-Qwen3.5-shared-expert-into-.patch"
     )
     fused_mrope = _source(
         "vllm_musa/patches/series/"
-        "0086-MUSA-model-fuse-QK-RMSNorm-and-MRoPE-for-interleaved.patch"
+        "0081-MUSA-MUSA-model-fuse-QK-RMSNorm-and-MRoPE-for-interl.patch"
     )
     mamba_pool = _source(
-        "vllm_musa/patches/series/0082-MUSA-separate-mamba-state-BlockPools.patch"
+        "vllm_musa/patches/series/0078-MUSA-allocate-Mamba-state-in-dedicated-KV-cache-pool.patch"
     )
 
     assert "QWEN35_SHARED_EXPERT_FOLD" in shared_expert
     assert "QWEN35_INTERLEAVED_MROPE_QK" in fused_mrope
-    assert "def musa_mamba_separate_pool_enabled" in mamba_pool
-    assert "+    return True" in mamba_pool
+    assert "musa_mamba_separate_pool_enabled()" in mamba_pool
+    assert "and vllm_config.kv_transfer_config is None" in mamba_pool
 
 
 def test_deepseek_provider_is_registered_explicitly() -> None:

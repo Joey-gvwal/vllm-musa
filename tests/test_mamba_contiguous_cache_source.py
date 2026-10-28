@@ -10,17 +10,21 @@ PATCH = (
     / "vllm_musa"
     / "patches"
     / "series"
-    / "0130-MUSA-restore-contiguous-segregated-Mamba-cache-pools.patch"
+    / "0112-MUSA-restore-contiguous-segregated-Mamba-cache-pools.patch"
 )
 
 
-def test_contiguous_mamba_patch_covers_both_v028_cache_builders():
+def test_contiguous_mamba_patch_keeps_v032_cache_binding() -> None:
     source = PATCH.read_text()
+    allocator = (
+        ROOT / "third_party/vllm/vllm/v1/worker/utils.py"
+    ).read_text()
 
-    assert "vllm/v1/worker/gpu/attn_utils.py" in source
+    assert "vllm/model_executor/layers/mamba/abstract.py" in source
     assert "vllm/v1/worker/gpu_model_runner.py" in source
-    assert "state_tensors: list[torch.Tensor]" in source
-    assert "kv_caches[layer_name] = state_tensors" in source
+    assert "if isinstance(kv_cache, (list, tuple))" in source
+    assert "separate_musa_pools = kv_cache_config.musa_mamba_num_blocks is not None" in allocator
+    assert "torch.zeros(tensor.size, dtype=torch.int8, device=device)" in allocator
 
 
 def test_mamba_bind_accepts_segregated_state_pools():
@@ -36,4 +40,6 @@ def test_patch_keeps_legacy_packed_page_fallback():
     source = PATCH.read_text()
 
     assert "pages = kv_cache.squeeze(dim=(1, 2))" in source
-    assert "Packing conv/SSM bytes into every physical page" in source
+    assert "state = pages[:, offset : offset + nbytes].view(dtype)" in (
+        ROOT / "third_party/vllm/vllm/model_executor/layers/mamba/abstract.py"
+    ).read_text()

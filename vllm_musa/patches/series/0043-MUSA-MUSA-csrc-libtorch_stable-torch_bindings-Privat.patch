@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Tue, 27 Oct 2026 10:43:05 +0800
+Subject: [PATCH] MUSA: MUSA(csrc): libtorch_stable torch_bindings PrivateUse1
+ impls
+
+---
+ csrc/ops.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/csrc/ops.h b/csrc/ops.h
+index 3266d28b1e..f43ab36149 100644
+--- a/csrc/ops.h
++++ b/csrc/ops.h
+@@ -11,8 +11,14 @@
+ #include <torch/csrc/stable/ops.h>
+ 
+ inline torch::stable::Tensor weak_ref_tensor(torch::stable::Tensor& tensor) {
++#if defined(USE_MUSA)
++  // Ensure tensor is on MUSA
++  STD_TORCH_CHECK(tensor.device().is_privateuseone(),
++                  "Tensor must be on MUSA device");
++#else
+   // Ensure tensor is on CUDA
+   STD_TORCH_CHECK(tensor.device().is_cuda(), "Tensor must be on CUDA device");
++#endif
+ 
+   // Get the raw data pointer
+   void* data_ptr = tensor.mutable_data_ptr();
