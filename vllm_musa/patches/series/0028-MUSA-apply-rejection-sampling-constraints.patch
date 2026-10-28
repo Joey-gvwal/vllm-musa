@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: musa <musa@local>
 Date: Tue, 27 Oct 2026 10:43:04 +0800
-Subject: [PATCH] MUSA: vllm.v1.sample.rejection_sampler (v0.28 reanchor)
+Subject: [PATCH] MUSA: apply rejection sampling constraints
 
 ---
  tests/v1/sample/test_rejection_sampler.py | 55 +++++++++++++++++++++++

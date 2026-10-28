@@ -9,9 +9,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
-PATCH = SERIES / "0201-MUSA-let-adaptive-verification-trim-the-flattened-DS.patch"
+PATCH = SERIES / "0199-MUSA-let-adaptive-verification-trim-the-flattened-DS.patch"
 CAPTURE_PATCH = (
-    SERIES / "0202-MUSA-profile-adaptive-verification-costs-in-the-real.patch"
+    SERIES / "0200-MUSA-profile-adaptive-verification-costs-in-the-real.patch"
 )
 
 HEADS, HEAD_DIM, BLOCK_SIZE, TOPK = 32, 128, 64, 512

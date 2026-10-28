@@ -139,14 +139,14 @@ source-level and MUSA long-context graph/model regression before inclusion.
 | `0025-MUSA-vllm.v1.attention.ops.triton_turboquant_decode.patch` | v0.28 0025 | vllm.v1.attention.ops.triton_turboquant_decode |
 | `0026-MUSA-vllm.v1.cudagraph_dispatcher.patch` | v0.28 0026 | vllm.v1.cudagraph_dispatcher |
 | `0027-MUSA-vllm.v1.sample.ops.topk_topp_triton.patch` | v0.28 0027 | vllm.v1.sample.ops.topk_topp_triton |
-| `0028-MUSA-vllm.v1.sample.rejection_sampler-v0.28-reanchor.patch` | v0.28 0028 | vllm.v1.sample.rejection_sampler (v0.28 reanchor) |
+| `0028-MUSA-apply-rejection-sampling-constraints.patch` | v0.28 0028 | vllm.v1.sample.rejection_sampler (v0.28 reanchor) |
 | `0029-MUSA-vllm.v1.spec_decode.dflash.patch` | v0.28 0029 | vllm.v1.spec_decode.dflash |
 | `0030-MUSA-vllm.v1.spec_decode.llm_base_proposer.patch` | v0.28 0030 | vllm.v1.spec_decode.llm_base_proposer |
 | `0031-MUSA-vllm.v1.spec_decode.utils.patch` | v0.28 0031 | vllm.v1.spec_decode.utils |
 | `0032-MUSA-vllm.v1.worker.gpu.block_table.patch` | v0.28 0032 | vllm.v1.worker.gpu.block_table |
 | `0033-MUSA-vllm.v1.worker.gpu.sample.penalties.patch` | v0.28 0033 | vllm.v1.worker.gpu.sample.penalties |
 | `0034-MUSA-vllm.v1.worker.gpu_input_batch.patch` | v0.28 0034 | vllm.v1.worker.gpu_input_batch |
-| `0035-MUSA-vllm.v1.worker.gpu_model_runner-v0.28-reanchor.patch` | v0.28 0035 | vllm.v1.worker.gpu_model_runner (v0.28 reanchor) |
+| `0035-MUSA-support-full-graph-drafts-and-pinned-metadata.patch` | v0.28 0035 | vllm.v1.worker.gpu_model_runner (v0.28 reanchor) |
 | `0036-MUSA-vllm.v1.worker.gpu_worker.patch` | v0.28 0036 | vllm.v1.worker.gpu_worker |
 | `0037-MUSA-build-the-custom-all-reduce-implementation-as-o.patch` | v0.28 0037 + v0.28 0038 | MUSA: build the custom all-reduce implementation as one feature |
 | `0038-MUSA-MUSA-csrc-file-csrc-mamba-mamba_ssm-selective_s.patch` | v0.28 0039 | MUSA(csrc-file): csrc/mamba/mamba_ssm/selective_scan_fwd.cu |

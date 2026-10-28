@@ -53,7 +53,6 @@ def test_flashmla_q_pad_is_written_in_the_fused_kernel():
     assert "+        padded_heads," in pad_removal
 
 
-
 def test_final_attention_keeps_padding_outside_musa_cache_pack() -> None:
     source = ATTENTION.read_text()
     method_start = source.index("    def _fused_qnorm_rope_kv_insert(")

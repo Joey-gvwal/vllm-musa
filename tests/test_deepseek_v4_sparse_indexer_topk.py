@@ -12,7 +12,7 @@ DSV4_TOPK = "csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu"
 BINDINGS = ROOT / "csrc/musa/torch_bindings.cpp"
 SERIES_PATCH = next(
     (ROOT / "vllm_musa/patches/series").glob(
-        "*-MUSA-route-DSV4-decode-indexer-top-k-to-its-own-op.patch"
+        "0192-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch"
     )
 )
 TOPK = 512
@@ -32,15 +32,17 @@ def test_radix_topk_lives_in_its_own_dsv4_kernel_file() -> None:
     )
 
 
-def test_series_routes_only_dsv4_rows_to_the_dedicated_op() -> None:
+def test_series_routes_small_topk_to_the_staged_radix_op() -> None:
     added = [
         line[1:].strip()
         for line in SERIES_PATCH.read_text().splitlines()
         if line.startswith("+") and not line.startswith("+++")
     ]
-    assert "_musa_custom_ops.deepseek_v4_sparse_indexer_topk_decode" in added
-    assert "if is_deepseek_v4" in added
-    assert "else _musa_custom_ops.sparse_indexer_topk_decode" in added
+    dispatch = added[added.index("if topk <= 512:") :]
+    fallback = "_musa_custom_ops.sparse_indexer_topk_decode(logits, row_lens, topk_indices, topk)"
+    dispatch = dispatch[: dispatch.index(fallback) + 1]
+    assert "_musa_custom_ops.deepseek_v4_sparse_indexer_topk_decode(" in dispatch
+    assert dispatch.index("return") < dispatch.index(fallback)
 
 
 def _scores(torch, kind: str, rows: int, width: int, gen):

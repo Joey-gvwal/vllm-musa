@@ -7,10 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SERIES = ROOT / "vllm_musa" / "patches" / "series"
 REJECTION_PATCH = (
-    SERIES / "0028-MUSA-vllm.v1.sample.rejection_sampler-v0.28-reanchor.patch"
+    SERIES / "0028-MUSA-apply-rejection-sampling-constraints.patch"
 )
 MODEL_RUNNER_PATCH = (
-    SERIES / "0035-MUSA-vllm.v1.worker.gpu_model_runner-v0.28-reanchor.patch"
+    SERIES / "0035-MUSA-support-full-graph-drafts-and-pinned-metadata.patch"
 )
 FINAL_REJECTION = (
     ROOT

@@ -32,13 +32,11 @@ def test_dspark_rejection_sampler_preserves_optional_feature_flags() -> None:
 
 
 def test_dsv4_loaders_fall_back_to_resolved_quant_expert_dtype() -> None:
-    model_patch = _patch("0134")
-    dspark_patch = _patch("0134")
-    assert 'getattr(vllm_config.quant_config, "expert_dtype", None)' in model_patch
-    assert 'getattr(self.quant_config, "expert_dtype", None)' in dspark_patch
-    assert 'expert_dtype == "fp4" and resolved_quant_dtype == "fp8"' in model_patch
-    assert 'expert_dtype == "fp4" and resolved_quant_dtype == "fp8"' in dspark_patch
-    assert '".weight_scale" if expert_dtype == "fp4" else ".weight_scale_inv"' in dspark_patch
+    patch = _patch("0134")
+    assert 'getattr(vllm_config.quant_config, "expert_dtype", None)' in patch
+    assert 'getattr(self.quant_config, "expert_dtype", None)' in patch
+    assert 'expert_dtype == "fp4" and resolved_quant_dtype == "fp8"' in patch
+    assert '".weight_scale" if expert_dtype == "fp4" else ".weight_scale_inv"' in patch
 
 
 def test_dsv4_loaders_prefer_resolved_fp8_over_config_default() -> None:
