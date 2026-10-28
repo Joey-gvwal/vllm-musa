@@ -12,7 +12,7 @@ DSV4_TOPK = "csrc/musa/attention/deepseek_v4_sparse_indexer_topk.mu"
 BINDINGS = ROOT / "csrc/musa/torch_bindings.cpp"
 SERIES_PATCH = next(
     (ROOT / "vllm_musa/patches/series").glob(
-        "0192-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch"
+        "*-MUSA-select-indexer-top-k-with-the-staged-radix-kern.patch"
     )
 )
 TOPK = 512
