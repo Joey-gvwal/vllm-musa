@@ -95,8 +95,10 @@ Subcommands::
             plus any count mismatch. A checkout that does not hold the series
             is reported, never passed on a guess.
 
-        Neither is the default: both clone a repository and spawn git per entry.
-        No in-repo CI or hook invokes this gate today.
+        Neither deep mode is the default: both clone a repository and spawn git
+        per entry. The cheap, replay, and round-trip gates also require valid advisory
+        lineage/group metadata. CI runs the deep gates against separate pin
+        and commit-bearing checkouts.
 
 Every **gate** subcommand (``check-series``, ``verify``, ``regen``, ``rebase``,
 ``upgrade-plan``, ``backport``) that has something to report ends with one explicit
@@ -212,6 +214,17 @@ def _load(name: str, path: Path):
 
 manifest = _load("musa_mdm_manifest", PATCHES / "manifest.py")
 build_apply = _load("musa_mdm_build_apply", PATCHES / "build_apply.py")
+patch_metadata = _load("musa_patch_metadata", ROOT / "tools" / "patch_metadata.py")
+
+
+def _metadata_result():
+    return patch_metadata.validate(PATCHES / "series", PATCHES / "metadata")
+
+
+def _metadata_errors(result) -> bool:
+    for error in result.errors:
+        print(f"ERROR: patch metadata: {error}")
+    return bool(result.errors)
 
 
 def read_pin(key: str, default: str | None = None) -> str | None:
@@ -2009,6 +2022,8 @@ def cmd_check_series(args) -> int:
     # directory, so a relative path (the documented invocation is
     # `check-series --repo third_party/vllm`) would otherwise be resolved
     # against that tempdir and reported as "repository ... does not exist".
+    metadata = _metadata_result()
+    metadata_bad = _metadata_errors(metadata)
     repo = Path(args.repo).resolve() if args.repo else None
     rows = _series_format_rows(repo, replay=args.replay, round_trip=args.round_trip)
     # Numbering and the per-entry counts read the *files* in series/, so they
@@ -2022,13 +2037,12 @@ def cmd_check_series(args) -> int:
     else:
         print(f"=== musa_sync check-series: {len(entries)} entries in series/ ===")
     _print_series_section(rows, number_rows, entries=entries)
-    verdict = (
-        "PASS"
-        if not (bad or number_rows)
-        else f"FAIL (series-format={len(bad)}, numbering={len(number_rows)})"
-    )
+    detail = f"series-format={len(bad)}, numbering={len(number_rows)}"
+    if metadata_bad:
+        detail += f", metadata={len(metadata.errors)}"
+    verdict = "PASS" if not (bad or number_rows or metadata_bad) else f"FAIL ({detail})"
     print(f"=== musa_sync check-series: {verdict} ===")
-    return 1 if (bad or number_rows) else 0
+    return 1 if (bad or number_rows or metadata_bad) else 0
 
 
 def cmd_verify(args) -> int:
@@ -2822,6 +2836,10 @@ def _upgrade_plan_rows(
 
 
 def cmd_upgrade_plan(args) -> int:
+    metadata = _metadata_result()
+    if _metadata_errors(metadata):
+        print("=== musa_sync upgrade-plan: FAIL (metadata) ===")
+        return 1
     pin = _default_target()
     target = args.target or pin
     if not target:
@@ -3045,6 +3063,22 @@ def _resolve_upstream_commit(commit: str, source: str | None) -> str | None:
 
 # -------------------------------------------------------------------------- report
 def cmd_report(args) -> int:
+    if args.metadata:
+        result = _metadata_result()
+        if _metadata_errors(result):
+            return 1
+        print(f"Patch metadata: {result.patch_count} patches, "
+              f"{result.group_count} functional groups, "
+              f"{result.omission_count} legacy omissions")
+        for group in result.groups:
+            checks = ", ".join(group["required_checks"])
+            print(f"  {group['id']}: {len(group['patches'])} patches; "
+                  f"required: {checks}")
+        unresolved = [row["legacy_id"] for row in result.lineage
+                      if row["disposition"] in ("unresolved", "performance_opportunity")]
+        print(f"  unresolved/opportunity: {', '.join(unresolved) or 'none'}")
+        print("  Required checks are not pass claims; MUSA/model validation needs separate evidence.")
+        return 0
     by_cat: dict[str, int] = {}
     for e in manifest.ENTRIES:
         by_cat[e.category] = by_cat.get(e.category, 0) + 1
@@ -3196,6 +3230,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="manifest census")
     p.add_argument(
         "--doc", action="store_true", help="render the Markdown census table"
+    )
+    p.add_argument(
+        "--metadata", action="store_true", help="show validated lineage and group requirements"
     )
     p.set_defaults(func=cmd_report)
 

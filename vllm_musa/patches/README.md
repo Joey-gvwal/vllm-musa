@@ -16,6 +16,7 @@ vLLM is already patched.
 series/0001-MUSA-….patch …  the source-of-truth diff series (git format-patch)
 series/upstream/0001-….patch upstream vLLM commits the pin predates, applied after series/
 build_apply.py               stdlib-only build-time applier (idempotent git apply)
+metadata/                    legacy omissions and functional validation requirements
 Makefile.sync                cross-version regeneration (git am -3 + format-patch)
 setup.py::_apply_musa_patch_series   wires build_apply into the build
 ```
@@ -56,6 +57,12 @@ python3 tools/musa_sync.py rebase <new ref> --drop-upstreamed --history <full vL
 make -f Makefile.sync format-patches         # regenerate the series on the new base
 git add third_party/PINS vllm_musa/patches/series   # commit pin + series
 ```
+
+To inspect the source series' machine-checked ancestry and functional groups,
+run `python3.10 tools/musa_sync.py report --metadata`. The JSON sidecars
+contain required checks, not permanent pass flags; `.github/workflows/patch-series.yml`
+runs offline replay/round-trip/source gates, not MUSA device or model tests.
+See `series/README.md` for the 24 legacy dispositions and evidence limits.
 
 ## 2. Object patches — import-time `apply()` (live objects, not source)
 

@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "omissions": [
+    {
+      "legacy_id": "0065",
+      "disposition": "superseded",
+      "owners": [
+        "0172"
+      ],
+      "rationale": "Compiler fix provides the final Triton grouping directly.",
+      "validation_required": "No separate intermediate patch; test Triton compilation."
+    },
+    {
+      "legacy_id": "0069",
+      "disposition": "unresolved",
+      "owners": [],
+      "rationale": "Sparse MLA cache now uses shared per-spec offsets and strided views; the zero-offset allocation was not carried.",
+      "validation_required": "MATE sparse decode with multiple blocks and a nonzero spec offset."
+    },
+    {
+      "legacy_id": "0088",
+      "disposition": "unresolved",
+      "owners": [],
+      "rationale": "Dedicated Mamba-pool allocations diverge from the pinned planner shared-pool precheck, override and auto-fit accounting.",
+      "validation_required": "Align per-pool capacity and null-block checks; instantiate Qwen config and run MUSA scheduler/model regression."
+    },
+    {
+      "legacy_id": "0089",
+      "disposition": "performance_opportunity",
+      "owners": [],
+      "rationale": "The old 288-thread alignment scan is absent from the relocated MoE kernel.",
+      "validation_required": "Profile small-batch Qwen MoE before considering a new optimization."
+    },
+    {
+      "legacy_id": "0090",
+      "disposition": "folded",
+      "owners": [
+        "0014"
+      ],
+      "rationale": "DeepSeek-V4 attention owns small-M FP32 score GEMM dispatch.",
+      "validation_required": "Check the model score path on MUSA."
+    },
+    {
+      "legacy_id": "0093",
+      "disposition": "folded",
+      "owners": [
+        "0138"
+      ],
+      "rationale": "Sparse-compressor adaptation owns C4 indexer compression.",
+      "validation_required": "Check DeepSeek-V4 C4 on MUSA."
+    },
+    {
+      "legacy_id": "0114",
+      "disposition": "superseded",
+      "owners": [
+        "0163"
+      ],
+      "rationale": "Regular-ABI MUSA view implementation and registration replace the old CUDA view source.",
+      "validation_required": "Native build/import and pinned-memory CPU-offload view smoke."
+    },
+    {
+      "legacy_id": "0115",
+      "disposition": "folded",
+      "owners": [
+        "0061"
+      ],
+      "rationale": "Regular-ABI MoE build adaptation owns relocated helper includes.",
+      "validation_required": "Native extension build."
+    },
+    {
+      "legacy_id": "0116",
+      "disposition": "upstream",
+      "owners": [],
+      "rationale": "Pinned torch_bindings registers CUDA utility schemas and implementations in the stable extension.",
+      "validation_required": "Native build and op invocation."
+    },
+    {
+      "legacy_id": "0118",
+      "disposition": "folded",
+      "owners": [
+        "0105"
+      ],
+      "rationale": "Triton and Gluon import compatibility lives in the current guard.",
+      "validation_required": "Import with the installed Triton distribution."
+    },
+    {
+      "legacy_id": "0119",
+      "disposition": "upstream",
+      "owners": [],
+      "rationale": "Pinned runner passes uniform-decode token and prefill arrays; Qwen hook checks shapes and values.",
+      "validation_required": "Qwen uniform decode including fallback and priming."
+    },
+    {
+      "legacy_id": "0126",
+      "disposition": "folded",
+      "owners": [
+        "0111"
+      ],
+      "rationale": "Chained rejection predicate is part of scalarized rejection.",
+      "validation_required": "Speculative rejection test on MUSA."
+    },
+    {
+      "legacy_id": "0129",
+      "disposition": "folded",
+      "owners": [
+        "0111"
+      ],
+      "rationale": "Stochastic rejection predicate is part of scalarized rejection.",
+      "validation_required": "Speculative rejection test on MUSA."
+    },
+    {
+      "legacy_id": "0137",
+      "disposition": "unresolved",
+      "owners": [],
+      "rationale": "Dedicated Mamba pools with Mooncake remain excluded because the store owns the shared coordinator pool.",
+      "validation_required": "Connector-to-pool ownership routing and hybrid prefill/decode model validation."
+    },
+    {
+      "legacy_id": "0139",
+      "disposition": "upstream",
+      "owners": [],
+      "rationale": "Pinned ModelConfig guards empty architectures before indexing.",
+      "validation_required": "Nested Transformers model-config test."
+    },
+    {
+      "legacy_id": "0140",
+      "disposition": "folded",
+      "owners": [
+        "0137"
+      ],
+      "rationale": "SSD shape-key pruning and tile selection share the fixed autotune contract.",
+      "validation_required": "SSD shape and model test."
+    },
+    {
+      "legacy_id": "0148",
+      "disposition": "folded",
+      "owners": [
+        "0030"
+      ],
+      "rationale": "MTP metadata ownership is in the current proposer.",
+      "validation_required": "Async MTP lifecycle test."
+    },
+    {
+      "legacy_id": "0158",
+      "disposition": "canceled",
+      "owners": [],
+      "rationale": "Recent-indexer metadata removal was temporary; the final attention-layer adaptation retains the dispatch.",
+      "validation_required": "Check final learned-indexer dispatch; do not replay temporary removal."
+    },
+    {
+      "legacy_id": "0161",
+      "disposition": "folded",
+      "owners": [
+        "0174"
+      ],
+      "rationale": "Attention-layer adaptation owns the learned decode graph guard.",
+      "validation_required": "Captured DeepSeek-V4 learned-indexer decode."
+    },
+    {
+      "legacy_id": "0162",
+      "disposition": "folded",
+      "owners": [
+        "0013",
+        "0080"
+      ],
+      "rationale": "Sparse indexer and MLA indexer own learned paged-MQA decode.",
+      "validation_required": "Captured DeepSeek-V4 paged-MQA decode."
+    },
+    {
+      "legacy_id": "0175",
+      "disposition": "upstream",
+      "owners": [],
+      "rationale": "Pinned gather_batch_req_state retains one-token-extension prefill and decode graph eligibility.",
+      "validation_required": "Installed-vLLM final-prompt graph test and padded-draft/PCP MUSA cases."
+    },
+    {
+      "legacy_id": "0177",
+      "disposition": "superseded",
+      "owners": [
+        "0192"
+      ],
+      "rationale": "Staged indexer dispatch directly replaces the intermediate top-k selector.",
+      "validation_required": "No separate intermediate patch; test staged indexer on MUSA."
+    },
+    {
+      "legacy_id": "0186",
+      "disposition": "upstream",
+      "owners": [],
+      "rationale": "Pinned triton_w4a16_gemm selects M-dependent tiles and split-K at invocation.",
+      "validation_required": "Compile/capture with distinct runtime M values."
+    },
+    {
+      "legacy_id": "0192",
+      "disposition": "unresolved",
+      "owners": [],
+      "rationale": "No proven hybrid attention page-64/alignment equivalent across new grouping and Mamba layouts.",
+      "validation_required": "Inspect supported hybrid group pages/addresses and run MUSA model."
+    }
+  ]
+}

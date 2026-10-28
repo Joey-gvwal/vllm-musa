@@ -8,6 +8,7 @@ verify row-builder against synthetic checkouts.
 """
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -67,6 +68,22 @@ def test_report(ms, capsys):
     by_cat = Counter(e.category for e in ms.manifest.ENTRIES)
     for category, n in sorted(by_cat.items()):
         assert f"'{category}': {n}" in out
+
+
+def test_report_metadata_and_gate_rejects_stale_metadata(ms, capsys, monkeypatch):
+    assert ms.main(["report", "--metadata"]) == 0
+    output = capsys.readouterr().out
+    assert "208 patches" in output
+    assert "24 legacy omissions" in output
+    assert "not pass claims" in output
+
+    actual = ms._metadata_result()
+    stale = actual._replace(errors=["unknown owner '9999'"])
+    monkeypatch.setattr(ms, "_metadata_result", lambda: stale)
+    assert ms.main(["report", "--metadata"]) == 1
+    assert ms.main(["check-series"]) == 1
+    assert ms.main(["upgrade-plan"]) == 1
+    assert "FAIL (metadata)" in capsys.readouterr().out
 
 
 def test_report_doc(ms, capsys):
@@ -439,6 +456,17 @@ def _cli_tree(tmp_path: Path, files: dict) -> Path:
     (tmp_path / "tools").mkdir(parents=True)
     (tmp_path / "vllm_musa" / "patches" / "series").mkdir(parents=True)
     shutil.copyfile(ROOT / "tools" / "musa_sync.py", tmp_path / "tools" / "musa_sync.py")
+    shutil.copyfile(ROOT / "tools" / "patch_metadata.py", tmp_path / "tools" / "patch_metadata.py")
+    metadata = tmp_path / "vllm_musa" / "patches" / "metadata"
+    metadata.mkdir()
+    (metadata / "legacy-lineage.json").write_text('{"schema_version": 1, "omissions": []}')
+    numbers = sorted({name[:4] for name in files if re.match(r"[0-9]{4}-", name)})
+    groups = [{"id": "fixture", "purpose": "Synthetic series", "patches": numbers,
+               "depends_on": [], "required_checks": ["series"]}] if numbers else []
+    (metadata / "patch-groups.json").write_text(
+        json.dumps({"schema_version": 1, "groups": groups})
+    )
+    (tmp_path / "vllm_musa" / "patches" / "series" / "README.md").write_text("")
     for rel in ("vllm_musa/patches/manifest.py", "vllm_musa/patches/build_apply.py"):
         shutil.copyfile(ROOT / rel, tmp_path / rel)
     for name, text in files.items():
