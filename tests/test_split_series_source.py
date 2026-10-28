@@ -113,4 +113,3 @@ def test_deepseek_v4_materialized_indexer_series_patch_present() -> None:
     assert "Paged-MQA logits use absolute prefix coordinates" in series
     assert "context_lens = row_ends.reshape(rows, 1).contiguous()" in series
     assert "_musa_try_fill_prefill_topk_from_materialized_logits" in series
-
