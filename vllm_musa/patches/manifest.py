@@ -530,6 +530,30 @@ _SHADOW_MODULES = [
         None,
         "new MUSA module (no upstream same-path; MTGPUWorker)",
     ),
+    (
+        "5",
+        "vllm_musa/deep_select/__init__.py",
+        None,
+        "new MUSA module: DeepSelect MUSA surface (vendored contract backend)",
+    ),
+    (
+        "5",
+        "vllm_musa/deep_select/backend.py",
+        None,
+        "new MUSA module: CPU reference for DeepSelect contract tests",
+    ),
+    (
+        "5",
+        "vllm_musa/deep_select/registry.py",
+        None,
+        "new MUSA module: registers torch.ops.deep_select on the MUSA dispatch key",
+    ),
+    (
+        "5",
+        "vllm_musa/deep_select/native.py",
+        None,
+        "new MUSA module: adapter for the native DeepSelect MUSA extension",
+    ),
 ]
 
 

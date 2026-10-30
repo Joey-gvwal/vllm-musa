@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: musa <musa@local>
+Date: Wed, 28 Oct 2026 17:20:00 +0800
+Subject: [PATCH] MUSA: register an out-of-tree DeepSelect top-k backend
+
+DeepSelect's ops are registered by the CUDA-only vllm._deepselect_C
+extension, so on MUSA both the indexer's deep_select backend and its
+availability probe are unreachable. Probe torch.ops.deep_select lazily
+and accept an out-of-tree registration, and keep the SM100 family check
+for CUDA only. No CUDA behaviour changes.
+---
+ vllm/model_executor/layers/indexer_topk.py | 32 ++++++++++++++++++++++++------
+ 1 file changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/vllm/model_executor/layers/indexer_topk.py b/vllm/model_executor/layers/indexer_topk.py
+index 02c4280..535e21a 100644
+--- a/vllm/model_executor/layers/indexer_topk.py
++++ b/vllm/model_executor/layers/indexer_topk.py
+@@ -35,6 +35,22 @@ except ImportError:
+     _HAS_DEEP_SELECT_C = False
+ 
+ 
++def _deep_select_op_available() -> bool:
++    """Whether ``torch.ops.deep_select`` is registered.
++
++    Upstream registers the ops from the in-tree ``vllm._deepselect_C`` extension.
++    An out-of-tree platform (e.g. MUSA) registers the same names from Python, so
++    the import flag above is not the whole story: probe the namespace lazily, after
++    the platform plugin has had a chance to register.
++    """
++    if _HAS_DEEP_SELECT_C:
++        return True
++    try:
++        return hasattr(torch.ops.deep_select, "topk")
++    except AttributeError:
++        return False
++
++
+ @functools.lru_cache(maxsize=1)
+ def get_deep_select_stride_requirement() -> tuple[int, int]:
+     """Stride alignment requirement (input, output) in bytes."""
+@@ -153,8 +169,11 @@ class SparseIndexerTopk(torch.nn.Module):
+             )
+         self._backend = backend
+         self._is_cuda = current_platform.is_cuda()
+-        self._has_deep_select = self._is_cuda and (
+-            current_platform.is_device_capability_family(100)
++        # The in-tree extension is SM100-only. An out-of-tree backend states its
++        # own capability, so keep the family check for CUDA only.
++        self._has_deep_select = _deep_select_op_available() and (
++            not self._is_cuda
++            or current_platform.is_device_capability_family(100)
+         )
+         self._has_flashinfer_topk = has_flashinfer()
+         self._cooperative_capable = self._is_cuda and (
+@@ -190,12 +209,13 @@ class SparseIndexerTopk(torch.nn.Module):
+                     f"topk_tokens must be in (512, 1024, 2048), got {topk_tokens}"
+                 )
+         elif self._backend == "deep_select":
+-            if not self._is_cuda:
+-                failures.append("requires a CUDA platform")
++            if not _deep_select_op_available():
++                failures.append(
++                    "torch.ops.deep_select is not registered (vllm._deepselect_C "
++                    "is not built and no out-of-tree backend registered it)"
++                )
+             elif not self._has_deep_select:
+                 failures.append("requires SM100a/SM103a (10.x device family)")
+-            elif not _HAS_DEEP_SELECT_C:
+-                failures.append("vllm._deepselect_C could not be imported")
+             elif not is_deep_select_supported(logits, topk_tokens):
+                 failures.append(
+                     f"inputs violate DeepSelect's constraints: dtype={logits.dtype},"

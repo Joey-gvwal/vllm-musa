@@ -12,3 +12,10 @@ VLLM_COMMIT=5df63a7203cdb9328d824a27b682e77c7b9928be
 # validated sampling/norm source revision; bump it consciously, not in lockstep
 # with VLLM_TAG/VLLM_COMMIT.
 FLASHINFER_COMMIT=bc29697ba20b7e6bdb728ded98f04788e16ee021
+# DeepSelect is the sparse indexer's top-k primitive. Upstream compiles it into
+# vllm._deepselect_C from CUDA-only TMA kernels; MUSA registers the same
+# torch.ops.deep_select surface with the separately built native MUSA backend.
+# Bump only together with a re-run of tests/test_deep_select_contract.py on S5000.
+DEEPSELECT_REPO=git@sh-code.mthreads.com:zhiguo.qin/DeepSelect.git
+DEEPSELECT_BRANCH=feat/musa-kernels
+DEEPSELECT_COMMIT=fac460ce55f1b2e86a30fd60ea892fc782f3a8ea

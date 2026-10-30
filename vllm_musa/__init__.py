@@ -146,8 +146,10 @@ def _register_ops() -> None:
     import vllm_musa.jit_kernel.csrc.moe as _moe  # noqa: F401
 
     from .custom_op_modules import preload_custom_op_modules
+    from .deep_select import ensure_registered as _register_deep_select
 
     preload_custom_op_modules()
+    _register_deep_select()
     _moe.prewarm()
 
 
