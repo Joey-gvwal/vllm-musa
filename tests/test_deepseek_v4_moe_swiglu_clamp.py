@@ -56,10 +56,11 @@ def test_dispatcher_forwards_clamp_to_every_backend() -> None:
     dispatch = _function("_musa_fused_experts_impl_dispatch")
     assert "gemm1_clamp_limit" in [a.arg for a in dispatch.args.args]
     assert _keyword_values(dispatch, "swiglu_limit").count("gemm1_clamp_limit") == 2
-    # The FP8 block GEMV gate sees the clamp; the upstream path receives it.
+    # The FP8 block GEMV gate sees the clamp; the K128 and upstream paths receive it.
     assert _keyword_callees(dispatch, "gemm1_clamp_limit", "gemm1_clamp_limit") == [
         "_can_use_musa_fp8_block_moe_gemv",
         "_upstream_fused_moe._musa_original_fused_experts_impl",
+        "fp8_moe_k128_experts",
     ]
     block_gemv = next(
         node
